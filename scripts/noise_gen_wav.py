@@ -11,7 +11,7 @@ from enlib import bench
 
 from mnms import wav_noise, simio, utils
 
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--qid', dest='qid', nargs='+', type=str, required=True,
                     help='list of soapack DR5 array "qids"')
 

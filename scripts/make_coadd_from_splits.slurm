@@ -21,4 +21,4 @@ delta_ell_smooth=400
 ell_large_small_split=200
 ell_taper_width=200
 
-python -u /home/zatkins/repos/ACTCollaboration/S18_S19_prelims/scripts/make_coadd_from_splits.py --maps 1 2 --qid ${qid} --downgrade ${downgrade} --width-deg ${width_deg} --height-deg ${height_deg} --delta-ell-smooth ${delta_ell_smooth} --ell-large-small-split ${ell_large_small_split} --ell-taper-width ${ell_taper_width} --notes ${notes} --no-bin-apod --mask-version v1 --mask-name BN_bottomcut
+python -u /home/zatkins/repos/ACTCollaboration/mnms/scripts/make_coadd_from_splits.py --maps 1 2 --qid ${qid} --downgrade ${downgrade} --width-deg ${width_deg} --height-deg ${height_deg} --delta-ell-smooth ${delta_ell_smooth} --ell-large-small-split ${ell_large_small_split} --ell-taper-width ${ell_taper_width} --notes ${notes} --no-bin-apod --mask-version v1 --mask-name BN_bottomcut

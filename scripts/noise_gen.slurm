@@ -19,6 +19,6 @@ width_deg=4
 height_deg=4
 delta_ell_smooth=400
 
-srun -u python -u /home/zatkins/repos/ACTCollaboration/S18_S19_prelims/scripts/noise_gen.py \
+srun -u python -u /home/zatkins/repos/ACTCollaboration/mnms/scripts/noise_gen.py \
 --qid ${qid} --downgrade ${downgrade} --width-deg ${width_deg} --height-deg ${height_deg} --delta-ell-smooth ${delta_ell_smooth} --notes ${notes} \
 --no-bin-apod --mask-version v1 --mask-name BN_bottomcut
