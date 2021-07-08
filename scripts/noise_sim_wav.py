@@ -10,7 +10,7 @@ from soapack import interfaces as sints
 from enlib import bench
 import healpy as hp
 
-from tiled_noise import wav_noise, simio, utils
+from mnms import wav_noise, simio, utils
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--qid', dest='qid', nargs='+', type=str, required=True,

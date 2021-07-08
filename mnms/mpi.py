@@ -8,8 +8,8 @@
 # orphics.mpi (https://github.com/msyriac/orphics/blob/master/orphics/mpi.py)
 
 from pixell import enmap, utils
-from tiled_noise import utils as tnu
-from tiled_noise.tiled_ndmap import tiled_ndmap
+from mnms import utils as tnu
+from mnms.tiled_ndmap import tiled_ndmap
 
 import numpy as np
 import warnings

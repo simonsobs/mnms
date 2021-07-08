@@ -1,6 +1,6 @@
 from pixell import enmap, wcsutils
 from orphics import maps
-from tiled_noise import utils
+from mnms import utils
 import astropy.io.fits as pyfits
 
 import numpy as np

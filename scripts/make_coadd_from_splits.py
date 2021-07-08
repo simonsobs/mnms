@@ -1,5 +1,5 @@
-from tiled_noise import tiled_noise as tn, utils
-from tiled_noise import simio
+from mnms import tiled_noise as tn, utils
+from mnms import simio
 from pixell import enmap, wcsutils
 from soapack import interfaces as sints
 import numpy as np

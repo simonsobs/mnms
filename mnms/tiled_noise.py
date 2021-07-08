@@ -2,8 +2,8 @@ from __future__ import print_function
 from orphics import maps, cosmology
 from pixell import enmap, curvedsky, enplot, wcsutils
 import healpy as hp
-from tiled_noise import covtools, utils, mpi, mcm
-from tiled_noise.tiled_ndmap import tiled_ndmap
+from mnms import covtools, utils, mpi, mcm
+from mnms.tiled_ndmap import tiled_ndmap
 import astropy.io.fits as pyfits
 
 import numpy as np

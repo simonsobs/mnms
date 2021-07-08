@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from pixell import enmap, utils
-from tiled_noise import utils as tnu, mpi
+from mnms import utils as tnu, mpi
 
 import numpy as np
 from scipy.interpolate import RectBivariateSpline as rectinterp

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import print_function
 from pixell import enmap, curvedsky, wcsutils, enplot
-from tiled_noise import tiled_noise as tn, utils
+from mnms import tiled_noise as tn, utils
 
 import numpy as np
 from scipy import stats
