@@ -7,9 +7,19 @@
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
+### set environment ###
 module use --append /home/mfh2/shared/modulefiles
 module load so_stack
 module load openmpi/gcc/2.0.2/64
+
+# we'll manage our own pixell version in conda
+module unload pixell
+
+# to be able to use enlib -- TODO: upgrade to module
+export PYTHONPATH="${PYTHONPATH}:/home/zatkins/repos/other"
+export ENLIB_COMP=hippo
+
+# activate conda
 conda activate cmb_princeton
 
 qid="s18_03"
