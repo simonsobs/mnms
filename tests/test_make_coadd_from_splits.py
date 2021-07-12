@@ -4,9 +4,8 @@ from pixell import enmap, wcsutils
 import numpy as np
 import argparse
 from soapack.interfaces import DR5
-from tqdm import tqdm
 import pathlib
-
+from tqdm import tqdm
 
 # This script loads a set of splits given by the arguments and generates the coadd from those splits
 # Coaddition only pixel-wise, with weights given by the ivars of each split (per pixel)
@@ -52,4 +51,4 @@ coadd2 = utils.get_coadd_map(maps, ivars) # shape is (nsplits, npol, ny, nx) -> 
 assert coadd2.shape == smap.shape
 
 def test_coadd_equality():
-    assert np.allclose(coadd1, coadd2, rtol=0, atol=1e-14)
+    assert np.allclose(coadd1, coadd2, rtol=1e-6, atol=0)

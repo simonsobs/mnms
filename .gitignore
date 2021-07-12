@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# GUI
+.vscode*
+
+# slurm
+*.slurm*
