@@ -12,8 +12,8 @@ module load so_stack
 module load openmpi/gcc/2.0.2/64
 conda activate cmb_princeton
 
-qid="s18_04"
-downgrade=4
+qid="s19_03"
+downgrade=2
 notes="newcode4_filter"
 width_deg=4
 height_deg=4

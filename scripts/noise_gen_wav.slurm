@@ -22,10 +22,10 @@ export ENLIB_COMP=hippo
 # activate conda
 conda activate cmb_princeton
 
-qid="s18_03"
-downgrade=4
+qid="s18_04"
+downgrade=2
 lmax=5000
-notes="mnms"
+notes="mnms_unionsrcs"
 
 python -u /home/zatkins/repos/ACTCollaboration/mnms/scripts/noise_gen_wav.py \
---qid ${qid} --lmax ${lmax} --downgrade ${downgrade} --notes ${notes} --mask-version v1 --mask-name BN_bottomcut
+--qid ${qid} --lmax ${lmax} --downgrade ${downgrade} --notes ${notes} --union-sources 20210209_sncut_10_aggressive --mask-version v1 --mask-name BN_bottomcut

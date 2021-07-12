@@ -62,116 +62,116 @@ delta_ell_smooth = args.delta_ell_smooth
 qidstr = '_'.join(args.qid)
 data_model = getattr(sints,args.data_model)()
 if args.auto_split:
-	splits = np.arange(int(data_model.adf[data_model.adf['#qid']==args.qid[0]]['nsplits']))
+    splits = np.arange(int(data_model.adf[data_model.adf['#qid']==args.qid[0]]['nsplits']))
 else:
-	splits = np.atleast_1d(args.split)
+    splits = np.atleast_1d(args.split)
 assert np.all(splits >= 0)
 
 # get ivar weighting
 if mm.is_root:
-	ivars = []
-	for i, qid in enumerate(args.qid):
-		mask = simio.get_sim_mask(qid=qid, bin_apod=bin_apod, mask_version=mask_version, mask_name=mask_name)
+    ivars = []
+    for i, qid in enumerate(args.qid):
+        mask = simio.get_sim_mask(qid=qid, bin_apod=bin_apod, mask_version=mask_version, mask_name=mask_name)
 
-		# check that we are using the same mask for each qid -- this is required!
-		if i == 0:
-			prev_mask = mask
-		assert np.allclose(mask, prev_mask), "qids do not share a common mask -- this is required!"
-		assert wcsutils.is_compatible(mask.wcs, prev_mask.wcs), "qids do not share a common mask wcs -- this is required!"
-		prev_mask = mask
+        # check that we are using the same mask for each qid -- this is required!
+        if i == 0:
+            prev_mask = mask
+        assert np.allclose(mask, prev_mask), "qids do not share a common mask -- this is required!"
+        assert wcsutils.is_compatible(mask.wcs, prev_mask.wcs), "qids do not share a common mask wcs -- this is required!"
+        prev_mask = mask
 
-		# check for same nsplits
-		nsplits = int(data_model.adf[data_model.adf['#qid']==qid]['nsplits'])
-		if i == 0:
-			prev_nsplits = int(data_model.adf[data_model.adf['#qid']==qid]['nsplits'])
-		assert nsplits == prev_nsplits, "qids do not have common nsplits -- this is required!"
+        # check for same nsplits
+        nsplits = int(data_model.adf[data_model.adf['#qid']==qid]['nsplits'])
+        if i == 0:
+            prev_nsplits = int(data_model.adf[data_model.adf['#qid']==qid]['nsplits'])
+        assert nsplits == prev_nsplits, "qids do not have common nsplits -- this is required!"
 
-		# get the ivars and extract to mask geometry
-		ivar = data_model.get_ivars(qid, calibrated=True)
-		ivar = enmap.extract(ivar, mask.shape, mask.wcs)
+        # get the ivars and extract to mask geometry
+        ivar = data_model.get_ivars(qid, calibrated=True)
+        ivar = enmap.extract(ivar, mask.shape, mask.wcs)
 
-		if args.downgrade != 1:
-			mask = mask.downgrade(args.downgrade)
-			ivar = ivar.downgrade(args.downgrade, op=np.sum)
+        if args.downgrade != 1:
+            mask = mask.downgrade(args.downgrade)
+            ivar = ivar.downgrade(args.downgrade, op=np.sum)
 
-		ivars.append(ivar)
+        ivars.append(ivar)
 
-	# convert to enmap -- this has shape (nmaps, nsplits, npol, ny, nx)
-	ivars = enmap.enmap(ivars, wcs=mask.wcs) 
+    # convert to enmap -- this has shape (nmaps, nsplits, npol, ny, nx)
+    ivars = enmap.enmap(ivars, wcs=mask.wcs) 
 
-	# Get filenames of noise kernels
-	fn_1d = simio.get_sim_noise_1d_fn(qidstr, downgrade=args.downgrade, smooth1d=smooth_1d, notes=args.notes,
-										bin_apod=bin_apod, mask_version=mask_version, mask_name=mask_name)
-	fn_2d = simio.get_sim_noise_tiled_2d_fn(qidstr, downgrade=args.downgrade, width_deg=width_deg,
-											height_deg=height_deg, smoothell=delta_ell_smooth, notes=args.notes,
-											bin_apod=bin_apod, mask_version=mask_version, mask_name=mask_name)
+    # Get filenames of noise kernels
+    fn_1d = simio.get_sim_noise_1d_fn(qidstr, downgrade=args.downgrade, smooth1d=smooth_1d, notes=args.notes,
+                                        bin_apod=bin_apod, mask_version=mask_version, mask_name=mask_name)
+    fn_2d = simio.get_sim_noise_tiled_2d_fn(qidstr, downgrade=args.downgrade, width_deg=width_deg,
+                                            height_deg=height_deg, smoothell=delta_ell_smooth, notes=args.notes,
+                                            bin_apod=bin_apod, mask_version=mask_version, mask_name=mask_name)
 
-	# Get the noise kernels from disk
-	covar_1D, flat_triu_axis_1D = enmap.read_map(fn_1d), 0
-	covsqrt_2D, extra_header, extra_hdu = tnd.read_tiled_ndmap(fn_2d, extra_header=['FLAT_TRIU_AXIS'], extra_hdu=['LEDGES', 'COV1D'])
-	flat_triu_axis_2D = extra_header['FLAT_TRIU_AXIS']
-	ledges = extra_hdu['LEDGES']
-	cov_1D = extra_hdu['COV1D']
+    # Get the noise kernels from disk
+    covar_1D, flat_triu_axis_1D = enmap.read_map(fn_1d), 0
+    covsqrt_2D, extra_header, extra_hdu = tnd.read_tiled_ndmap(fn_2d, extra_header=['FLAT_TRIU_AXIS'], extra_hdu=['LEDGES', 'COV1D'])
+    flat_triu_axis_2D = extra_header['FLAT_TRIU_AXIS']
+    ledges = extra_hdu['LEDGES']
+    cov_1D = extra_hdu['COV1D']
 else:
-	covsqrt_2D = None
-	ivars = None
-	flat_triu_axis_2D = 1
-	ledges = None
-	cov_1D = None
+    covsqrt_2D = None
+    ivars = None
+    flat_triu_axis_2D = 1
+    ledges = None
+    cov_1D = None
 
 # Get maps
 if args.nsims is not None:
-	maps = np.arange(args.nsims)
+    maps = np.arange(args.nsims)
 else:
-	if args.maps is not None:
-		assert args.maps_start is None and args.maps_end is None
-		maps = np.atleast_1d(args.maps).astype(int)
-	else:
-		assert args.maps_start is not None and args.maps_end is not None
-		maps = np.arange(args.maps_start, args.maps_end+args.maps_step, args.maps_step)
+    if args.maps is not None:
+        assert args.maps_start is None and args.maps_end is None
+        maps = np.atleast_1d(args.maps).astype(int)
+    else:
+        assert args.maps_start is not None and args.maps_end is not None
+        maps = np.arange(args.maps_start, args.maps_end+args.maps_step, args.maps_step)
 
 # Iterate over sims
 for i, m in enumerate(maps):
-	for j, split in enumerate(splits):
-		if mm.is_root:
-			t0 = time.time()
+    for j, split in enumerate(splits):
+        if mm.is_root:
+            t0 = time.time()
 
-		# get the default (next) map_id if nsims is passed to script
-		if args.nsims is not None:
-			map_id = None
-		else:
-			map_id = m
+        # get the default (next) map_id if nsims is passed to script
+        if args.nsims is not None:
+            map_id = None
+        else:
+            map_id = m
 
-		# Get the filename and complete the seedgen_args, if necessary
-		fname, map_id = simio.get_sim_map_fn(qidstr, downgrade=args.downgrade, smooth1d=smooth_1d, width_deg=width_deg,
-									height_deg=height_deg, smoothell=delta_ell_smooth,
-									scale=ell_large_small_split, taper=ell_taper_width, splitnum=split, notes=args.notes,
-									bin_apod=bin_apod, mask_version=mask_version, mask_name=mask_name, return_map_id=True, map_id=map_id)
-		
-		if mm.is_root:
-			print(f'I am map {i*len(splits)+j+1} of {len(splits)*len(maps)} to be generated')
-			print(f'I am split {split}, sim number {map_id}')
+        # Get the filename and complete the seedgen_args, if necessary
+        fname, map_id = simio.get_sim_map_fn(qidstr, downgrade=args.downgrade, smooth1d=smooth_1d, width_deg=width_deg,
+                                    height_deg=height_deg, smoothell=delta_ell_smooth,
+                                    scale=ell_large_small_split, taper=ell_taper_width, splitnum=split, notes=args.notes,
+                                    bin_apod=bin_apod, mask_version=mask_version, mask_name=mask_name, return_map_id=True, map_id=map_id)
+        
+        if mm.is_root:
+            print(f'I am map {i*len(splits)+j+1} of {len(splits)*len(maps)} to be generated')
+            print(f'I am split {split}, sim number {map_id}')
 
-		# build a tuple for the seedgen so that each tile has an independent, repeatable seed
-		seedgen_args = (split, map_id, data_model, args.qid)
+        # build a tuple for the seedgen so that each tile has an independent, repeatable seed
+        seedgen_args = (split, map_id, data_model, args.qid)
 
-		# Combine the small and large scales
-		lfunc_low, lfunc_high = utils.get_ell_linear_transition_funcs(ell_large_small_split, ell_taper_width)
+        # Combine the small and large scales
+        lfunc_low, lfunc_high = utils.get_ell_linear_transition_funcs(ell_large_small_split, ell_taper_width)
 
-		if mm.is_root:
-			t1 = time.time(); print(f'Init sim time: {np.round(t1-t0, 3)}')
+        if mm.is_root:
+            t1 = time.time(); print(f'Init sim time: {np.round(t1-t0, 3)}')
 
-			# Generate noise using the 1d noise and 2d noise spectra. 
-			sim_1D = tn.get_iso_curvedsky_noise_sim(covar_1D, ivar=ivars, flat_triu_axis=flat_triu_axis_1D,
-													lfunc=lfunc_low, split=split, seedgen_args=seedgen_args)
+            # Generate noise using the 1d noise and 2d noise spectra. 
+            sim_1D = tn.get_iso_curvedsky_noise_sim(covar_1D, ivar=ivars, flat_triu_axis=flat_triu_axis_1D,
+                                                    lfunc=lfunc_low, split=split, seedgen_args=seedgen_args)
 
-		sim_2D = tn.get_tiled_noise_sim(covsqrt_2D, ivar=ivars, flat_triu_axis=flat_triu_axis_2D, tile_lfunc=lfunc_high,
-												ledges=ledges, cov_1D=cov_1D, split=split, seedgen_args=seedgen_args,
-												tiled_mpi_manager=mm)
+        sim_2D = tn.get_tiled_noise_sim(covsqrt_2D, ivar=ivars, flat_triu_axis=flat_triu_axis_2D, tile_lfunc=lfunc_high,
+                                                ledges=ledges, cov_1D=cov_1D, split=split, seedgen_args=seedgen_args,
+                                                tiled_mpi_manager=mm)
 
-		if mm.is_root:
-			t2 = time.time(); print(f'Draw sim time: {np.round(t2-t1, 3)}')
-			
-			enmap.write_map(fname, sim_1D + sim_2D)
+        if mm.is_root:
+            t2 = time.time(); print(f'Draw sim time: {np.round(t2-t1, 3)}')
+            
+            enmap.write_map(fname, sim_1D + sim_2D)
 
-			t3 = time.time(); print(f'Save sim time: {np.round(t3-t2, 3)}')
+            t3 = time.time(); print(f'Save sim time: {np.round(t3-t2, 3)}')
