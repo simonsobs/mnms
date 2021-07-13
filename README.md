@@ -55,4 +55,18 @@ mnms:
 ### Outputs
 Let's explain what the `mnms` settings mean. We defer that discussion for the `dr5` block to an understanding of `soapack`, but in short it defines the default locations of raw data.
 
-The code in this repository generically happens in two steps: (1) building a noise model from maps, and (2) drawing a simulation from that noise model.
+The code in this repository generically happens in two steps: (1) building a noise model from maps, and (2) drawing a simulation from that noise model. Step 1 saves a covariance-like object (exact form depends on the model) in `covmat_path`. Step 2 loads that product from disk, and saves simulations in `maps_path`. The hyperparameters of the model/simulation combo are recorded in the filenames of the files-on-disk. This is how a simulation with a given set of hyperparameters, for instance tile size or wavelet spacing, can find the correct covariance file in `covmat_path`. The generation/parsing of these filenames is provided by the functions in `mnms/simio.py`. 
+
+One hyperparameter of every noise model/simulation combo is the analysis mask. The function `simio.get_sim_mask` is used in the scripts to load either an "off-the-shelf" mask from the `dr5` block raw data (or a custom mask from the `mnms` block `mask_path`) if the function kwarg `bin_apod` is `True` (`False`). In either case, the kwarg `mask_version` defaults to the corresponding `default_mask_version` from the `dr5` (`mnms`) block. Other function kwargs (for instance, `mask_name`) specificy which file to load from within the directory `mask_path` + `mask_version`. 
+
+Another hyperparameter is the raw data itself. For convenience, this must be specified in the `mnms` block as `default_sync_version`. If the raw data is synced/updated at a later date, users will want to change this value to correctly tag their products.
+
+An example set of filenames produced by `simio.py` for the tiled noise model are shown here:
+```
+/scratch/gpfs/zatkins/data/ACTCollaboration/mnms/covmats/
+    s18_04_sync_20201207_v1_BN_bottomcut_cal_True_dg2_smooth1d5_mnms2_noise_1d.fits
+    s18_04_sync_20201207_v1_BN_bottomcut_cal_True_dg2_w4.0_h4.0_smoothell400_mnms2_noise_tiled_2d.fits
+    
+/scratch/gpfs/zatkins/data/ACTCollaboration/mnms/maps/
+    s18_04_sync_20201207_v1_BN_bottomcut_cal_True_dg2_smooth1d5_w4.0_h4.0_smoothell400_scale200_taper200_mnms2_set1_map_002.fits
+```
