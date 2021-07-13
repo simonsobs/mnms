@@ -70,3 +70,31 @@ An example set of filenames produced by `simio.py` for the tiled noise model are
 /scratch/gpfs/zatkins/data/ACTCollaboration/mnms/maps/
     s18_04_sync_20201207_v1_BN_bottomcut_cal_True_dg2_smooth1d5_w4.0_h4.0_smoothell400_scale200_taper200_mnms2_set1_map_002.fits
 ```
+There are two covariance files because the tiled noise model requires a second model to inpaint the largest scales (~tile size), see the scientific documentation. Anyway, you can see common information in the filenames: the detector array is `s18_04`. The `sync` version is the `default_sync_version`. The mask is not the default; it is instead set by passing `bin_apod=False, mask_version='v1', mask_name='BN_bottomcut'` to `simio.get_sim_mask` (you could also eliminate the need to pass the `mask_version` kwarg explicitly by adding `default_mask_version: v1` to the `mnms` block). A change to any of these hyperparameters -- the raw data "sync," or the analysis mask -- would result in a need to regenerate any noise models and simulations.
+
+The next set of hyperparameters are described next.
+
+## Running Scripts
+
+Each noise model -- tiled, wavelets -- have two scripts, one to generate the covariance-like products, and one to load those products and draw simulations. The command-line options for each script are documented and available as 
+```
+python noise_{gen/sim}_{tile/wav}.py --help
+```
+For example, in the tiled case, a user would first run `noise_gen_tile.py`.  In addition to the array, data "sync," and mask hyperparameters, users specify whether to downgrade maps (useful for testing, speed/memory performancel e.g. `--downgrade 2` above), tile geometry in degrees (width, height e.g. `--width-deg 4.0 --height-deg 4.0` above), smoothing scale (to reduce sample variance from the small number of input realizations e.g. `--delta-ell-smooth 400`) and an optional `notes` flag (to distinguish otherwise identical hyperparameter sets. e.g. `--notes mnms2` above). For the tiled model, we also specify parameters of the low-ell inpainted model (a global, 1D isotropic power spectrum), e.g. the smoothing width in ell via `--smooth-1d 5`. Most of these particular hyperparameters are the script defaults, acessible in the help string. All these hyperparameters are recorded in the filenames and the products saved in `covmat_path`.
+
+To draw a simulation, users run `noise_gen_wav.py`. Specifying the same hyperparameters as before allows `simio` to find the proper products in `covmat_path`. A new set of simulation-specific parameters are then supplied, for example how many maps to generate, or in the case of the tiled noise model, at what large angular scale to "blend-in" a draw from the global, 1D isotropic model. Again, these parameters are recorded in the map files saved in `maps_path`. 
+
+## Other Notes
+
+* Both noise models can account for correlated detector-arrays and polarizations.
+    * The latter is handled by default, since the calls to `soapack` for a given detector array will load all 3 Stokes components.
+    * The former correlations can be introduced on top by passing a list of array names to the command-line argument `--qid` of any script instead of just one array name.
+
+* The timing performance in the scientific documentation assumes properly parallelized slurm jobs.
+    * The tiled noise model is currently parallelized using `mpi`; please ensure to set `ntasks` and use `srun` or `mpirun` appropriately in your slurm scripts.
+    * The wavelet noise model is multithreaded; please ensure to set the environment variable `OMP_NUM_THREADS` appropriately in your slurm scripts.
+
+* All map products assume the following axis assignment convention: (array, split, polarizaiton, y, x). Because simulations are per-split, the -4 axis always has dimension 1. 
+
+## Scientific Documentation
+A very brief summary of the two implemented noise models (2D tiled Fourier, 1D wavelets) can be found [here](https://docs.google.com/presentation/d/1Mi6kY25XoiCWD9eNnescAUPJUqoamzAk-KgK_Zzgv94/edit?usp=sharing).
