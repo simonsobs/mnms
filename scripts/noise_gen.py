@@ -12,7 +12,7 @@ import time
 # Supports MPI parallelization
 
 mm = mpi.TiledMPIManager()
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--qid', dest='qid',nargs='+',type=str,required=True,help='list of soapack DR5 array "qids"')
 parser.add_argument('--no-bin-apod',dest='bin_apod',default=True,action='store_false',help='if passed, do not load default binary apodized mask')
 parser.add_argument('--mask-version',dest='mask_version',type=str,default=None,help='if --no-bin-apod, look in dr6sims:mask_path/mask_version/ for mask (default: %(default)s)')

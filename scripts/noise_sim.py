@@ -12,7 +12,7 @@ import time
 # are always (num_arrays, num_splits=1, num_pols, ny, nx
 
 mm = mpi.TiledMPIManager()
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--qid',dest='qid',nargs='+',type=str,required=True,help='list of soapack DR5 array "qids"')
 
 # these arguments serve only to load correct covariance products

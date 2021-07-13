@@ -204,7 +204,7 @@ def get_coadd_map(imap, ivar):
         )
 
     # find pixels where exactly one split has a nonzero ivar
-    single_nonzero_ivar_mask = np.broadcast_to(np.sum(ivar!=0, axis=-4) == 1, coadd.shape)
+    single_nonzero_ivar_mask = np.broadcast_to(np.sum(ivar!=0, axis=-4, keepdims=True) == 1, coadd.shape)
     
     # set the coadd in those pixels to be equal to the imap value of that split (ie, avoid floating
     # point errors in naive coadd calculation)

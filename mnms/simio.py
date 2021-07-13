@@ -8,11 +8,15 @@ import numpy as np
 import os
 import re
 
-config = sints.dconfig['dr6sims']
+dr5_config = sints.dconfig['dr5']
+config = sints.dconfig['mnms']
 
+# allow to pull the default mask from dr5 block if not provided in mnms
 default_sync = config['default_sync_version']
-default_mask = config['default_mask_version']
-
+try:
+    default_mask = config['default_mask_version']
+except KeyError:
+    default_mask = sints.dr5_default_mask_version
 
 def _get_sim_fn_root(qid, sync_version=default_sync, mask_version=default_mask, bin_apod=None, mask_name=None, \
     galcut=None, apod_deg=None, calibrated=None, downgrade=None):

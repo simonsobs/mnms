@@ -1,10 +1,7 @@
 from mnms import utils
-from mnms import simio
 from pixell import enmap, wcsutils
 import numpy as np
-import argparse
 from soapack.interfaces import DR5
-import pathlib
 from tqdm import tqdm
 
 # This script loads a set of splits given by the arguments and generates the coadd from those splits
