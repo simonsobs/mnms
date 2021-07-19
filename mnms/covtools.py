@@ -192,7 +192,7 @@ def smooth_ps_grid_uniform(ps, res, zero_dc=True, diag=False, **kwargs):
     # We now know how many pixels to somoth by in each direction,
     # so perform the actual smoothing
     ps = ndimage.uniform_filter(ps, size=smooth, mode='wrap')
-    if zero_dc: ps[0,0] = 0
+    if zero_dc: ps[..., 0,0] = 0
     if diag: assert np.all(ps>=0), 'If diag output ps must be positive semi-definite'
     return ps
 

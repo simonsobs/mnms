@@ -384,23 +384,37 @@ def interp1d_bins(bins, y, return_vals=False, **interp1d_kwargs):
     else:
         return interp1d(x, y, fill_value=fill_value, **interp1d_kwargs)
 
-# forces shape to (num_arrays, num_splits, num_pol, ny, nx) and sums over num_splits
-def ell_flatten(imap, mask=None, return_cov=False, mode='fft', lmax=6000, ledges=None, weights=None, nthread=0):
+# this is twice the theoretical CAR bandlimit!
+def lmax_from_wcs(imap):
+    return int(180/imap.wcs.wcs.cdelt[1])
+
+# forces shape to (num_arrays, num_splits, num_pol, ny, nx) and averages over splits
+def ell_flatten(imap, mask=None, return_cov=False, mode='fft', ledges=None, weights=None, lmax=6000, ainfo=None, nthread=0):
     imap = atleast_nd(imap, 5)
+    assert imap.ndim in range(2, 6)
     num_arrays, num_splits, num_pol = imap.shape[:3]
+    
     if mask is None:
         mask = 1
+    
     if mode == 'fft':
+
+        # get the power -- since filtering maps by their own power, only need diagonal
         kmap = enmap.fft(imap*mask, normalize='phys', nthread=nthread)
-        smap = enmap.enmap(np.einsum('...miayx,...miayx->...mayx', kmap, np.conj(kmap)).real, wcs=kmap.wcs)
+        smap = np.mean(kmap * np.conj(kmap), axis=-4).real
+
+        # apply correction
         w2 = np.mean(mask**2)
         smap /= num_splits*w2
 
+        # bin the 2D power into ledges
         modlmap = smap.modlmap().astype(imap.dtype) # modlmap is np.float64 always...
         smap = radial_bin(smap, modlmap, ledges, weights=weights)
         ys = []
         for i in range(num_arrays):
             for j in range(num_pol):
+
+                # interpolate to the center of the bins and apply filter
                 lfunc, y = interp1d_bins(ledges, smap[i, j], return_vals=True, kind='cubic', bounds_error=False)
                 ys.append(y)
                 lfilter = 1/np.sqrt(lfunc(modlmap))
@@ -414,36 +428,62 @@ def ell_flatten(imap, mask=None, return_cov=False, mode='fft', lmax=6000, ledges
             return enmap.ifft(kmap, normalize='phys', nthread=nthread).real, ys
         else:
             return enmap.ifft(kmap, normalize='phys', nthread=nthread).real
-    else:
-        raise NotImplementedError('mode=curvedsky not yet implemented')
-
-def lmax_from_wcs(imap):
-    return int(180/imap.wcs.wcs.cdelt[1])
-
-# copied from pixell online, not in tigress pixell version.
-# further extended here for ffts
-def ell_filter(imap, lfunc, mode='fft', ainfo=None, lmax=None, nthread=0):
-    """Filter a map isotropically by a function.
-    Returns alm2map(map2alm(alm * lfunc(ell),lmax))
-    Args:
-        imap: (...,Ny,Nx) ndmap stack of enmaps.
-        lmax: integer specifying maximum multipole beyond which the alms are zeroed
-        lfunc: a function mapping multipole ell to the filtering expression
-        ainfo: 	If ainfo is provided, it is an alm_info describing the layout 
-    of the input alm. Otherwise it will be inferred from the alm itself.
-    Returns:
-        omap: (...,Ny,Nx) ndmap stack of filtered enmaps
-    """
-    if mode == 'fft':
-        kmap = enmap.fft(imap, nthread=nthread)
-        filterlmap = lfunc(imap.modlmap().astype(imap.dtype)) # modlmap is np.float64 always...
-        return enmap.ifft(kmap * filterlmap, nthread=nthread).real
+    
     elif mode == 'curvedsky':
         if lmax is None:
             lmax = lmax_from_wcs(imap)
-        alm = curvedsky.map2alm(imap, ainfo=ainfo, lmax=lmax, spin=0)
-        alm = curvedsky.almxfl(alm, lfunc=lfunc, ainfo=ainfo)
-        return curvedsky.alm2map(alm, enmap.empty(imap.shape, imap.wcs, dtype=imap.dtype), spin=0, ainfo=ainfo)
+
+        # initialize objects to fill up cls
+        alms = []
+        cls = []
+
+        # first average the cls over num_splits, since filtering maps by their own power only need diagonal
+        for i in range(num_arrays):
+            for j in range(num_splits):
+                alms.append(curvedsky.map2alm(imap[i, j]*mask, ainfo=ainfo, lmax=lmax))
+                cls.append(curvedsky.alm2cl(alms[-1], ainfo=ainfo))
+        alms = np.array(alms).reshape(num_arrays, num_splits, num_pol, -1)
+        cls = np.array(cls, dtype=imap.dtype).reshape(num_arrays, num_splits, num_pol, -1)
+        cl = cls.mean(axis=-3)
+
+        # apply correction
+        pmap = enmap.pixsizemap(mask.shape, mask.wcs)
+        w2 = np.sum((mask**2)*pmap) / np.pi / 4.
+        cl /= w2
+        
+        # then, filter the alms
+        lfilter = 1/np.sqrt(cl)
+        for i in range(num_arrays):
+            for k in range(num_pol):
+                alms[i, :, k] = curvedsky.almxfl(alms[i, :, k], lfilter=lfilter[i, k], ainfo=ainfo)
+
+        # finally go back to map space
+        omap = enmap.empty(imap.shape, imap.wcs, dtype=imap.dtype)
+        for i in range(num_arrays):
+            for j in range(num_splits):
+                omap[i, j] = curvedsky.alm2map(alms[i, j], omap[i, j], ainfo=ainfo)
+
+        if return_cov:
+            return omap, cl
+        else:
+            return omap
+
+    else:
+        raise NotImplementedError('Only implemented modes are fft and curvedsky')
+
+# further extended here for ffts
+def ell_filter(imap, lfilter, mode='fft', ainfo=None, lmax=None, nthread=0):
+    if mode == 'fft':
+        kmap = enmap.fft(imap, nthread=nthread)
+        if callable(lfilter):
+            lfilter = lfilter(imap.modlmap().astype(imap.dtype)) # modlmap is np.float64 always...
+        return enmap.ifft(kmap * lfilter, nthread=nthread).real
+    elif mode == 'curvedsky':
+        if lmax is None:
+            lmax = lmax_from_wcs(imap)
+        print(lmax)
+        assert imap.ndim in [2, 3] # map2alm, alm2map doesn't work well for other dims
+        return curvedsky.filter(imap, lfilter, ainfo=ainfo, lmax=lmax)
 
 def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
     lmin = center - width/2

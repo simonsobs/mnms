@@ -277,19 +277,17 @@ class tiled_ndmap(enmap.ndmap):
         else:
             return self.sametiles(omap, tiled=False)
 
-    def get_tile(self, tile_idx):
-        p = self._get_epixbox(tile_idx)
-        _, ewcs = utils.slice_geometry_by_pixbox(self.ishape, self.wcs, p)
-        
-        if self.tiled:
-            return enmap.ndmap(self[tile_idx], wcs=ewcs)
-        else:
-            return enmap.extract_pixbox(self, p, cval=0.)
-
     def get_tile_geometry(self, tile_idx):
         p = self._get_epixbox(tile_idx)
-        eshape, ewcs = utils.slice_geometry_by_pixbox(self.ishape, self.wcs, p)
-        return eshape, ewcs
+        return utils.slice_geometry_by_pixbox(self.ishape, self.wcs, p)
+
+    def get_tile(self, tile_idx):        
+        if self.tiled:
+            _, ewcs = self.get_tile_geometry(tile_idx)
+            return enmap.ndmap(self[tile_idx], wcs=ewcs)
+        else:
+            p = self._get_epixbox(tile_idx)
+            return enmap.extract_pixbox(self, p, cval=0.)
 
     def write(self, fname, extra=None):
         write_tiled_ndmap(fname, self, extra=extra)

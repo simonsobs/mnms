@@ -85,8 +85,8 @@ else:
     ivars = None
     mask = None
 
-ledges = np.arange(0,10_000,10)
-covsqrt_2D, cov_1D = tn.get_tiled_noise_covsqrt(imaps, ivar=ivars, mask=mask, width_deg=width_deg, height_deg=height_deg, delta_ell_smooth=delta_ell_smooth,
+ledges = None # np.arange(0,10_000,10)
+covsqrt_2D, ledges, cov_1D = tn.get_tiled_noise_covsqrt(imaps, ivar=ivars, mask=mask, width_deg=width_deg, height_deg=height_deg, delta_ell_smooth=delta_ell_smooth,
                                         ledges=ledges, tiled_mpi_manager=mm)
 
 if mm.is_root:
