@@ -1,8 +1,7 @@
-from __future__ import print_function
-from orphics import maps, cosmology
-from pixell import enmap, curvedsky, enplot, wcsutils
+from orphics import maps
+from pixell import enmap, curvedsky, wcsutils
 import healpy as hp
-from mnms import covtools, utils, mpi, mcm
+from mnms import covtools, utils, mpi
 from mnms.tiled_ndmap import tiled_ndmap
 import astropy.io.fits as pyfits
 
@@ -10,10 +9,7 @@ import numpy as np
 from math import ceil
 import matplotlib.pyplot as plt
 
-from tqdm import tqdm
 import time
-
-import warnings
 
 seedgen = utils.seed_tracker
 
@@ -224,7 +220,7 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
 
         # get the tiled data, tiled mask
         imap = tiled_ndmap(imap, width_deg=width_deg, height_deg=height_deg)
-        _, sq_f_sky = imap.set_unmasked_tiles(mask)
+        sq_f_sky = imap.set_unmasked_tiles(mask, return_sq_f_sky=True)
         imap = imap.to_tiled()
         # # explicitly passing tiled=False and self.ishape will check that mask.shape and imap.ishape are compatible
         # mask = imap.sametiles(mask, tiled=False).to_tiled()
@@ -521,19 +517,138 @@ def get_tiled_noise_sim(covsqrt, ivar=None, flat_triu_axis=1, num_arrays=None, t
     else:
         return None
 
-def get_tiled_noise_sim_multinop(covsqrt, ivar=None, flat_triu_axis=1, tile_lfunc=None, cov_1D=None, nthread=0,
+def get_tiled_noise_covsqrt_multi(imap, ivar=None, mask=None, width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, 
+                                        nthread=0, flat_triu_axis=1, verbose=True):
+    '''Generate the 2d noise spectra for each of the tiles
+    '''
+
+    # check that imap conforms with convention
+    assert imap.ndim in range(2, 6), 'Data must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
+    imap = utils.atleast_nd(imap, 5) # make data 5d
+
+    tm0 = time.time()
+
+    # if ivar is not None, whiten the imap data using ivar
+    if ivar is not None:
+        assert np.all(ivar >= 0)
+        imap = utils.get_whitened_noise_map(imap, ivar)
+
+    tm1 = time.time(); print(f'Whiten time: {np.round(tm1-tm0, 3)}')
+
+    # filter map prior to tiling, get the c_ells
+    # imap is henceforth masked, as part of the filtering
+    if mask is None:
+        mask = np.array([1])
+    mask = mask.astype(imap.dtype)
+    if lmax is None:
+        lmax = utils.lmax_from_wcs(imap)
+    imap, cov_1D = utils.ell_flatten(imap, mask=mask, return_cov=True, mode='curvedsky', lmax=lmax)
+
+    tm2 = time.time(); print(f'Flatten time: {np.round(tm2-tm1, 3)}')
+
+    # get the tiled data, apod window
+    imap = tiled_ndmap(imap, width_deg=width_deg, height_deg=height_deg)
+    sq_f_sky = imap.set_unmasked_tiles(mask, return_sq_f_sky=True)
+    imap = imap.to_tiled()
+    apod = imap.apod()
+
+    # get component shapes
+    num_arrays, num_splits, num_pol = imap.shape[1:4] # shape is (num_tiles, num_arrays, num_splits, num_pol, ...)
+    ncomp = num_arrays * num_pol
+    nspec = utils.triangular(ncomp)
+
+    tm3 = time.time(); print(f'To-tiled time: {np.round(tm3-tm2, 3)}')
+
+    # get all the 2D power spectra, averaged over splits
+    smap = enmap.fft(imap*apod, normalize='phys', nthread=nthread)
+    print(imap.shape, imap.dtype)
+
+    tm4 = time.time(); print(f'FFT time: {np.round(tm4-tm3, 3)}')
+
+    smap = np.einsum('...miayx,...nibyx->...manbyx', smap, np.conj(smap)).real / num_splits
+
+    t0 = time.time(); print(f'Outer-product time: {np.round(t0-tm4, 3)}')
+
+    # cycle through the tiles    
+    for i, n in enumerate(imap.unmasked_tiles):
+        if verbose:
+            print('Doing tile {} of {}'.format(n, imap.numx*imap.numy-1))
+
+        # get the 2d tile PS, shape is (num_arrays, num_splits, num_pol, ny, nx)
+        # so trace over component -4
+        # this normalization is different than DR4 but avoids the need to save num_splits metadata, and we
+        # only ever simulate splits anyway...
+        _, ewcs = imap.get_tile_geometry(n)
+
+        if verbose:
+            print(f'Shape: {smap[i].shape}')
+
+        # iterate over spectra
+        for j in range(nspec):
+            # get array, pol indices
+            comp1, comp2 = utils.triu_pos(j, ncomp)
+            map_index_1, pol_index_1 = divmod(comp1, num_pol)
+            map_index_2, pol_index_2 = divmod(comp2, num_pol)
+                        
+            # whether we are on the main diagonal
+            diag = comp1 == comp2
+
+            # get this 2D PS and apply correct geometry for this tile
+            power = smap[i, map_index_1, pol_index_1, map_index_2, pol_index_2]
+            power = enmap.ndmap(power, wcs=ewcs)
+            
+            # smooth the 2D PS
+            if delta_ell_smooth > 0:
+                power = covtools.smooth_ps_grid_uniform(power, delta_ell_smooth, diag=diag)
+            
+            # skip smoothing if delta_ell_smooth=0 is passed as arg
+            elif delta_ell_smooth == 0:
+                if verbose:
+                    print('Not smoothing')
+            else:
+                raise ValueError('delta_ell_smooth must be >= 0')    
+            
+            # update output 2D PS map
+            smap[i, map_index_1, pol_index_1, map_index_2, pol_index_2] = power
+            if not diag: # symmetry
+                smap[i, map_index_2, pol_index_2, map_index_1, pol_index_1] = power
+
+        # correct for f_sky from mask and apod windows
+        smap[i] /= sq_f_sky[i]
+
+    t1 = time.time(); print(f'Tile time: {np.round(t1-t0, 3)}')
+
+    # take covsqrt of current power, need to reshape so covarying dimensions are spread over only two axes
+    smap = utils.eigpow(smap.reshape((-1, ncomp, ncomp) + smap.shape[-2:]), 0.5, axes=(-4,-3))
+    # smap = enmap.multi_pow(smap.reshape((-1, ncomp, ncomp) + smap.shape[-2:]), 0.5, axes=(-4,-3))
+
+    t2 = time.time(); print(f'Eigpow time: {np.round(t2-t1, 3)}')
+
+    # get upper triu of the covsqrt for efficient disk-usage. put the covarying axes [1, 2] at axis flat_triu_axis
+    # so that axis 0 still indexes tiles
+    assert flat_triu_axis != 0 
+    omap = utils.to_flat_triu(smap, axis1=1, axis2=2, flat_triu_axis=flat_triu_axis)
+    omap = imap.sametiles(omap) 
+
+    t3 = time.time(); print(f'Triu time: {np.round(t3-t2, 3)}')
+
+    return omap, cov_1D
+
+def get_tiled_noise_sim_multi(covsqrt, ivar=None, num_arrays=None, flat_triu_axis=1, cov_1D=None, nthread=0,
                         split=None, seed=None, seedgen_args=None, lowell_seed=False, verbose=True):
     
     t0 = time.time()
+    # check that covsqrt is a tiled tiled_ndmap instance    
+    assert covsqrt.tiled, 'Covsqrt must be tiled'
 
     # get ivar, and num_arrays if necessary
     if ivar is not None:
         assert np.all(ivar >= 0)
-        # make data 5d, with prepended shape (num_arrays, num_splits, num_pol)
         assert ivar.ndim in range(2, 6), 'Data must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
         ivar = utils.atleast_nd(ivar, 5) # make data 5d
         num_arrays = ivar.shape[-5]
-    assert covsqrt.tiled, 'Covsqrt must be tiled'
+    else:
+        assert isinstance(num_arrays, int), 'If ivar not passed, must explicitly pass num_arrays as an python int'
 
     # get preshape information
     num_unmasked_tiles = covsqrt.num_tiles
@@ -546,8 +661,10 @@ def get_tiled_noise_sim_multinop(covsqrt, ivar=None, flat_triu_axis=1, tile_lfun
             f'Number of Pols.: {num_pol}\n' + \
             f'Tile shape: {covsqrt.shape[-2:]}'
             )
+    
+    tm0 = time.time(); print(f'Init time: {np.round(tm0-t0, 3)}')
 
-    # unflatten the covsqrt flattened dimension. put the cov axis at [1, 2] so axis 0
+    # unflatten the covsqrt flattened dimension. put the covarying axes at [1, 2] so axis 0
     # still indexes tiles
     wcs = covsqrt.wcs
     tiled_info = covsqrt.tiled_info()
@@ -555,7 +672,7 @@ def get_tiled_noise_sim_multinop(covsqrt, ivar=None, flat_triu_axis=1, tile_lfun
     covsqrt = enmap.ndmap(covsqrt, wcs)
     covsqrt = tiled_ndmap(covsqrt, **tiled_info)
 
-    t1 = time.time(); print(f'Init time: {np.round(t1-t0, 3)}')
+    t1 = time.time(); print(f'Unflat time: {np.round(t1-tm0, 3)}')
 
     # determine the seed. use a seedgen if seedgen_args is not None
     if seedgen_args is not None:
@@ -570,11 +687,9 @@ def get_tiled_noise_sim_multinop(covsqrt, ivar=None, flat_triu_axis=1, tile_lfun
         print(f'Seed: {seed}')
 
     # get random numbers in the right shape. To make random draws independent of mask, we draw numbers into
-    # the full number of tiles, and then slice out the unmasked tiles (even though this is a little slower)
-    rng = np.random.default_rng(seed)
+    # the full number of tiles, and then slice the unmasked tiles (even though this is a little slower)
     rshape = (covsqrt.numy*covsqrt.numx, num_comp, *covsqrt.shape[-2:])
-    omap = rng.standard_normal(rshape, dtype=covsqrt.dtype)
-    omap = omap + 1j*rng.standard_normal(rshape, dtype=covsqrt.dtype)
+    omap = utils.concurrent_standard_normal(size=rshape, dtype=covsqrt.dtype, complex=True, seed=seed, nchunks=100)
     omap = omap[covsqrt.unmasked_tiles]
 
     t2 = time.time(); print(f'Random draw time: {np.round(t2-t1, 3)}')
@@ -583,7 +698,6 @@ def get_tiled_noise_sim_multinop(covsqrt, ivar=None, flat_triu_axis=1, tile_lfun
     omap = enmap.map_mul(covsqrt, omap)
 
     t3 = time.time(); print(f'Map-mul time: {np.round(t3-t2, 3)}')
-    print(np.all(np.isfinite(omap)))
 
     # go back to map space
     omap = enmap.ifft(omap, normalize='phys', nthread=nthread).real
@@ -596,40 +710,28 @@ def get_tiled_noise_sim_multinop(covsqrt, ivar=None, flat_triu_axis=1, tile_lfun
     omap = omap.from_tiled(power=0.5)
 
     t5 = time.time(); print(f'Stitch time: {np.round(t5-t4, 3)}')
-    print(np.all(np.isfinite(omap)))
 
     # filter maps
-    to_filter = (cov_1D is not None) or (tile_lfunc is not None) 
-    if to_filter:
+    if cov_1D is not None:
 
         # determine lmax from cov_1D, and build the lfilter
-        # this may be a product of cov_1D and tile_func
-        lmax = utils.lmax_from_wcs(omap)
-        lfilter = 1
-
-        if cov_1D is not None:
-            assert (num_arrays, num_pol) == cov_1D.shape[:-1], 'cov_1D shape does not match (num_arrays, num_pol, ...)'
-            lmax = min(lmax, cov_1D.shape[-1] - 1) 
-            lfilter = cov_1D[..., :lmax+1]
-        
-        if tile_lfunc is not None:
-            lfilter *= tile_lfunc(np.arange(lmax+1))
-        
-        lfilter = np.broadcast_to(lfilter, (num_arrays, num_pol, lmax+1))
+        lmax = min(utils.lmax_from_wcs(omap), cov_1D.shape[-1]-1)
+        # cov_1D = cov_1D[:, split] 
+        assert (num_arrays, num_pol) == cov_1D.shape[:-1], 'cov_1D shape does not match (num_arrays, num_pol, ...)'
+        lfilter = cov_1D[..., :lmax+1]
         lfilter = np.sqrt(lfilter) # assume cov_1D, tile_lfunc defined in terms of power spectra
         
         # do the filtering
         for i in range(num_arrays):
-            for j in range(num_pol):
-                omap[i, j] = utils.ell_filter(omap[i, j], lfilter, mode='curvedsky')
+            omap[i] = utils.ell_filter(omap[i], lfilter[i], mode='curvedsky', lmax=lmax)
 
     t6 = time.time(); print(f'Filter time: {np.round(t6-t5, 3)}')
-    print(np.all(np.isfinite(omap)))
+
     # if ivar is not None, unwhiten the imap data using ivar
     if ivar is not None:
         ivar = ivar[:, split]
-        ivar = np.broadcast_to(ivar, omap.shape, subok=True)
-        omap[ivar != 0] /= np.sqrt(ivar[ivar != 0])
+        where = ivar != 0
+        np.divide(omap, np.sqrt(ivar), omap, where=where)
 
     t7 = time.time(); print(f'Ivar-weight time: {np.round(t7-t6, 3)}')
 

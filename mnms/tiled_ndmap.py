@@ -79,6 +79,8 @@ class tiled_ndmap(enmap.ndmap):
         else:
             obj.unmasked_tiles = np.arange(numy*numx).astype(np.int32)
         obj.num_tiles = len(obj.unmasked_tiles)
+        assert obj.num_tiles <= numx*numy, 'Number of unmasked tiles cannot be greater than numx*numy'
+        assert np.all(obj.unmasked_tiles < numx*numy), 'Cannot have unmasked tile index greater than or equal to numx*numy'
 
         return obj
 
@@ -181,9 +183,11 @@ class tiled_ndmap(enmap.ndmap):
     def apod(self, width=None):
         if width is None:
             width = (self.pix_cross_y, self.pix_cross_x)
-        return enmap.apod(np.ones((self.pix_height + 2*self.pix_pad_y, self.pix_width + 2*self.pix_pad_x)), width=width)
+        return enmap.apod(np.ones((
+            self.pix_height + 2*self.pix_pad_y,
+            self.pix_width + 2*self.pix_pad_x)), width=width).astype(self.dtype)
 
-    def set_unmasked_tiles(self, mask, min_sq_f_sky=MIN_SQ_F_SKY):
+    def set_unmasked_tiles(self, mask, min_sq_f_sky=MIN_SQ_F_SKY, return_sq_f_sky=False):
         assert wcsutils.is_compatible(self.wcs, mask.wcs), 'Current wcs and mask wcs are not compatible'
 
         # explicitly passing tiled=False and self.ishape will check that mask.shape and self.ishape are compatible
@@ -194,7 +198,8 @@ class tiled_ndmap(enmap.ndmap):
         
         self.unmasked_tiles = unmasked_tiles
         self.num_tiles = len(unmasked_tiles)
-        return unmasked_tiles, sq_f_sky[unmasked_tiles]
+        if return_sq_f_sky:
+            return sq_f_sky[unmasked_tiles]
 
     def _crossfade(self):
         return utils.linear_crossfade(self.pix_height+2*self.pix_cross_y, self.pix_width+2*self.pix_cross_x,
@@ -307,7 +312,7 @@ def tiled_info(tiled_imap, pop=None):
     ret = dict(
         width_deg=tiled_imap.width_deg,
         height_deg=tiled_imap.height_deg, 
-        tiled=True,
+        tiled=tiled_imap.tiled,
         ishape=tiled_imap.ishape,
         unmasked_tiles=tiled_imap.unmasked_tiles
     )

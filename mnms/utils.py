@@ -1,7 +1,12 @@
 from pixell import enmap, enplot, curvedsky
+from enlib import array_ops
 from soapack import interfaces as dmint
 import numpy as np
 from scipy.interpolate import interp1d
+
+from concurrent import futures
+import multiprocessing
+import os
 
 # Utility functions to support tiling classes and functions. Just keeping code organized so I don't get whelmed.
 
@@ -194,21 +199,32 @@ def get_logical_mask(cond, op=np.logical_or, keep_prepend_dims=False, axis=0):
     return op.reduce(cond, axis=axis)
 
 def get_coadd_map(imap, ivar):
+    if hasattr(imap, 'wcs'):
+        is_enmap = True
+        wcs = imap.wcs
+    else:
+        is_enmap = False
+
     imap = atleast_nd(imap, 4) # make 4d by prepending
     ivar = atleast_nd(ivar, 4)
 
     # due to floating point precision, the coadd is not exactly the same
     # as a split where that split is the only non-zero ivar in that pixel
-    coadd = np.nan_to_num( 
-        np.sum(imap * ivar, axis=-4, keepdims=True) / np.sum(ivar, axis=-4, keepdims=True) # splits along -4 axis
-        )
+    num = np.sum(imap * ivar, axis=-4, keepdims=True) 
+    den = np.sum(ivar, axis=-4, keepdims=True)
+    mask = den != 0 
+    coadd = np.divide(num, den, where=mask)
 
     # find pixels where exactly one split has a nonzero ivar
-    single_nonzero_ivar_mask = np.broadcast_to(np.sum(ivar!=0, axis=-4, keepdims=True) == 1, coadd.shape)
+    single_nonzero_ivar_mask = np.sum(ivar!=0, axis=-4, keepdims=True) == 1
     
     # set the coadd in those pixels to be equal to the imap value of that split (ie, avoid floating
     # point errors in naive coadd calculation)
-    coadd[single_nonzero_ivar_mask] = np.sum(imap * (ivar!=0), axis=-4, keepdims=True)[single_nonzero_ivar_mask]
+    single_nonzero_fill = np.sum(imap * (ivar!=0), axis=-4, where=single_nonzero_ivar_mask, keepdims=True)
+    coadd = np.where(single_nonzero_ivar_mask, single_nonzero_fill, coadd)
+    
+    if is_enmap:
+        coadd =  enmap.ndmap(coadd, wcs)
     return coadd
 
 def get_ivar_eff(ivar, use_inf=False):
@@ -389,7 +405,7 @@ def lmax_from_wcs(imap):
     return int(180/imap.wcs.wcs.cdelt[1])
 
 # forces shape to (num_arrays, num_splits, num_pol, ny, nx) and averages over splits
-def ell_flatten(imap, mask=None, return_cov=False, mode='fft', ledges=None, weights=None, lmax=6000, ainfo=None, nthread=0):
+def ell_flatten(imap, mask=None, return_cov=False, mode='fft', ledges=None, weights=None, lmax=None, ainfo=None, nthread=0):
     imap = atleast_nd(imap, 5)
     assert imap.ndim in range(2, 6)
     num_arrays, num_splits, num_pol = imap.shape[:3]
@@ -440,31 +456,35 @@ def ell_flatten(imap, mask=None, return_cov=False, mode='fft', ledges=None, weig
         # first average the cls over num_splits, since filtering maps by their own power only need diagonal
         for i in range(num_arrays):
             for j in range(num_splits):
+                assert imap[i, j].ndim in [2, 3]
                 alms.append(curvedsky.map2alm(imap[i, j]*mask, ainfo=ainfo, lmax=lmax))
                 cls.append(curvedsky.alm2cl(alms[-1], ainfo=ainfo))
         alms = np.array(alms).reshape(num_arrays, num_splits, num_pol, -1)
         cls = np.array(cls, dtype=imap.dtype).reshape(num_arrays, num_splits, num_pol, -1)
-        cl = cls.mean(axis=-3)
+        cls = cls.mean(axis=-3)
 
         # apply correction
         pmap = enmap.pixsizemap(mask.shape, mask.wcs)
         w2 = np.sum((mask**2)*pmap) / np.pi / 4.
-        cl /= w2
-        
+        cls /= w2
+
         # then, filter the alms
-        lfilter = 1/np.sqrt(cl)
+        out = np.zeros_like(cls)
+        lfilters = np.divide(1, np.sqrt(cls), where=cls!=0, out=out)
         for i in range(num_arrays):
             for k in range(num_pol):
-                alms[i, :, k] = curvedsky.almxfl(alms[i, :, k], lfilter=lfilter[i, k], ainfo=ainfo)
+                assert alms[i, :, k].ndim in [1, 2]
+                alms[i, :, k] = curvedsky.almxfl(alms[i, :, k], lfilter=lfilters[i, k], ainfo=ainfo)
 
         # finally go back to map space
         omap = enmap.empty(imap.shape, imap.wcs, dtype=imap.dtype)
         for i in range(num_arrays):
             for j in range(num_splits):
+                assert alms[i, j].ndim in [1, 2]
                 omap[i, j] = curvedsky.alm2map(alms[i, j], omap[i, j], ainfo=ainfo)
 
         if return_cov:
-            return omap, cl
+            return omap, cls
         else:
             return omap
 
@@ -479,11 +499,24 @@ def ell_filter(imap, lfilter, mode='fft', ainfo=None, lmax=None, nthread=0):
             lfilter = lfilter(imap.modlmap().astype(imap.dtype)) # modlmap is np.float64 always...
         return enmap.ifft(kmap * lfilter, nthread=nthread).real
     elif mode == 'curvedsky':
+        # map2alm, alm2map doesn't work well for other dims beyond pol component
+        assert imap.ndim in [2, 3] 
+        imap = atleast_nd(imap, 3)
+
+        # get the lfilter, which might be different per pol component
         if lmax is None:
             lmax = lmax_from_wcs(imap)
-        print(lmax)
-        assert imap.ndim in [2, 3] # map2alm, alm2map doesn't work well for other dims
-        return curvedsky.filter(imap, lfilter, ainfo=ainfo, lmax=lmax)
+        if callable(lfilter):
+            lfilter = lfilter(np.arange(lmax+1), dtype=imap.dtype)
+        assert lfilter.ndim in [1, 2]
+        lfilter = atleast_nd(lfilter, 2)
+
+        # perform the filter
+        alm = curvedsky.map2alm(imap, ainfo=ainfo, lmax=lmax)
+        for i in range(len(alm)):
+            alm[i] = curvedsky.almxfl(alm[i], lfilter=lfilter[i], ainfo=ainfo)
+        omap = enmap.empty(imap.shape, imap.wcs, dtype=imap.dtype)
+        return curvedsky.alm2map(alm, omap, ainfo=ainfo)
 
 def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
     lmin = center - width/2
@@ -499,6 +532,82 @@ def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
         funclist = [lambda x: 0, lambda x: (x - lmin)/(lmax - lmin), lambda x: 1]
         return np.piecewise(ell, condlist, funclist)
     return lfunc1, lfunc2
+
+# from pixell/fft.py
+def get_cpu_count():
+    try:
+        nthreads = int(os.environ['OMP_NUM_THREADS'])
+    except (KeyError, ValueError):
+        nthreads = multiprocessing.cpu_count()
+    return nthreads
+
+def concurrent_standard_normal(size=1, nchunks=1, nthreads=0, seed=None, dtype=np.float32, complex=False):
+    # get size per chunk draw
+    totalsize = np.prod(size, dtype=int)
+    chunksize = np.ceil(totalsize/nchunks).astype(int)
+
+    # get seeds
+    ss = np.random.SeedSequence(seed)
+    rngs = [np.random.default_rng(s) for s in ss.spawn(nchunks)]
+    
+    # define working objects
+    out = np.empty((nchunks, chunksize), dtype=dtype)
+    if complex:
+        out_imag = np.empty_like(out)
+
+    # perform multithreaded execution
+    if nthreads == 0:
+        nthreads = get_cpu_count()
+    executor = futures.ThreadPoolExecutor(max_workers=nthreads)
+
+    def _fill(arr, start, stop, rng):
+        rng.standard_normal(out=arr[start:stop], dtype=dtype)
+    
+    fs = [executor.submit(_fill, out, i, i+1, rngs[i]) for i in range(nchunks)]
+    futures.wait(fs)
+
+    if complex:
+        fs = [executor.submit(_fill, out_imag, i, i+1, rngs[i]) for i in range(nchunks)]
+        futures.wait(fs)
+
+        # unfortuntely this line takes 80% of the time for a complex draw
+        out = out + 1j*out_imag
+
+    # return
+    out = out.reshape(-1)[:totalsize]
+    return out.reshape(size)
+
+def eigpow(A, e, axes=[-2, -1]):
+    """A hack around enlib.array_ops.eigpow which upgrades the data
+    precision to at least double precision if necessary prior to
+    operation.
+    """
+    # store wcs if imap is ndmap
+    if hasattr(A, 'wcs'):
+        is_enmap = True
+        wcs = A.wcs
+    else:
+        is_enmap = False
+
+    dtype = A.dtype
+    
+    # cast to double precision if necessary
+    if np.dtype(dtype).itemsize < 8:
+        A = np.asanyarray(A, dtype=np.float64)
+        recast = True
+    else:
+        recast = False
+
+    O = array_ops.eigpow(A, e, axes=axes)
+
+    # cast back to input precision if necessary
+    if recast:
+        O = np.asanyarray(O, dtype=dtype)
+
+    if is_enmap:
+        O =  enmap.ndmap(O, wcs)
+
+    return O
     
 class _SeedTracker(object):
     def __init__(self):
