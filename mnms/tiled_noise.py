@@ -1,8 +1,7 @@
-from __future__ import print_function
-from orphics import maps, cosmology
-from pixell import enmap, curvedsky, enplot, wcsutils
+from orphics import maps
+from pixell import enmap, curvedsky, wcsutils
 import healpy as hp
-from mnms import covtools, utils, mpi, mcm
+from mnms import covtools, utils, mpi
 from mnms.tiled_ndmap import tiled_ndmap
 import astropy.io.fits as pyfits
 
@@ -10,10 +9,7 @@ import numpy as np
 from math import ceil
 import matplotlib.pyplot as plt
 
-from tqdm import tqdm
 import time
-
-import warnings
 
 seedgen = utils.seed_tracker
 
@@ -69,7 +65,7 @@ def get_iso_curvedsky_noise_covar(imap, ivar=None, mask=None, N=5, lmax=1000):
     for map_index in range(num_arrays):
         for split in range(num_splits):
             for pol_index in range(num_pol):
-                alms.append(curvedsky.map2alm(imap[map_index, split, pol_index]*mask, spin=0, lmax=lmax))
+                alms.append(curvedsky.map2alm(imap[map_index, split, pol_index]*mask, lmax=lmax))
     alms = np.array(alms)
     alms = alms.reshape(*imap.shape[:3], -1)
 
@@ -181,7 +177,7 @@ def get_iso_curvedsky_noise_sim(covar, ivar=None, flat_triu_axis=0, oshape=None,
 
     # generate the noise and sht to real space
     oshape = (ncomp,) + oshape
-    omap = curvedsky.rand_map(oshape, covar.wcs, covar, lmax=covar.shape[-1], dtype=covar.dtype, seed=seed, spin=0)
+    omap = curvedsky.rand_map(oshape, covar.wcs, covar, lmax=covar.shape[-1], dtype=covar.dtype, seed=seed)
     omap = omap.reshape((num_arrays, 1, num_pol) + oshape[-2:])
 
     # if ivar is not None, unwhiten the imap data using ivar
@@ -217,14 +213,14 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
         if mask is None:
             mask = enmap.ones(imap.shape[-2:], wcs=imap.wcs)
         if ledges is None:
-            ledges = np.arange(0, 10_000, 10)
+            ledges = np.arange(0, 10_000, maps.minimum_ell(imap.shape, imap.wcs)+1)
         
         mask = mask.astype(imap.dtype)
         imap, cov_1D = utils.ell_flatten(imap, mask=mask, ledges=ledges, return_cov=True)
 
         # get the tiled data, tiled mask
         imap = tiled_ndmap(imap, width_deg=width_deg, height_deg=height_deg)
-        _, sq_f_sky = imap.set_unmasked_tiles(mask)
+        sq_f_sky = imap.set_unmasked_tiles(mask, return_sq_f_sky=True)
         imap = imap.to_tiled()
         # # explicitly passing tiled=False and self.ishape will check that mask.shape and imap.ishape are compatible
         # mask = imap.sametiles(mask, tiled=False).to_tiled()
@@ -345,7 +341,7 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
 
     # serial code
     if tiled_mpi_manager.is_root:  
-        return omap, cov_1D
+        return omap, ledges, cov_1D
     else:
         return None, None
 
@@ -427,7 +423,7 @@ def get_tiled_noise_sim(covsqrt, ivar=None, flat_triu_axis=1, num_arrays=None, t
         if seedgen_args is not None:
             # if the split is the seedgen setnum, prepend it to the seedgen args
             if len(seedgen_args) == 3: # sim_idx, data_model, qid
-                seedgen_args_tile = (split,) + seedgen_args
+                seedgen_args = (split,) + seedgen_args
             else: 
                 assert len(seedgen_args) == 4 # set_idx, sim_idx, data_model, qid 
             seedgen_args_tile = seedgen_args + (n,)
@@ -520,6 +516,189 @@ def get_tiled_noise_sim(covsqrt, ivar=None, flat_triu_axis=1, num_arrays=None, t
 
     else:
         return None
+
+def get_tiled_noise_covsqrt_multi(imap, ivar=None, mask=None, width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, 
+                                        nthread=0, flat_triu_axis=1, verbose=False):
+    '''Generate the 2d noise spectra for each of the tiles
+    '''
+
+    # check that imap conforms with convention
+    assert imap.ndim in range(2, 6), 'Data must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
+    imap = utils.atleast_nd(imap, 5) # make data 5d
+
+    # if ivar is not None, whiten the imap data using ivar
+    if ivar is not None:
+        assert np.all(ivar >= 0)
+        imap = utils.get_whitened_noise_map(imap, ivar)
+
+    # filter map prior to tiling, get the c_ells
+    # imap is henceforth masked, as part of the filtering
+    if mask is None:
+        mask = np.array([1])
+    mask = mask.astype(imap.dtype)
+    if lmax is None:
+        lmax = utils.lmax_from_wcs(imap)
+    imap, cov_1D = utils.ell_flatten(imap, mask=mask, return_cov=True, mode='curvedsky', lmax=lmax)
+
+    # get the tiled data, apod window
+    imap = tiled_ndmap(imap, width_deg=width_deg, height_deg=height_deg)
+    sq_f_sky = imap.set_unmasked_tiles(mask, return_sq_f_sky=True)
+    imap = imap.to_tiled()
+    apod = imap.apod()
+
+    # get component shapes
+    num_arrays, num_splits, num_pol = imap.shape[1:4] # shape is (num_tiles, num_arrays, num_splits, num_pol, ...)
+    ncomp = num_arrays * num_pol
+    nspec = utils.triangular(ncomp)
+
+    # get all the 2D power spectra, averaged over splits
+    smap = enmap.fft(imap*apod, normalize='phys', nthread=nthread)
+    smap = np.einsum('...miayx,...nibyx->...manbyx', smap, np.conj(smap)).real / num_splits
+
+    # cycle through the tiles    
+    for i, n in enumerate(imap.unmasked_tiles):
+        if verbose:
+            print('Doing tile {} of {}'.format(n, imap.numx*imap.numy-1))
+
+        # get the 2d tile PS, shape is (num_arrays, num_splits, num_pol, ny, nx)
+        # so trace over component -4
+        # this normalization is different than DR4 but avoids the need to save num_splits metadata, and we
+        # only ever simulate splits anyway...
+        _, ewcs = imap.get_tile_geometry(n)
+
+        if verbose:
+            print(f'Shape: {smap[i].shape}')
+
+        # iterate over spectra
+        for j in range(nspec):
+            # get array, pol indices
+            comp1, comp2 = utils.triu_pos(j, ncomp)
+            map_index_1, pol_index_1 = divmod(comp1, num_pol)
+            map_index_2, pol_index_2 = divmod(comp2, num_pol)
+                        
+            # whether we are on the main diagonal
+            diag = comp1 == comp2
+
+            # get this 2D PS and apply correct geometry for this tile
+            power = smap[i, map_index_1, pol_index_1, map_index_2, pol_index_2]
+            power = enmap.ndmap(power, wcs=ewcs)
+            
+            # smooth the 2D PS
+            if delta_ell_smooth > 0:
+                power = covtools.smooth_ps_grid_uniform(
+                    power, delta_ell_smooth, diag=diag, fill=True, fill_lmax_est_width=300
+                    )
+            
+            # skip smoothing if delta_ell_smooth=0 is passed as arg
+            elif delta_ell_smooth == 0:
+                if verbose:
+                    print('Not smoothing')
+            else:
+                raise ValueError('delta_ell_smooth must be >= 0')    
+            
+            # update output 2D PS map
+            smap[i, map_index_1, pol_index_1, map_index_2, pol_index_2] = power
+            if not diag: # symmetry
+                smap[i, map_index_2, pol_index_2, map_index_1, pol_index_1] = power
+
+        # correct for f_sky from mask and apod windows
+        smap[i] /= sq_f_sky[i]
+
+    # take covsqrt of current power, need to reshape so covarying dimensions are spread over only two axes
+    smap = utils.eigpow(smap.reshape((-1, ncomp, ncomp) + smap.shape[-2:]), 0.5, axes=(-4,-3))
+
+    # get upper triu of the covsqrt for efficient disk-usage. put the covarying axes [1, 2] at axis flat_triu_axis
+    # so that axis 0 still indexes tiles
+    assert flat_triu_axis != 0 
+    omap = utils.to_flat_triu(smap, axis1=1, axis2=2, flat_triu_axis=flat_triu_axis)
+    omap = imap.sametiles(omap) 
+    return omap, cov_1D
+
+def get_tiled_noise_sim_multi(covsqrt, ivar=None, num_arrays=None, flat_triu_axis=1, cov_1D=None, nthread=0,
+                        split=None, seed=None, seedgen_args=None, lowell_seed=False, verbose=True):
+    
+    # check that covsqrt is a tiled tiled_ndmap instance    
+    assert covsqrt.tiled, 'Covsqrt must be tiled'
+
+    # get ivar, and num_arrays if necessary
+    if ivar is not None:
+        assert np.all(ivar >= 0)
+        assert ivar.ndim in range(2, 6), 'Data must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
+        ivar = utils.atleast_nd(ivar, 5) # make data 5d
+        num_arrays = ivar.shape[-5]
+    else:
+        assert isinstance(num_arrays, int), 'If ivar not passed, must explicitly pass num_arrays as an python int'
+
+    # get preshape information
+    num_unmasked_tiles = covsqrt.num_tiles
+    num_comp = utils.triangular_idx(covsqrt.shape[flat_triu_axis])
+    num_pol = num_comp // num_arrays
+    if verbose:
+        print(
+            f'Number of Unmasked Tiles: {num_unmasked_tiles}\n' + \
+            f'Number of Arrays: {num_arrays}\n' + \
+            f'Number of Pols.: {num_pol}\n' + \
+            f'Tile shape: {covsqrt.shape[-2:]}'
+            )
+    
+    # unflatten the covsqrt flattened dimension. put the covarying axes at [1, 2] so axis 0
+    # still indexes tiles
+    wcs = covsqrt.wcs
+    tiled_info = covsqrt.tiled_info()
+    covsqrt = utils.from_flat_triu(covsqrt, axis1=1, axis2=2, flat_triu_axis=flat_triu_axis)
+    covsqrt = enmap.ndmap(covsqrt, wcs)
+    covsqrt = tiled_ndmap(covsqrt, **tiled_info)
+
+    # determine the seed. use a seedgen if seedgen_args is not None
+    if seedgen_args is not None:
+        # if the split is the seedgen setnum, prepend it to the seedgen args
+        if len(seedgen_args) == 3: # sim_idx, data_model, qid
+            seedgen_args = (split,) + seedgen_args
+        else: 
+            assert len(seedgen_args) == 4 # set_idx, sim_idx, data_model, qid 
+        seedgen_args_tile = seedgen_args + (4294,)
+        seed = seedgen.get_tiled_noise_seed(*seedgen_args_tile, lowell_seed=lowell_seed)
+    if verbose:
+        print(f'Seed: {seed}')
+
+    # get random numbers in the right shape. To make random draws independent of mask, we draw numbers into
+    # the full number of tiles, and then slice the unmasked tiles (even though this is a little slower)
+    rshape = (covsqrt.numy*covsqrt.numx, num_comp, *covsqrt.shape[-2:])
+    omap = utils.concurrent_standard_normal(size=rshape, dtype=covsqrt.dtype, complex=True, seed=seed, nchunks=100)
+    omap = omap[covsqrt.unmasked_tiles]
+
+    # multiply random draws by the covsqrt to get the sim
+    omap = enmap.map_mul(covsqrt, omap)
+
+    # go back to map space
+    omap = enmap.ifft(omap, normalize='phys', nthread=nthread).real
+    omap = omap.reshape((num_unmasked_tiles, num_arrays, num_pol, *omap.shape[-2:]))
+    omap = covsqrt.sametiles(omap)
+    
+    # stitch tiles
+    omap = omap.from_tiled(power=0.5)
+
+    # filter maps
+    if cov_1D is not None:
+
+        # determine lmax from cov_1D, and build the lfilter
+        lmax = min(utils.lmax_from_wcs(omap), cov_1D.shape[-1]-1)
+        # cov_1D = cov_1D[:, split] 
+        assert (num_arrays, num_pol) == cov_1D.shape[:-1], 'cov_1D shape does not match (num_arrays, num_pol, ...)'
+        lfilter = cov_1D[..., :lmax+1]
+        lfilter = np.sqrt(lfilter) # assume cov_1D, tile_lfunc defined in terms of power spectra
+        
+        # do the filtering
+        for i in range(num_arrays):
+            omap[i] = utils.ell_filter(omap[i], lfilter[i], mode='curvedsky', lmax=lmax)
+
+    # if ivar is not None, unwhiten the imap data using ivar
+    if ivar is not None:
+        ivar = ivar[:, split]
+        where = ivar != 0
+        np.divide(omap, np.sqrt(ivar), omap, where=where)
+
+    return omap.reshape((num_arrays, 1, num_pol, *omap.shape[-2:])) # add axis for split (1)
 
 ### OLD ###
 class TiledSimulator(object):

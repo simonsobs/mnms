@@ -79,6 +79,8 @@ class tiled_ndmap(enmap.ndmap):
         else:
             obj.unmasked_tiles = np.arange(numy*numx).astype(np.int32)
         obj.num_tiles = len(obj.unmasked_tiles)
+        assert obj.num_tiles <= numx*numy, 'Number of unmasked tiles cannot be greater than numx*numy'
+        assert np.all(obj.unmasked_tiles < numx*numy), 'Cannot have unmasked tile index greater than or equal to numx*numy'
 
         return obj
 
@@ -181,9 +183,11 @@ class tiled_ndmap(enmap.ndmap):
     def apod(self, width=None):
         if width is None:
             width = (self.pix_cross_y, self.pix_cross_x)
-        return enmap.apod(np.ones((self.pix_height + 2*self.pix_pad_y, self.pix_width + 2*self.pix_pad_x)), width=width)
+        return enmap.apod(np.ones((
+            self.pix_height + 2*self.pix_pad_y,
+            self.pix_width + 2*self.pix_pad_x)), width=width).astype(self.dtype)
 
-    def set_unmasked_tiles(self, mask, min_sq_f_sky=MIN_SQ_F_SKY):
+    def set_unmasked_tiles(self, mask, min_sq_f_sky=MIN_SQ_F_SKY, return_sq_f_sky=False):
         assert wcsutils.is_compatible(self.wcs, mask.wcs), 'Current wcs and mask wcs are not compatible'
 
         # explicitly passing tiled=False and self.ishape will check that mask.shape and self.ishape are compatible
@@ -194,7 +198,8 @@ class tiled_ndmap(enmap.ndmap):
         
         self.unmasked_tiles = unmasked_tiles
         self.num_tiles = len(unmasked_tiles)
-        return unmasked_tiles, sq_f_sky[unmasked_tiles]
+        if return_sq_f_sky:
+            return sq_f_sky[unmasked_tiles]
 
     def _crossfade(self):
         return utils.linear_crossfade(self.pix_height+2*self.pix_cross_y, self.pix_width+2*self.pix_cross_x,
@@ -277,19 +282,19 @@ class tiled_ndmap(enmap.ndmap):
         else:
             return self.sametiles(omap, tiled=False)
 
-    def get_tile(self, tile_idx):
-        p = self._get_epixbox(tile_idx)
-        _, ewcs = utils.slice_geometry_by_pixbox(self.ishape, self.wcs, p)
-        
-        if self.tiled:
-            return enmap.ndmap(self[tile_idx], wcs=ewcs)
-        else:
-            return enmap.extract_pixbox(self, p, cval=0.)
-
     def get_tile_geometry(self, tile_idx):
         p = self._get_epixbox(tile_idx)
-        eshape, ewcs = utils.slice_geometry_by_pixbox(self.ishape, self.wcs, p)
-        return eshape, ewcs
+        return utils.slice_geometry_by_pixbox(self.ishape, self.wcs, p)
+
+    def get_tile(self, tile_idx):        
+        if self.tiled:
+            _, ewcs = self.get_tile_geometry(tile_idx)
+            assert tile_idx in self.unmasked_tiles, f'Tile {tile_idx} is masked'
+            unmasked_tile_idx = np.nonzero(self.unmasked_tiles == tile_idx)[0].item()
+            return enmap.ndmap(self[unmasked_tile_idx], wcs=ewcs)
+        else:
+            p = self._get_epixbox(tile_idx)
+            return enmap.extract_pixbox(self, p, cval=0.)
 
     def write(self, fname, extra=None):
         write_tiled_ndmap(fname, self, extra=extra)
@@ -309,7 +314,7 @@ def tiled_info(tiled_imap, pop=None):
     ret = dict(
         width_deg=tiled_imap.width_deg,
         height_deg=tiled_imap.height_deg, 
-        tiled=True,
+        tiled=tiled_imap.tiled,
         ishape=tiled_imap.ishape,
         unmasked_tiles=tiled_imap.unmasked_tiles
     )
@@ -393,4 +398,13 @@ def read_tiled_ndmap(fname, extra_header=None, extra_hdu=None):
     # leave context of hdus
     omap = tiled_ndmap(imap, width_deg=width_deg, height_deg=height_deg, ishape=(ishape_y, ishape_x), tiled=tiled,
                         unmasked_tiles=unmasked_tiles)
-    return omap, extra_header_dict, extra_hdu_dict
+    
+    # return
+    if extra_header_dict == {} and extra_hdu_dict == {}:
+        return omap
+    elif extra_hdu_dict == {}:
+        return omap, extra_header_dict
+    elif extra_header_dict == {}:
+        return omap, extra_hdu_dict
+    else:
+        return omap, extra_header_dict, extra_hdu_dict

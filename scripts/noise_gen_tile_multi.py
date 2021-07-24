@@ -1,17 +1,15 @@
-from mnms import tiled_noise as tn, mpi, utils, simio, simtest, tiled_ndmap as tnd
-from mnms.tiled_ndmap import tiled_ndmap
+from mnms import tiled_noise as tn, utils, simio, simtest, tiled_ndmap as tnd
 from soapack import interfaces as sints
 from pixell import enmap, wcsutils
 import argparse
 import numpy as np
-import time
+from enlib import bench
 
 # This script generates a 2D tiled square-root smoothed covariance matrix and a simple smoothed, global, 1D isotropic covariance matrix
 # Each tile is like a distinct "patch" for which an independent realization of the noise will be drawn
 # Only sufficiently "exposed" tiles under the passed mask are calculated/stored; masked tiles are skipped
 # Supports MPI parallelization
 
-mm = mpi.TiledMPIManager()
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--qid', dest='qid',nargs='+',type=str,required=True,help='list of soapack DR5 array "qids"')
 parser.add_argument('--no-bin-apod',dest='bin_apod',default=True,action='store_false',help='if passed, do not load default binary apodized mask')
@@ -20,7 +18,7 @@ parser.add_argument('--mask-name',dest='mask_name',type=str,default=None,help='i
 parser.add_argument('--downgrade',dest='downgrade', type=int, default=1,help='downgrade all data in pixel space by square of this many pixels per side (default: %(default)s)')
 parser.add_argument('--width-deg',dest='width_deg',type=float,default=4.0,help='width in degrees of central tile size (default: %(default)s)')
 parser.add_argument('--height-deg',dest='height_deg',type=float,default=4.0,help='height in degrees of central tile size (default: %(default)s)')
-parser.add_argument('--smooth-1d',dest='smooth_1d',type=int,default=5,help='width in ell to smooth 1D global, isotropic, power spectra (default: %(default)s)')
+# parser.add_argument('--smooth-1d',dest='smooth_1d',type=int,default=5,help='width in ell to smooth 1D global, isotropic, power spectra (default: %(default)s)')
 parser.add_argument('--delta-ell-smooth',dest='delta_ell_smooth',type=int,default=400,help='smooth 2D tiled power spectra by a square of this size in Fourier space (default: %(default)s)')
 parser.add_argument('--notes',dest='notes',type=str,default=None,help='a simple notes string to manually distinguish this set of sims (default: %(default)s)')
 
@@ -38,14 +36,14 @@ print(f'mask name: {mask_name}')
 # Configuration parameters
 width_deg = args.width_deg 
 height_deg = args.height_deg
-smooth_1d = args.smooth_1d
+# smooth_1d = args.smooth_1d
 delta_ell_smooth = args.delta_ell_smooth
 
 # assert(args.output_dir!='')
 qidstr = '_'.join(args.qid)
 data_model = getattr(sints, args.data_model)()
 
-if mm.is_root:
+with bench.show('Loading maps, ivars, and mask'):
     imaps = []
     ivars = []
     for i, qid in enumerate(args.qid):
@@ -76,30 +74,13 @@ if mm.is_root:
     imaps = enmap.enmap(imaps, wcs=mask.wcs)
     ivars = enmap.enmap(ivars, wcs=mask.wcs)
 
-    # Measure the 1d noise and 2d noise spectra
-    t0 = time.time()
-    covar_1D = tn.get_iso_curvedsky_noise_covar(imaps, ivar=ivars, mask=mask, N=smooth_1d, lmax=1000)
 
-else:
-    imaps = None
-    ivars = None
-    mask = None
+with bench.show('Getting noise model'):
+    covsqrt, cov_1D = tn.get_tiled_noise_covsqrt_multi(imaps, ivar=ivars, mask=mask, width_deg=width_deg, height_deg=height_deg, delta_ell_smooth=delta_ell_smooth)
 
-ledges = None # np.arange(0,10_000,10)
-covsqrt_2D, ledges, cov_1D = tn.get_tiled_noise_covsqrt(imaps, ivar=ivars, mask=mask, width_deg=width_deg, height_deg=height_deg, delta_ell_smooth=delta_ell_smooth,
-                                        ledges=ledges, tiled_mpi_manager=mm)
-
-if mm.is_root:
-    
-    t1 = time.time()
-    print(f'Model wall time: {np.round(t1-t0, 3)}')
-
-    # Save them to a file
-    fn_1d = simio.get_sim_noise_1d_fn(qidstr, downgrade=args.downgrade, smooth1d=smooth_1d, notes=args.notes,
+# Save them to a file
+fn = simio.get_sim_noise_tiled_2d_fn(qidstr, downgrade=args.downgrade, width_deg=width_deg,
+                                        height_deg=height_deg, smoothell=delta_ell_smooth, notes=args.notes,
                                         bin_apod=bin_apod, mask_version=mask_version, mask_name=mask_name)
-    fn_2d = simio.get_sim_noise_tiled_2d_fn(qidstr, downgrade=args.downgrade, width_deg=width_deg,
-                                            height_deg=height_deg, smoothell=delta_ell_smooth, notes=args.notes,
-                                            bin_apod=bin_apod, mask_version=mask_version, mask_name=mask_name)
 
-    enmap.write_map(fn_1d, covar_1D, extra={'FLAT_TRIU_AXIS': 0})
-    tnd.write_tiled_ndmap(fn_2d, covsqrt_2D, extra_header={'FLAT_TRIU_AXIS': 1}, extra_hdu={'LEDGES': ledges, 'COV1D': cov_1D})
+tnd.write_tiled_ndmap(fn, covsqrt, extra_header={'FLAT_TRIU_AXIS': 1}, extra_hdu={'COV1D': cov_1D})
