@@ -289,7 +289,9 @@ class tiled_ndmap(enmap.ndmap):
     def get_tile(self, tile_idx):        
         if self.tiled:
             _, ewcs = self.get_tile_geometry(tile_idx)
-            return enmap.ndmap(self[tile_idx], wcs=ewcs)
+            assert tile_idx in self.unmasked_tiles, f'Tile {tile_idx} is masked'
+            unmasked_tile_idx = np.nonzero(self.unmasked_tiles == tile_idx)[0].item()
+            return enmap.ndmap(self[unmasked_tile_idx], wcs=ewcs)
         else:
             p = self._get_epixbox(tile_idx)
             return enmap.extract_pixbox(self, p, cval=0.)
@@ -396,4 +398,13 @@ def read_tiled_ndmap(fname, extra_header=None, extra_hdu=None):
     # leave context of hdus
     omap = tiled_ndmap(imap, width_deg=width_deg, height_deg=height_deg, ishape=(ishape_y, ishape_x), tiled=tiled,
                         unmasked_tiles=unmasked_tiles)
-    return omap, extra_header_dict, extra_hdu_dict
+    
+    # return
+    if extra_header_dict == {} and extra_hdu_dict == {}:
+        return omap
+    elif extra_hdu_dict == {}:
+        return omap, extra_header_dict
+    elif extra_header_dict == {}:
+        return omap, extra_hdu_dict
+    else:
+        return omap, extra_header_dict, extra_hdu_dict

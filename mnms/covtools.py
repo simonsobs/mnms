@@ -1,9 +1,10 @@
-from __future__ import print_function
-from orphics import maps,io,cosmology,stats
+from orphics import maps,io,stats
 from pixell import enmap
+from mnms import utils
+
 import numpy as np
 from scipy import ndimage
-import os,sys
+import os
 import warnings
 # from enlib import bench
 from scipy.optimize import curve_fit
@@ -182,8 +183,14 @@ def noise_average(n2d,dfact=(16,16),lmin=300,lmax=8000,wnoise_annulus=500,bin_an
     assert not(np.any(np.isnan(outcov)))
     return outcov,nfitted,nparams
 
-def smooth_ps_grid_uniform(ps, res, zero_dc=True, diag=False, **kwargs):
-    """Smooth a 2d power spectrum to the target resolution in l"""
+def smooth_ps_grid_uniform(ps, res, zero_dc=True, diag=False, fill=False, fill_lmax=None, fill_lmax_est_width=None, fill_value=None, **kwargs):
+    """Smooth a 2d power spectrum to the target resolution in l.
+    """
+    # first fill any values beyond max lmax
+    if fill:
+        if fill_lmax is None:
+            fill_lmax = utils.lmax_from_wcs(ps)
+        fill_boundary(ps, fill_lmax=fill_lmax, fill_lmax_est_width=fill_lmax_est_width, fill_value=fill_value)
     if diag: assert np.all(ps>=0), 'If diag input ps must be positive semi-definite'
     # First get our pixel size in l
     ly, lx = enmap.laxes(ps.shape, ps.wcs)
@@ -195,6 +202,21 @@ def smooth_ps_grid_uniform(ps, res, zero_dc=True, diag=False, **kwargs):
     if zero_dc: ps[..., 0,0] = 0
     if diag: assert np.all(ps>=0), 'If diag output ps must be positive semi-definite'
     return ps
+
+def fill_boundary(ps, fill_lmax=None, fill_lmax_est_width=0, fill_value=None):
+    """Performs in-place filling of ps outer edge.
+    """
+    modlmap = ps.modlmap()
+    if fill_lmax is None:
+        fill_lmax = utils.lmax_from_wcs(ps)
+    assert fill_lmax_est_width > 0 or fill_value is not None, 'Must supply at least fill_lmax_est_width or fill_value'
+    if fill_lmax_est_width > 0 and fill_value is None:
+        fill_value = get_avg_value_by_ring(ps, modlmap, fill_lmax - fill_lmax_est_width, fill_lmax)
+    ps[fill_lmax <= modlmap] = fill_value
+
+def get_avg_value_by_ring(ps, modlmap, ell0, ell1):
+    ring_mask = np.logical_and(ell0 <= modlmap, modlmap < ell1)
+    return ps[ring_mask].mean()
 
 log_smooth_corrections = [ 1.0, # dummy for 0 dof
  3.559160, 1.780533, 1.445805, 1.310360, 1.237424, 1.192256, 1.161176, 1.139016,
