@@ -7,12 +7,15 @@ from scipy.interpolate import interp1d
 from concurrent import futures
 import multiprocessing
 import os
+import time
+
+import numba
 
 # Utility functions to support tiling classes and functions. Just keeping code organized so I don't get whelmed.
 
-def eshow(x, *args, title=None, write=False, fname='',**kwargs): 
+def eshow(x, *args, title=None, fname='',**kwargs): 
     plots = enplot.plot(x, **kwargs)
-    if write:
+    if fname:
         enplot.write(fname, plots)
     enplot.show(plots, title=title)
 
@@ -314,6 +317,15 @@ def linear_crossfade(cNy,cNx,npix_y,npix_x=None, dtype=np.float32):
     fxs[cNx-npix_x:] = np.linspace(0.,1.,npix_x)[::-1]
     return fys[:,None] * fxs[None,:]
 
+@numba.njit(parallel=True)
+def _parallel_bin(smap, bin_rmaps, weights, nbins):
+    bin_count = np.zeros((len(smap), nbins))
+    omap = np.zeros((len(smap), nbins))
+    for i in numba.prange(len(smap)):
+        bin_count[i] = np.bincount(bin_rmaps, weights=weights[i], minlength=nbins+1)[1:nbins+1] 
+        omap[i] = np.bincount(bin_rmaps, weights=weights[i]*smap[i], minlength=nbins+1)[1:nbins+1]
+    return bin_count, omap
+
 # based on enmap.lbin but handles arbitrary ell bins and weights
 def radial_bin(smap, rmap, bins, weights=None):
     """Go from a set of 2D maps to a their radially-binned sum, with bin edges
@@ -363,7 +375,7 @@ def radial_bin(smap, rmap, bins, weights=None):
 
     # prepare weights
     if weights is None:
-        weights = np.array([1]) # same prepended shape as smap but just a singleton one
+        weights = np.ones_like(rmap)
     elif callable(weights):
         weights = weights(rmap)
     weights = np.broadcast_to(weights, preshape + weights.shape, subok=True)
@@ -374,16 +386,18 @@ def radial_bin(smap, rmap, bins, weights=None):
     smap = smap.reshape(np.prod(preshape), -1)
     weights = weights.reshape(np.prod(preshape), -1)
 
-    # iterate through all smaps to be ginned and do a weighted sum by 
+    # iterate through all smaps to be binned and do a weighted sum by 
     # number of pixels within ell bins, with an optional weight map.
     # [1:nbins+1] index because 0'th bin is always empty or not needed with right=True in 
     # digitize and don't need data beyond last bin, if any
-    omap = enmap.zeros((len(smap), nbins), wcs=smap.wcs)
-    for i in range(len(smap)):
-        bin_count = np.bincount(bin_rmaps, weights=np.broadcast_to(weights[i], bin_rmaps.shape), minlength=nbins+1)[1:nbins+1] 
-        omap[i] = np.bincount(bin_rmaps, weights=weights[i]*smap[i], minlength=nbins+1)[1:nbins+1]
-        omap[i] = np.nan_to_num(omap[i] / bin_count)
+    bin_count, omap = _parallel_bin(smap, bin_rmaps, weights, nbins)
+    np.divide(omap, bin_count, out=omap, where=bin_count!=0)
 
+    # for i in range(len(smap)):
+    #     bin_count = np.bincount(bin_rmaps, weights=weights[i], minlength=nbins+1)[1:nbins+1] 
+    #     omap[i] = np.bincount(bin_rmaps, weights=weights[i]*smap[i], minlength=nbins+1)[1:nbins+1]
+    #     omap[i] = np.nan_to_num(omap[i] / bin_count)
+    
     # same shape as spectra, with full 2D power replaced with binned spectra
     return omap.reshape(*preshape, -1)
 

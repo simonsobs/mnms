@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import print_function
 from pixell import enmap, curvedsky, wcsutils, enplot
-from mnms import tiled_noise as tn, utils
+from mnms import tiled_noise as tn, utils, tiled_ndmap
 
 import numpy as np
 from scipy import stats
@@ -129,7 +129,7 @@ def get_Cl_diffs(data_clmap, sim_clmap, plot=True, save_path=None, map1=0, map2=
     If data is: C_wx, the cross of components wx
     And sim is: C_yz, the cross of components yz
 
-    Then the result is (C_yz - C_wx) / (C_ww*C_xx*C_yy*C_zz)^0.25 + 1
+    Then the result is (C_yz - C_wx) / (C_ww*C_xx*C_yy*C_zz)^0.25
 
     Parameters
     ----------
@@ -159,7 +159,7 @@ def get_Cl_diffs(data_clmap, sim_clmap, plot=True, save_path=None, map1=0, map2=
     # must be explicit cross spectra matrix, so shape has
     # to be (..., npol, :, npol, nell), even if npol=1
     assert data_clmap.shape[-4] == data_clmap.shape[-2]
-    omap = enmap.zeros(data_clmap.shape, wcs=data_clmap.wcs)
+    omap = np.zeros(data_clmap.shape, data_clmap.dtype)
     
     # iterate over polarizations
     for i in range(omap.shape[-4]):
@@ -170,7 +170,9 @@ def get_Cl_diffs(data_clmap, sim_clmap, plot=True, save_path=None, map1=0, map2=
                 sim_clmap[..., j, :, j, :],
                 data_clmap[..., i, :, i, :],
                 data_clmap[..., j, :, j, :]
-            )), axis=0)**0.25 + 1e-14
+            )), axis=0)
+            assert np.all(norm >= 0)
+            norm = norm**0.25 + 1e-14
             omap[..., i, :, j, :] = diff_cl/norm
             omap[..., j, :, i, :] = omap[..., i, :, j, :]
 
@@ -191,7 +193,7 @@ def get_Cl_diffs(data_clmap, sim_clmap, plot=True, save_path=None, map1=0, map2=
                     plt.savefig(save_path + fn, bbox_inches='tight')
                 plt.show()
 
-    return np.nan_to_num(omap+1)
+    return np.nan_to_num(omap)
 
 
 def get_Cl_ratios(data_clmap, sim_clmap, plot=True, save_path=None, map1=0, map2=0, ledges=None):
@@ -473,56 +475,99 @@ def get_stats_by_tile(data, sim, stat='Cl', window=None, ledges=None, width_deg=
     tiled_stats.outputs['Tiled1dStats'][0] = enmap.samewcs(stats, data)
     tiled_stats.loadedPower = True
     return tiled_stats
+
+def get_stats_by_tile2(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=2, height_deg=2, lmax=6000, mode='fft',
+                            normalize=True, weights=None, true_ratio=False, nthreads=0):
     
-def plot_stats_by_tile(powerMaps, stat='Cl', plot_type='map', window=None, downgrade=1, f_sky=0.5, map1=0, map2=0, pol1=0, pol2=0, min=0, max=2, 
+    # check that dmap, imap conforms with convention
+    assert dmap.ndim in range(2, 6), 'dmap must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
+    assert imap.ndim in range(2, 6), 'imap must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
+    dmap = utils.atleast_nd(dmap, 5) # make data 5d
+    imap = utils.atleast_nd(imap, 5) # make data 5d
+    assert dmap.shape == imap.shape, 'dmap and imap must have the same shape'
+
+    if mask is None:
+        mask = np.array([1])
+    mask = mask.astype(imap.dtype)
+
+    # get the tiled data, apod window
+    dmap = tiled_ndmap.tiled_ndmap(dmap*mask, width_deg=width_deg, height_deg=height_deg)
+    imap = tiled_ndmap.tiled_ndmap(imap*mask, width_deg=width_deg, height_deg=height_deg)
+
+    dmap.set_unmasked_tiles(mask)
+    imap.set_unmasked_tiles(mask)
+
+    dmap = dmap.to_tiled()
+    imap = imap.to_tiled()
+    apod = imap.apod()
+    tiled_info = imap.tiled_info()
+    print('t')
+    # get component shapes
+    num_arrays, num_splits, num_pol = imap.shape[1:4] # shape is (num_tiles, num_arrays, num_splits, num_pol, ...)
+
+    # get all the 2D power spectra, averaged over splits
+    dmap = enmap.fft(dmap*apod, normalize=normalize, nthread=nthreads)
+    dmap = np.einsum('...miayx,...nibyx->...manbyx', dmap, np.conj(dmap)).real / num_splits
+    imap = enmap.fft(imap*apod, normalize=normalize, nthread=nthreads)
+    imap = np.einsum('...miayx,...nibyx->...manbyx', imap, np.conj(imap)).real / num_splits
+
+    dmap = tiled_ndmap.tiled_ndmap(enmap.samewcs(dmap, mask), **tiled_info)
+    imap = tiled_ndmap.tiled_ndmap(enmap.samewcs(imap, mask), **tiled_info)
+
+    # prepare ell bin edges
+    if ledges is None:
+        ledges = [0, lmax]
+    assert len(ledges) > 1
+    ledges = np.atleast_1d(ledges)
+    assert len(ledges.shape) == 1
+    nbins = len(ledges)-1
+
+    cld = np.zeros((*dmap.shape[:-2], nbins), dtype=imap.dtype)
+    cli = np.zeros((*imap.shape[:-2], nbins), dtype=imap.dtype)
+
+    # cycle through the tiles   
+    for i, n in enumerate(tqdm(imap.unmasked_tiles)):
+
+        # get the 2d tile PS, shape is (num_arrays, num_splits, num_pol, ny, nx)
+        # so trace over component -4
+        # this normalization is different than DR4 but avoids the need to save num_splits metadata, and we
+        # only ever simulate splits anyway...
+        _, ewcs = imap.get_tile_geometry(n)
+        modlmap = enmap.modlmap(imap.shape[-2:], ewcs)
+        cld[i] = utils.radial_bin(dmap[i], modlmap, ledges, weights=weights)
+        cli[i] = utils.radial_bin(imap[i], modlmap, ledges, weights=weights)
+
+    cldiff = get_Cl_diffs(cld, cli, plot=False)
+    return imap.sametiles(cldiff)
+    
+def plot_stats_by_tile(powerMaps, stat='Cl', plot_type='map', window=None, f_sky=0.5, map1=0, map2=0, pol1=0, pol2=0, min=-1, max=1, 
                             save_path=None, **kwargs):
     if plot_type == 'map':
-        _plot_stats_map_by_tile(powerMaps, stat=stat, window=window, downgrade=downgrade, map1=map1, map2=map2, pol1=pol1, pol2=pol2, min=min, max=max, 
+        _plot_stats_map_by_tile2(powerMaps, stat=stat, mask=window, map1=map1, map2=map2, pol1=pol1, pol2=pol2, min=min, max=max, 
                             save_path=save_path, **kwargs)
     elif plot_type == 'hist':
-        _plot_stats_hist_by_tile(powerMaps, stat=stat, window=window, f_sky=f_sky, map1=map1, map2=map2, pol1=pol1, pol2=pol2, 
+        _plot_stats_hist_by_tile2(powerMaps, stat=stat, mask=window, f_sky=f_sky, map1=map1, map2=map2, pol1=pol1, pol2=pol2, 
                             save_path=save_path, **kwargs)
-                
-def _plot_stats_map_by_tile(powerMaps, stat='Cl', window=None, downgrade=1, map1=0, pol1=0, map2=0, pol2=0, min=0, max=2, 
-                            save_path=None, **kwargs): 
+
+def plot_stats_by_tile2(clmap,  plot_type='map', mask=None, f_sky=0.5, map1=0, map2=0, pol1=0, pol2=0, min=-1, max=1, 
+                            save_path=None, ledges=None, **kwargs):
+    if plot_type == 'map':
+        _plot_stats_map_by_tile2(clmap, mask=mask, map1=map1, map2=map2, pol1=pol1, pol2=pol2, min=min, max=max, 
+                            save_path=save_path, ledges=ledges, **kwargs)
+    elif plot_type == 'hist':
+        _plot_stats_hist_by_tile2(clmap, mask=mask, f_sky=f_sky, map1=map1, map2=map2, pol1=pol1, pol2=pol2, 
+                            save_path=save_path, ledges=ledges, **kwargs)
+
+def _plot_stats_map_by_tile2(clmap, stat='Cl', mask=None, map1=0, pol1=0, map2=0, pol2=0, min=-1, max=1, 
+                            ledges=None, save_path=None, **kwargs): 
     # prepare window
-    if window is None:
-        window = enmap.ones(powerMaps.ishape[-2:], wcs=powerMaps.iwcs)
-    window = window.downgrade(downgrade)
+    if mask is None:
+        mask = enmap.ones(clmap.ishape[-2:], wcs=clmap.wcs)
+    mask = clmap.sametiles(mask, tiled=False).to_tiled()
 
-    # extract handy info
-    nbins = powerMaps.nbins
-    ledges = powerMaps.ledges
-
-    shape = (nbins,) + powerMaps.ishape[-2:]
-    wcs = powerMaps.iwcs
-    width_deg=powerMaps.width_deg
-    height_deg=powerMaps.height_deg
-
-    # build tiler
-    # shape will be (n_ell_bins, nx, ny)
-    tiler = tn.TiledSimulator(shape, wcs, width_deg=width_deg, height_deg=height_deg)
-    tiler.initialize_output('tiled_map')
-
-    # reduce the scalar stats for plotting
-    if stat == 'Cl':
-        tiled_stats = powerMaps.get_final_output()[:,map1,pol1,map2,pol2,:]
-    elif stat == 'KS':
-        tiled_stats = powerMaps.get_final_output()[:,map1,pol1,0,0,:] 
-
-    # check that downgrading has not messed up the tile grid
-    assert tiler.nTiles == powerMaps.nTiles, \
-        f'tiler.nTiles = {tiler.nTiles} by powerMaps.nTiles = {powerMaps.nTiles}'
-    
-    # get the stats and broadcast it to something that can be plotted in a map
-    for i in tqdm(range(tiler.nTiles)):
-        _, _, inserter, eshape, _ = tiler.tiles(i)
-        stats = tiled_stats[i]
-        stats = np.einsum('...l,...xy->...lxy', stats, np.ones(eshape))
-        tiler.update_output('tiled_map', stats, inserter, pow=1)
-
-    # dowgrade the map to speed up plotting, since this is just a visualization anyway
-    tiler.outputs['tiled_map'][0] = tiler.outputs['tiled_map'][0].downgrade(downgrade)
+    # get nbins
+    nbins = clmap.shape[-1]
+    clmap = clmap[...,map1,pol1,map2,pol2,:]
 
     # plot and save
     if save_path is None:
@@ -531,42 +576,31 @@ def _plot_stats_map_by_tile(powerMaps, stat='Cl', window=None, downgrade=1, map1
     else:
         write=True
     for i in range(nbins):
-        lmin = ledges[i]
-        lmax = ledges[i+1] 
-        fn = f'_map_lmin{lmin}_lmax{lmax}'
-        title = f'$\ell_{{min}}={ledges[i]}, \ell_{{max}}={ledges[i+1]}$'
-        eshow(tiler.outputs['tiled_map'][0][i]*window, title=title, write=write, fname=save_path+fn, 
-            min=min, max=max, mask=0, **kwargs)
+        m = mask * clmap[..., i].reshape(-1, *(1,)*(mask.ndim-1))
+        m = m.from_tiled()
+        if write:
+            lmin = ledges[i]
+            lmax = ledges[i+1] 
+            fn = f'_map_lmin{lmin}_lmax{lmax}'
+            title = f'$\ell_{{min}}={ledges[i]}, \ell_{{max}}={ledges[i+1]}$'
+            eshow(m, title=title, write=write, fname=save_path+fn, min=min, max=max, mask=0, **kwargs)
+        else:
+            eshow(m, min=min, max=max, mask=0, **kwargs)
 
-
-def _plot_stats_hist_by_tile(powerMaps, stat='Cl', window=None, f_sky=0.5, map1=0, pol1=0, map2=0, pol2=0, save_path=None, **kwargs):
+def _plot_stats_hist_by_tile2(clmap, stat='Cl', mask=None, f_sky=0.5, map1=0, pol1=0, map2=0, pol2=0, ledges=None, save_path=None, **kwargs):
     # prepare window
-    if window is None:
-        window = enmap.ones(powerMaps.ishape[-2:], wcs=powerMaps.iwcs)
+    if mask is None:
+        mask = enmap.ones(clmap.ishape[-2:], wcs=clmap.wcs)
+    mask = clmap.sametiles(mask, tiled=False)
+    
+    # get good tiles
+    mask.set_unmasked_tiles(mask, min_sq_f_sky=f_sky**2)
+    which = np.in1d(clmap.unmasked_tiles, mask.unmasked_tiles)
+    clmap = clmap[which]
 
     # extract handy info
-    nbins = powerMaps.nbins
-    ledges = powerMaps.ledges
+    nbins = clmap.shape[-1]
 
-    # get list of good tiles
-    good_tiles = []
-    for i in tqdm(range(powerMaps.nTiles)):
-        _, extracter, _, _, _ = powerMaps.tiles(i)
-        sub_mask = extracter(window)
-        if sub_mask.mean() < f_sky:
-            continue
-        else:
-            good_tiles.append(i)
-    
-    # reduce the scalar stats for plotting
-    if stat == 'Cl':
-        tiled_stats = powerMaps.get_final_output()[good_tiles,map1,pol1,map2,pol2,:]
-    elif stat == 'KS':
-        tiled_stats = powerMaps.get_final_output()[good_tiles,map1,pol1,:]     
-
-    # plot statistics for each ell bin
-    nbins = powerMaps.nbins
-    ledges= powerMaps.ledges 
     if stat == 'Cl':
         xlabel = 'Normalized $\Delta C_{bin}$ [a.u.]'
     elif stat == 'KS':
@@ -574,8 +608,8 @@ def _plot_stats_hist_by_tile(powerMaps, stat='Cl', window=None, f_sky=0.5, map1=
     for i in range(nbins):
         lmin = ledges[i]
         lmax = ledges[i+1] 
-        y = tiled_stats[:, i]
-        y = y[y!=0]
+        y = clmap[...,map1,pol1,map2,pol2, i]
+        # y = y[y!=0]
         plt.hist(y, bins=50, histtype='step', label=f'std={np.std(y):0.3f}')
         plt.gca().axvline(np.mean(y), color='r', linestyle='--', label=f'mean={np.mean(y):0.3f}')
         plt.legend()
@@ -587,7 +621,6 @@ def _plot_stats_hist_by_tile(powerMaps, stat='Cl', window=None, f_sky=0.5, map1=
         if save_path is not None:
             plt.savefig(save_path + fn, bbox_inches='tight')    
         plt.show()
-
 
 def get_map_histograms(data, sim, window=1, ledges=None, lmax=6000, mode='fft', plot=True, save_path=None):
     # prepare window

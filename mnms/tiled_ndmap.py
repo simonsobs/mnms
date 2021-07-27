@@ -79,8 +79,12 @@ class tiled_ndmap(enmap.ndmap):
         else:
             obj.unmasked_tiles = np.arange(numy*numx).astype(np.int32)
         obj.num_tiles = len(obj.unmasked_tiles)
+
+        # do some sanity checks
         assert obj.num_tiles <= numx*numy, 'Number of unmasked tiles cannot be greater than numx*numy'
         assert np.all(obj.unmasked_tiles < numx*numy), 'Cannot have unmasked tile index greater than or equal to numx*numy'
+        # if obj.tiled:
+        #     assert obj.shape[0] == obj.num_tiles, 'If tiled, must have number of tiles equal to number of unmasked tiles'
 
         return obj
 
@@ -128,9 +132,9 @@ class tiled_ndmap(enmap.ndmap):
         # piggyback off pixell
         imap = self.to_ndmap()[sel]
 
-        # catch case that we have directly indexed map axes
-        if type(imap) is not enmap.ndmap:
-            return imap
+        # # catch case that we have directly indexed map axes
+        # if type(imap) is not enmap.ndmap:
+        #     return imap
         
         # otherwise return as tiled_ndmap
         return self.sametiles(imap)
@@ -188,6 +192,7 @@ class tiled_ndmap(enmap.ndmap):
             self.pix_width + 2*self.pix_pad_x)), width=width).astype(self.dtype)
 
     def set_unmasked_tiles(self, mask, min_sq_f_sky=MIN_SQ_F_SKY, return_sq_f_sky=False):
+        assert not self.tiled, 'Can only modify unmasked_tiles of an *untiled* map; impossible to mask tiled map in-place'
         assert wcsutils.is_compatible(self.wcs, mask.wcs), 'Current wcs and mask wcs are not compatible'
 
         # explicitly passing tiled=False and self.ishape will check that mask.shape and self.ishape are compatible
@@ -198,6 +203,7 @@ class tiled_ndmap(enmap.ndmap):
         
         self.unmasked_tiles = unmasked_tiles
         self.num_tiles = len(unmasked_tiles)
+
         if return_sq_f_sky:
             return sq_f_sky[unmasked_tiles]
 
@@ -260,7 +266,7 @@ class tiled_ndmap(enmap.ndmap):
         # set some more quantities before iterating
         # to speed things up, don't want to construct new tiled_ndmap for each imap[i], so cast to array
         # then crop and and crossfade before stitching
-        imap = np.asarray(self) 
+        imap = np.asarray(self)
         imap = maps.crop_center(imap, self.pix_height + 2*self.pix_cross_y, self.pix_width + 2*self.pix_cross_x)
         imap *= self._crossfade()**power
 
