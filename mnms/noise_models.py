@@ -134,7 +134,7 @@ class NoiseModel(ABC):
         pass
 
     @abstractmethod
-    def _get_noise_model_fn(self):
+    def _get_model_fn(self):
         pass
 
     @abstractmethod
@@ -142,11 +142,11 @@ class NoiseModel(ABC):
         pass
 
     @abstractmethod
-    def get_noise_model(self, write=True, keep=False, verbose=False, **kwargs):
+    def get_model(self, write=True, keep=False, verbose=False, **kwargs):
         pass
 
     @abstractmethod
-    def _get_noise_model_from_disk(self, **kwargs):
+    def _get_model_from_disk(self, **kwargs):
         pass
 
     @abstractmethod
@@ -173,8 +173,8 @@ class TiledNoiseModel(NoiseModel):
         self._covsqrt = None
         self._sqrt_cov_ell = None
 
-    def _get_noise_model_fn(self):
-        return simio.get_tiled_noise_model_fn(
+    def _get_model_fn(self):
+        return simio.get_tiled_model_fn(
             self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, notes=self.notes, 
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
             calibrated=self._calibrated, downgrade=self._downgrade, **self._kwargs
@@ -188,7 +188,7 @@ class TiledNoiseModel(NoiseModel):
             calibrated=self._calibrated, downgrade=self._downgrade, **self._kwargs
         )
 
-    def get_noise_model(self, nthread=0, flat_triu_axis=1, write=True, keep=False, verbose=False, **kwargs):
+    def get_model(self, nthread=0, flat_triu_axis=1, write=True, keep=False, verbose=False, **kwargs):
         imap = self._get_data()
         covsqrt, sqrt_cov_ell = tiled_noise.get_tiled_noise_covsqrt(
             imap, ivar=self._ivar, mask=self._mask, width_deg=self._width_deg, height_deg=self._height_deg, delta_ell_smooth=self._delta_ell_smooth, lmax=self._lmax, 
@@ -208,7 +208,7 @@ class TiledNoiseModel(NoiseModel):
             self._covsqrt = covsqrt
             self._sqrt_cov_ell = sqrt_cov_ell
 
-    def _get_noise_model_from_disk(self, **kwargs):
+    def _get_model_from_disk(self, **kwargs):
         fn = self._get_noise_model_fn()
         covsqrt, extra_header, extra_hdu = tiled_ndmap.read_tiled_ndmap(
             fn, extra_header=['FLAT_TRIU_AXIS'], extra_hdu=['SQRT_COV_ELL']
@@ -225,7 +225,7 @@ class TiledNoiseModel(NoiseModel):
         self._covsqrt = tiled_ndmap.tiled_ndmap(covsqrt, **tiled_info)
         self._sqrt_cov_ell = sqrt_cov_ell
 
-    def get_noise_sim(self, split_num, sim_num, nthread=0, check_on_disk=True, write=False, verbose=False, **kwargs):
+    def get_sim(self, split_num, sim_num, nthread=0, check_on_disk=True, write=False, verbose=False, **kwargs):
         fn = self._get_sim_fn(split_num, sim_num)
 
         if check_on_disk:
@@ -236,7 +236,7 @@ class TiledNoiseModel(NoiseModel):
                     print('Sim not found on disk, generating instead')
         
         if self._covsqrt is None:
-            self._get_noise_model_from_disk()
+            self._get_model_from_disk()
 
         seed = utils.get_seed(*(split_num, sim_num, self._data_model, *self._qids))
 

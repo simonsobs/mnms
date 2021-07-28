@@ -1,4 +1,4 @@
-from pixell import enmap, enplot, curvedsky
+from pixell import enmap, curvedsky
 from enlib import array_ops
 from soapack import interfaces as sints
 
@@ -27,12 +27,6 @@ def get_default_mask_version():
         config = sints.dconfig[dm_name]
         mask_version = config['default_mask_version']
     return mask_version
-
-def eshow(x, *args, title=None, fname='',**kwargs): 
-    plots = enplot.plot(x, **kwargs)
-    if fname:
-        enplot.write(fname, plots)
-    enplot.show(plots, title=title)
 
 def slice_geometry_by_pixbox(ishape, iwcs, pixbox):
     pb = np.asarray(pixbox)

@@ -1,17 +1,9 @@
 from orphics import maps
-from pixell import enmap, curvedsky, wcsutils
-import healpy as hp
+from pixell import enmap, curvedsky
 from mnms import covtools, utils
 from mnms.tiled_ndmap import tiled_ndmap
-import astropy.io.fits as pyfits
 
 import numpy as np
-from math import ceil
-import matplotlib.pyplot as plt
-
-import time
-
-seedgen = utils.seed_tracker
 
 # harcoded constants
 LARGE_SCALE_TILE_NUM = 103_094
@@ -100,7 +92,7 @@ def get_iso_curvedsky_noise_covar(imap, ivar=None, mask=None, N=5, lmax=1000):
     w2 = np.sum((mask**2)*pmap) / np.pi / 4.
     return enmap.ndmap(Nl_1d, wcs=imap.wcs) / w2
 
-def get_iso_curvedsky_noise_sim(covar, ivar=None, flat_triu_axis=0, oshape=None, num_arrays=None, lfunc=None, split=None, seed=None, seedgen_args=None):
+def get_iso_curvedsky_noise_sim(covar, ivar=None, flat_triu_axis=0, oshape=None, num_arrays=None, lfunc=None, split=None, seed=None):
     """Get a noise realization from the 1D global, isotropic power spectra generated in get_iso_curvedsky_noise_covar.
     If power spectra were prewhitened with ivar maps, same ivar maps must be passed to properly weight sims in
     pixel space.
@@ -125,9 +117,6 @@ def get_iso_curvedsky_noise_sim(covar, ivar=None, flat_triu_axis=0, oshape=None,
         The index of ivar corresponding to the desired split, by default None
     seed : Random seed for spectra, optional
         If seedgen_args is None then the maps will have this seed, by default None
-    seedgen_args : length-4 tuple, optional
-        A tuple containing (split, map_id, data_model, list-of-qids) to pass to 
-        seedgen.get_tiled_noise_seed(...), by default None
 
     Returns
     -------
@@ -164,15 +153,6 @@ def get_iso_curvedsky_noise_sim(covar, ivar=None, flat_triu_axis=0, oshape=None,
     if lfunc is not None:
         covar *= lfunc(np.arange(covar.shape[-1]))
 
-    # determine the seed. use a seedgen if seedgen_args is not None
-    if seedgen_args is not None:
-        # if the split is the seedgen setnum, prepend it to the seedgen args
-        if len(seedgen_args) == 3: # sim_idx, data_model, qid
-            seedgen_args = (split,) + seedgen_args
-        else: 
-            assert len(seedgen_args) == 4 # set_idx, sim_idx, data_model, qid: 
-        seedgen_args = seedgen_args + (LARGE_SCALE_TILE_NUM,) # dummy "tile_idx" for full sky random draw is 103,094
-        seed = seedgen.get_tiled_noise_seed(*seedgen_args)
     print(f'Seed: {seed}')
 
     # generate the noise and sht to real space

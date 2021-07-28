@@ -54,7 +54,7 @@ def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=None, mask_nam
     fn = f'{qid}_{data_model.name}_{mask_version}_{mask_flag}cal_{calibrated}_{dg_flag}'
     return fn
 
-def get_tiled_noise_model_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, notes=None, **kwargs):
+def get_tiled_model_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, notes=None, **kwargs):
     # cast to floating point for consistency
     width_deg = float(width_deg)
     height_deg = float(height_deg)
