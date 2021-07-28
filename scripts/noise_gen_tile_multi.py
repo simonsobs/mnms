@@ -52,8 +52,8 @@ with bench.show('Loading maps, ivars, and mask'):
         # check that we are using the same mask for each qid -- this is required!
         if i == 0:
             prev_mask = mask
-        assert np.allclose(mask, prev_mask), "qids do not share a common mask -- this is required!"
-        assert wcsutils.is_compatible(mask.wcs, prev_mask.wcs), "qids do not share a common mask wcs -- this is required!"
+        assert np.allclose(mask, prev_mask), 'qids do not share a common mask -- this is required!'
+        assert wcsutils.is_compatible(mask.wcs, prev_mask.wcs), 'qids do not share a common mask wcs -- this is required'
         prev_mask = mask
 
         # get the data and extract to mask geometry

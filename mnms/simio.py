@@ -1,27 +1,37 @@
 #!/usr/bin/env python3
-from __future__ import print_function
-
 from pixell import enmap
 from soapack import interfaces as sints
+from mnms import utils
 
 import numpy as np
 import os
 import re
 
-dr5_config = sints.dconfig['dr5']
 config = sints.dconfig['mnms']
 
-# allow to pull the default mask from dr5 block if not provided in mnms
-default_sync = config['default_sync_version']
-try:
-    default_mask = config['default_mask_version']
-except KeyError:
-    default_mask = sints.dr5_default_mask_version
+def get_sim_mask_fn(qid, data_model, use_default_mask=True, mask_version=None, mask_name=None, galcut=None, apod_deg=None):
+    if use_default_mask:
+        if galcut is None and apod_deg is None:
+            return data_model.get_binary_apodized_mask_fname(qid, version=mask_version)
+        elif galcut is None:
+            return data_model.get_binary_apodized_mask_fname(qid, version=mask_version, apod_deg=apod_deg)
+        elif apod_deg is None:
+            return data_model.get_binary_apodized_mask_fname(qid, version=mask_version, galcut=galcut)
+        else:
+            return data_model.get_binary_apodized_mask_fname(qid, version=mask_version, galcut=galcut, apod_deg=apod_deg)
+    
+    else:
+        fbase = config['mask_path']
+        if mask_name[-5:] != '.fits':
+            mask_name += '.fits'
+        return f'{fbase}{mask_version}/{mask_name}'
 
-def _get_sim_fn_root(qid, sync_version=default_sync, mask_version=default_mask, bin_apod=None, mask_name=None, \
+def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=None, mask_name=None, \
     galcut=None, apod_deg=None, calibrated=None, downgrade=None):
     '''
     '''
+    if mask_version is None:
+        mask_version = utils.get_default_mask_version()
     assert bin_apod is not None
     assert calibrated is not None
     
@@ -41,83 +51,47 @@ def _get_sim_fn_root(qid, sync_version=default_sync, mask_version=default_mask, 
     else:
         dg_flag = f'dg{downgrade}_'
 
-    fn = f'{qid}_sync_{sync_version}_{mask_version}_{mask_flag}cal_{calibrated}_{dg_flag}'
+    fn = f'{qid}_{data_model.name}_{mask_version}_{mask_flag}cal_{calibrated}_{dg_flag}'
     return fn
 
-
-def get_sim_map_fn(qid, sync_version=default_sync, mask_version=default_mask, bin_apod=True, mask_name=None, \
-    galcut=None, apod_deg=None, calibrated=True, downgrade=None, smooth1d=None, width_deg=None, height_deg=None, smoothell=None, \
-    notes=None, scale=None, taper=None, coadd=False, covtype=None, splitnum=None, map_id=None, return_map_id=False, basepath='scratch'):
-    '''
-    '''
-    # force user to pass certain metadata
-    assert smooth1d is not None and width_deg is not None and height_deg is not None and smoothell is not None
+def get_tiled_noise_model_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, notes=None, **kwargs):
+    # cast to floating point for consistency
     width_deg = float(width_deg)
     height_deg = float(height_deg)
 
-    assert scale is not None and taper is not None
+    # get root fn
+    fn = config['covmat_path']
+    fn += _get_sim_fn_root(qid, **kwargs)
 
-    # # are we writing to scratch, or reading from /projects?
-    # if basepath == 'scratch':
-    #     fbase = config['scratch_path']
-    # elif basepath == 'backup':
-    #     fbase = config['backup_path']
-    # else:
-    #     raise ValueError('must be scratch or backup for basepath kwarg')
-    fbase = config['maps_path']
-
-    # get root metadata fn
-    fn_root = _get_sim_fn_root(qid, sync_version=sync_version, mask_version=mask_version, bin_apod=bin_apod, mask_name=mask_name, \
-        galcut=galcut, apod_deg=apod_deg, calibrated=calibrated, downgrade=downgrade)
-
-    # add particular metadata details
-    if covtype is None:
-        covtype = ''
-    else:
-        covtype = f'{covtype}_'
-
+    # allow for possibility of no notes
     if notes is None:
         notes = ''
     else:
         notes = f'{notes}_'
 
-    fn_root += f'smooth1d{smooth1d}_w{width_deg}_h{height_deg}_smoothell{smoothell}_scale{scale}_taper{taper}_{covtype}{notes}'
+    fn += f'w{width_deg}_h{height_deg}_lsmooth{delta_ell_smooth}_lmax{lmax}_{notes}.fits'
+    return fn
 
-    # prepare coadd or set (split) tag
-    if coadd and splitnum is not None:
-        assert False, 'cannot pass splitnum with coadd=True'
-    elif not coadd and splitnum is None:
-        assert False, 'cannot pass splitnum=None with coadd=False'
-    if coadd:
-        mstr = 'coadd_'
+def get_tiled_sim_map_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, split_num, sim_num, notes=None, **kwargs):
+    # cast to floating point for consistency
+    width_deg = float(width_deg)
+    height_deg = float(height_deg)
+
+    # get root fn
+    fn = config['maps_path']
+    fn += _get_sim_fn_root(qid, **kwargs)
+
+    # allow for possibility of no notes
+    if notes is None:
+        notes = ''
     else:
-        assert splitnum in (0,1,2,3), 'All ACT arrays have no more than 4 splits'
-        mstr = f'set{splitnum}_'
+        notes = f'{notes}_'
 
-    # if map_id is None, increment most recent map with same fn by 1
-    if map_id is None:
-        fn_re = fn_root + mstr + 'map_(.+)' + '.fits'
+    fn += f'w{width_deg}_h{height_deg}_lsmooth{delta_ell_smooth}_lmax{lmax}_{notes}'
 
-        # # check both scratch and projects paths
-        # fns = os.listdir(config['scratch_path'] + config['maps_path'])
-        fns = os.listdir(config['maps_path'])
-        high_id = 0
-        for fn in fns:
-            searcher = re.search(fn_re, fn)
-            if searcher is not None:
-                this_id = int(searcher.groups()[0])
-                if this_id > high_id:
-                    high_id = this_id
-        
-        # one more than current highest id
-        map_id = high_id + 1
-
-    fn = fbase + fn_root + mstr + 'map_' + str(map_id).zfill(3) + '.fits'
-    
-    if return_map_id:
-        return fn, map_id
-    else:
-        return fn
+    # prepare or set (split) and map num tags
+    fn += f'set{split_num}_map{sim_num}.fits'
+    return fn
 
 def get_2Dlowell_sim_map_fn(qid, sync_version=default_sync, mask_version=default_mask, bin_apod=True, mask_name=None, \
     galcut=None, apod_deg=None, calibrated=True, downgrade=None, \
@@ -229,33 +203,8 @@ def get_sim_tiled_stats_fn(qid, stat, map2_id = None, inv_ell_weight=False, true
     fn += f'_{map2_id}tiled_{stat}{weight_str}{ratio_str}.fits'
     return fn
 
-
 def get_sim_splits():
     pass
-
-def get_sim_mask(qid=None, bin_apod=True, mask_version=default_mask, mask_name=None, galcut=None, apod_deg=None, basepath='scratch'):
-    if bin_apod:
-        if galcut is None and apod_deg is None:
-            return sints.DR5().get_binary_apodized_mask(qid, version=mask_version)
-        elif galcut is None:
-            return sints.DR5().get_binary_apodized_mask(qid, version=mask_version, apod_deg=apod_deg)
-        elif apod_deg is None:
-            return sints.DR5().get_binary_apodized_mask(qid, version=mask_version, galcut=galcut)
-        else:
-            return sints.DR5().get_binary_apodized_mask(qid, version=mask_version, galcut=galcut, apod_deg=apod_deg)
-    
-    else:
-        # if basepath == 'scratch':
-        #     fbase = config['scratch_path']
-        # elif basepath == 'backup':
-        #     fbase = config['backup_path']
-        # else:
-        #     raise ValueError('must be scratch or backup for basepath kwarg')
-        fbase = config['mask_path']
-        if mask_name[-5:] != '.fits':
-            mask_name += '.fits'
-        return enmap.read_map(f'{fbase}{mask_version}/{mask_name}')
-
 
 def get_sim_noise_1d_fn(qid, sync_version=default_sync, mask_version=default_mask, bin_apod=True, mask_name=None, \
     galcut=None, apod_deg=None, calibrated=True, downgrade=None, smooth1d=None, \

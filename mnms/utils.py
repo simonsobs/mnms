@@ -1,17 +1,32 @@
 from pixell import enmap, enplot, curvedsky
 from enlib import array_ops
-from soapack import interfaces as dmint
+from soapack import interfaces as sints
+
 import numpy as np
 from scipy.interpolate import interp1d
+import numba
 
 from concurrent import futures
 import multiprocessing
 import os
-import time
-
-import numba
+import hashlib
 
 # Utility functions to support tiling classes and functions. Just keeping code organized so I don't get whelmed.
+
+def get_default_data_model():
+    config = sints.dconfig['mnms']
+    dm_name = config['default_data_model']
+    return getattr(sints, dm_name.upper())()
+
+def get_default_mask_version():
+    config = sints.dconfig['mnms']
+    try:
+        mask_version = config['default_mask_version']
+    except KeyError:
+        dm_name = config['default_data_model'].lower()
+        config = sints.dconfig[dm_name]
+        mask_version = config['default_mask_version']
+    return mask_version
 
 def eshow(x, *args, title=None, fname='',**kwargs): 
     plots = enplot.plot(x, **kwargs)
@@ -550,12 +565,12 @@ def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
 # from pixell/fft.py
 def get_cpu_count():
     try:
-        nthreads = int(os.environ['OMP_NUM_THREADS'])
+        nthread = int(os.environ['OMP_NUM_THREADS'])
     except (KeyError, ValueError):
-        nthreads = multiprocessing.cpu_count()
-    return nthreads
+        nthread = multiprocessing.cpu_count()
+    return nthread
 
-def concurrent_standard_normal(size=1, nchunks=1, nthreads=0, seed=None, dtype=np.float32, complex=False):
+def concurrent_standard_normal(size=1, nchunks=1, nthread=0, seed=None, dtype=np.float32, complex=False):
     # get size per chunk draw
     totalsize = np.prod(size, dtype=int)
     chunksize = np.ceil(totalsize/nchunks).astype(int)
@@ -570,9 +585,9 @@ def concurrent_standard_normal(size=1, nchunks=1, nthreads=0, seed=None, dtype=n
         out_imag = np.empty_like(out)
 
     # perform multithreaded execution
-    if nthreads == 0:
-        nthreads = get_cpu_count()
-    executor = futures.ThreadPoolExecutor(max_workers=nthreads)
+    if nthread == 0:
+        nthread = get_cpu_count()
+    executor = futures.ThreadPoolExecutor(max_workers=nthread)
 
     def _fill(arr, start, stop, rng):
         rng.standard_normal(out=arr[start:stop], dtype=dtype)
@@ -709,12 +724,29 @@ class _SeedTracker(object):
         
         if len(qid) == 1:
             # qid_idx = (dmint.arrays(qid[0], 'hash'), 0)
-            qid_idx = (dmint.get_all_dr5_qids().index(qid[0]), 0)
+            qid_idx = (sints.get_all_dr5_qids().index(qid[0]), 0)
         else:
-            # qid_idx = tuple(dmint.arrays(q, 'hash') for q in qid)
-            qid_idx = tuple(dmint.get_all_dr5_qids().index(q) for q in qid)
+            # qid_idx = tuple(sints.arrays(q, 'hash') for q in qid)
+            qid_idx = tuple(sints.get_all_dr5_qids().index(q) for q in qid)
         return ret + (dm_idx,) + qid_idx + (tile_idx,)
 seed_tracker = _SeedTracker()
+
+def hash_qid(qid, ndigits=9):
+    return int(hashlib.sha256(qid.encode('utf-8')).hexdigest(), 16) % 10**ndigits
+
+def get_seed(split_num, sim_num, data_model, *qids, n_max_qids=4, ndigits=9):
+    # can have at most n_max_qids
+    # this is important in case the seed gets modified outside of this function, e.g. when combining noise models in one sim
+    assert len(qids) <= n_max_qids
+
+    # start filling in seed
+    seed = [0 for i in range(3 + n_max_qids)]
+    seed[0] = split_num
+    seed[1] = sim_num
+    seed[2] = sints.noise_seed_indices[data_model.name]
+    for i in range(len(qids)):
+        seed[i+3] = hash_qid(qids[i], ndigits=ndigits)
+    return seed
 
 ### OLD ###
 

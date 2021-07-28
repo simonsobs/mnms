@@ -189,7 +189,7 @@ def get_iso_curvedsky_noise_sim(covar, ivar=None, flat_triu_axis=0, oshape=None,
 
     return omap
 
-def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg=4., delta_ell_smooth=400, ledges=None,
+def get_tiled_noise_covsqrt_mpi(imap, ivar=None, mask=None, width_deg=4., height_deg=4., delta_ell_smooth=400, ledges=None,
                             tiled_mpi_manager=None, verbose=True):
     '''Generate the 2d noise spectra for each of the tiles
     '''
@@ -345,7 +345,7 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
     else:
         return None, None
 
-def get_tiled_noise_sim(covsqrt, ivar=None, flat_triu_axis=1, num_arrays=None, tile_lfunc=None, ledges=None, cov_1D=None,
+def get_tiled_noise_sim_mpi(covsqrt, ivar=None, flat_triu_axis=1, num_arrays=None, tile_lfunc=None, ledges=None, cov_1D=None,
                         split=None, seed=None, seedgen_args=None, lowell_seed=False, tiled_mpi_manager=None, verbose=True):
     '''Generate a sim from the 2d noise spectra for each of the tiles
     '''
@@ -517,7 +517,7 @@ def get_tiled_noise_sim(covsqrt, ivar=None, flat_triu_axis=1, num_arrays=None, t
     else:
         return None
 
-def get_tiled_noise_covsqrt_multi(imap, ivar=None, mask=None, width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, 
+def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, 
                                         nthread=0, flat_triu_axis=1, verbose=False):
     '''Generate the 2d noise spectra for each of the tiles
     '''
@@ -538,7 +538,7 @@ def get_tiled_noise_covsqrt_multi(imap, ivar=None, mask=None, width_deg=4., heig
     mask = mask.astype(imap.dtype)
     if lmax is None:
         lmax = utils.lmax_from_wcs(imap)
-    imap, cov_1D = utils.ell_flatten(imap, mask=mask, return_cov=True, mode='curvedsky', lmax=lmax)
+    imap, sqrt_cov_ell = utils.ell_flatten(imap, mask=mask, return_cov=True, mode='curvedsky', lmax=lmax)
 
     # get the tiled data, apod window
     imap = tiled_ndmap(imap, width_deg=width_deg, height_deg=height_deg)
@@ -612,13 +612,15 @@ def get_tiled_noise_covsqrt_multi(imap, ivar=None, mask=None, width_deg=4., heig
     assert flat_triu_axis != 0 
     omap = utils.to_flat_triu(smap, axis1=1, axis2=2, flat_triu_axis=flat_triu_axis)
     omap = imap.sametiles(omap) 
-    return omap, cov_1D
+    return omap, sqrt_cov_ell
 
-def get_tiled_noise_sim_multi(covsqrt, ivar=None, num_arrays=None, flat_triu_axis=1, cov_1D=None, nthread=0,
+def get_tiled_noise_sim(covsqrt, ivar=None, num_arrays=None, sqrt_cov_ell=None, nthread=0,
                         split=None, seed=None, seedgen_args=None, lowell_seed=False, verbose=True):
     
     # check that covsqrt is a tiled tiled_ndmap instance    
     assert covsqrt.tiled, 'Covsqrt must be tiled'
+    assert covsqrt.ndim == 5, 'Covsqrt must have 5 dims: (num_unmasked_tiles, comp1, comp2, ny, nx)'
+    assert covsqrt.shape[-4] == covsqrt.shape[-3], 'Covsqrt correlated subspace must be square'
 
     # get ivar, and num_arrays if necessary
     if ivar is not None:
@@ -631,7 +633,7 @@ def get_tiled_noise_sim_multi(covsqrt, ivar=None, num_arrays=None, flat_triu_axi
 
     # get preshape information
     num_unmasked_tiles = covsqrt.num_tiles
-    num_comp = utils.triangular_idx(covsqrt.shape[flat_triu_axis])
+    num_comp = covsqrt.shape[-4]
     num_pol = num_comp // num_arrays
     if verbose:
         print(
@@ -640,31 +642,13 @@ def get_tiled_noise_sim_multi(covsqrt, ivar=None, num_arrays=None, flat_triu_axi
             f'Number of Pols.: {num_pol}\n' + \
             f'Tile shape: {covsqrt.shape[-2:]}'
             )
-    
-    # unflatten the covsqrt flattened dimension. put the covarying axes at [1, 2] so axis 0
-    # still indexes tiles
-    wcs = covsqrt.wcs
-    tiled_info = covsqrt.tiled_info()
-    covsqrt = utils.from_flat_triu(covsqrt, axis1=1, axis2=2, flat_triu_axis=flat_triu_axis)
-    covsqrt = enmap.ndmap(covsqrt, wcs)
-    covsqrt = tiled_ndmap(covsqrt, **tiled_info)
-
-    # determine the seed. use a seedgen if seedgen_args is not None
-    if seedgen_args is not None:
-        # if the split is the seedgen setnum, prepend it to the seedgen args
-        if len(seedgen_args) == 3: # sim_idx, data_model, qid
-            seedgen_args = (split,) + seedgen_args
-        else: 
-            assert len(seedgen_args) == 4 # set_idx, sim_idx, data_model, qid 
-        seedgen_args_tile = seedgen_args + (4294,)
-        seed = seedgen.get_tiled_noise_seed(*seedgen_args_tile, lowell_seed=lowell_seed)
-    if verbose:
-        print(f'Seed: {seed}')
 
     # get random numbers in the right shape. To make random draws independent of mask, we draw numbers into
     # the full number of tiles, and then slice the unmasked tiles (even though this is a little slower)
     rshape = (covsqrt.numy*covsqrt.numx, num_comp, *covsqrt.shape[-2:])
-    omap = utils.concurrent_standard_normal(size=rshape, dtype=covsqrt.dtype, complex=True, seed=seed, nchunks=100)
+    if verbose:
+        print(f'Seed: {seed}')
+    omap = utils.concurrent_standard_normal(size=rshape, dtype=covsqrt.dtype, complex=True, seed=seed, nchunks=100, nthread=nthread)
     omap = omap[covsqrt.unmasked_tiles]
 
     # multiply random draws by the covsqrt to get the sim
@@ -679,14 +663,13 @@ def get_tiled_noise_sim_multi(covsqrt, ivar=None, num_arrays=None, flat_triu_axi
     omap = omap.from_tiled(power=0.5)
 
     # filter maps
-    if cov_1D is not None:
+    if sqrt_cov_ell is not None:
 
-        # determine lmax from cov_1D, and build the lfilter
-        lmax = min(utils.lmax_from_wcs(omap), cov_1D.shape[-1]-1)
-        # cov_1D = cov_1D[:, split] 
-        assert (num_arrays, num_pol) == cov_1D.shape[:-1], 'cov_1D shape does not match (num_arrays, num_pol, ...)'
-        lfilter = cov_1D[..., :lmax+1]
-        lfilter = np.sqrt(lfilter) # assume cov_1D, tile_lfunc defined in terms of power spectra
+        # determine lmax from sqrt_cov_ell, and build the lfilter
+        lmax = min(utils.lmax_from_wcs(omap), sqrt_cov_ell.shape[-1]-1)
+        assert (num_arrays, num_pol) == sqrt_cov_ell.shape[:-1], 'sqrt_cov_ell shape does not match (num_arrays, num_pol, ...)'
+        lfilter = sqrt_cov_ell[..., :lmax+1]
+        lfilter = np.sqrt(lfilter) # assume sqrt_cov_ell, tile_lfunc defined in terms of power spectra
         
         # do the filtering
         for i in range(num_arrays):
