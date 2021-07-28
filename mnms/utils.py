@@ -600,7 +600,7 @@ def concurrent_standard_normal(size=1, nchunks=1, nthread=0, seed=None, dtype=np
     out = out.reshape(-1)[:totalsize]
     return out.reshape(size)
 
-def eigpow(A, e, axes=[-2, -1]):
+def eigpow(A, e, axes=[-2, -1], copy=False):
     """A hack around enlib.array_ops.eigpow which upgrades the data
     precision to at least double precision if necessary prior to
     operation.
@@ -621,7 +621,7 @@ def eigpow(A, e, axes=[-2, -1]):
     else:
         recast = False
 
-    O = array_ops.eigpow(A, e, axes=axes)
+    O = array_ops.eigpow(A, e, axes=axes, copy=copy)
 
     # cast back to input precision if necessary
     if recast:

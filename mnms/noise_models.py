@@ -71,7 +71,7 @@ class NoiseModel(ABC):
     def _get_ivar(self):
         ivars = []
         for i, qid in enumerate(self._qids):
-            fn = simio.get_sim_mask(
+            fn = simio.get_sim_mask_fn(
                 qid, self._data_model, use_default_mask=self._use_default_mask, mask_version=self._mask_version, mask_name=self._mask_name, **self._kwargs
                 )
             shape, wcs = enmap.read_map_geometry(fn)
@@ -96,13 +96,13 @@ class NoiseModel(ABC):
             ivars.append(ivar)
 
         # convert to enmap -- this has shape (nmaps, nsplits, npol, ny, nx)
-        ivars = enmap.enmap(ivars, wcs=wcs)
+        ivars = enmap.enmap(ivars, wcs=ivar.wcs)
         return ivars
 
     def _get_data(self):
         imaps = []
         for i, qid in enumerate(self._qids):
-            fn = simio.get_sim_mask(
+            fn = simio.get_sim_mask_fn(
                 qid, self._data_model, use_default_mask=self._use_default_mask, mask_version=self._mask_version, mask_name=self._mask_name, **self._kwargs
                 )
             shape, wcs = enmap.read_map_geometry(fn)
@@ -127,7 +127,7 @@ class NoiseModel(ABC):
             imaps.append(imap)
 
         # convert to enmap -- this has shape (nmaps, nsplits, npol, ny, nx)
-        imaps = enmap.enmap(imaps, wcs=wcs)
+        imaps = enmap.enmap(imaps, wcs=imap.wcs)
         return imaps
 
     def _inpaint(self):
@@ -142,15 +142,15 @@ class NoiseModel(ABC):
         pass
 
     @abstractmethod
-    def get_model(self, write=True, keep=False, verbose=False, **kwargs):
+    def get_model(self):
         pass
 
     @abstractmethod
-    def _get_model_from_disk(self, **kwargs):
+    def _get_model_from_disk(self):
         pass
 
     @abstractmethod
-    def get_sim(self, split_num, sim_num, check_on_disk=True, write=False, verbose=False, **kwargs):
+    def get_sim(self):
         pass 
 
 class TiledNoiseModel(NoiseModel):
@@ -166,7 +166,7 @@ class TiledNoiseModel(NoiseModel):
         self._height_deg = height_deg
         self._delta_ell_smooth = delta_ell_smooth
         if lmax is None:
-            lmax = utils.lmax_from_wcs(self.mask)
+            lmax = utils.lmax_from_wcs(self._mask)
         self._lmax = lmax
 
         # initialize unloaded noise model
@@ -175,7 +175,7 @@ class TiledNoiseModel(NoiseModel):
 
     def _get_model_fn(self):
         return simio.get_tiled_model_fn(
-            self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, notes=self.notes, 
+            self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, notes=self._notes, 
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
             calibrated=self._calibrated, downgrade=self._downgrade, **self._kwargs
         )
@@ -183,20 +183,23 @@ class TiledNoiseModel(NoiseModel):
     def _get_sim_fn(self, split_num, sim_num):
         # only difference w.r.t. above is split_num, sim_num
         return simio.get_tiled_sim_map_fn(
-            self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, split_num, sim_num, notes=self.notes, 
+            self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, split_num, sim_num, notes=self._notes, 
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
             calibrated=self._calibrated, downgrade=self._downgrade, **self._kwargs
         )
 
     def get_model(self, nthread=0, flat_triu_axis=1, write=True, keep=False, verbose=False, **kwargs):
+        # the model needs data, so we need to load it
         imap = self._get_data()
-        covsqrt, sqrt_cov_ell = tiled_noise.get_tiled_noise_covsqrt(
-            imap, ivar=self._ivar, mask=self._mask, width_deg=self._width_deg, height_deg=self._height_deg, delta_ell_smooth=self._delta_ell_smooth, lmax=self._lmax, 
-            nthread=nthread, flat_triu_axis=flat_triu_axis, verbose=verbose
-            )
+        
+        with bench.show('Getting noise model'):
+            covsqrt, sqrt_cov_ell = tiled_noise.get_tiled_noise_covsqrt(
+                imap, ivar=self._ivar, mask=self._mask, width_deg=self._width_deg, height_deg=self._height_deg, delta_ell_smooth=self._delta_ell_smooth, lmax=self._lmax, 
+                nthread=nthread, flat_triu_axis=flat_triu_axis, verbose=verbose
+                )
 
         if write:
-            fn = self._get_noise_model_fn()
+            fn = self._get_model_fn()
             covsqrt = utils.to_flat_triu(
                 covsqrt, axis1=flat_triu_axis, axis2=flat_triu_axis+1, flat_triu_axis=flat_triu_axis
             )
@@ -209,7 +212,7 @@ class TiledNoiseModel(NoiseModel):
             self._sqrt_cov_ell = sqrt_cov_ell
 
     def _get_model_from_disk(self, **kwargs):
-        fn = self._get_noise_model_fn()
+        fn = self._get_model_fn()
         covsqrt, extra_header, extra_hdu = tiled_ndmap.read_tiled_ndmap(
             fn, extra_header=['FLAT_TRIU_AXIS'], extra_hdu=['SQRT_COV_ELL']
             )

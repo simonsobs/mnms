@@ -30,6 +30,8 @@ def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=None, mask_nam
     galcut=None, apod_deg=None, calibrated=None, downgrade=None):
     '''
     '''
+    qid = '_'.join(qid)
+
     if mask_version is None:
         mask_version = utils.get_default_mask_version()
     assert bin_apod is not None
@@ -67,9 +69,9 @@ def get_tiled_model_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, notes
     if notes is None:
         notes = ''
     else:
-        notes = f'{notes}_'
+        notes = f'_{notes}'
 
-    fn += f'w{width_deg}_h{height_deg}_lsmooth{delta_ell_smooth}_lmax{lmax}_{notes}.fits'
+    fn += f'w{width_deg}_h{height_deg}_lsmooth{delta_ell_smooth}_lmax{lmax}{notes}.fits'
     return fn
 
 def get_tiled_sim_map_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, split_num, sim_num, notes=None, **kwargs):

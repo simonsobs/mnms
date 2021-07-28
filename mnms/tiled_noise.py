@@ -187,7 +187,7 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
     # imap is henceforth masked, as part of the filtering
     if mask is None:
         mask = np.array([1])
-    mask = mask.astype(imap.dtype)
+    mask = mask.astype(imap.dtype, copy=False)
     if lmax is None:
         lmax = utils.lmax_from_wcs(imap)
     imap, sqrt_cov_ell = utils.ell_flatten(imap, mask=mask, return_cov=True, mode='curvedsky', lmax=lmax)
@@ -257,14 +257,10 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
         smap[i] /= sq_f_sky[i]
 
     # take covsqrt of current power, need to reshape so covarying dimensions are spread over only two axes
-    smap = utils.eigpow(smap.reshape((-1, ncomp, ncomp) + smap.shape[-2:]), 0.5, axes=(-4,-3))
+    smap = smap.reshape((-1, ncomp, ncomp) + smap.shape[-2:])
+    smap = utils.eigpow(smap, 0.5, axes=(-4,-3), copy=False)
 
-    # get upper triu of the covsqrt for efficient disk-usage. put the covarying axes [1, 2] at axis flat_triu_axis
-    # so that axis 0 still indexes tiles
-    assert flat_triu_axis != 0 
-    omap = utils.to_flat_triu(smap, axis1=1, axis2=2, flat_triu_axis=flat_triu_axis)
-    omap = imap.sametiles(omap) 
-    return omap, sqrt_cov_ell
+    return imap.sametiles(smap), sqrt_cov_ell
 
 def get_tiled_noise_sim(covsqrt, ivar=None, num_arrays=None, sqrt_cov_ell=None, nthread=0,
                         split=None, seed=None, seedgen_args=None, lowell_seed=False, verbose=True):
