@@ -115,7 +115,7 @@ for qidx, qid in enumerate(args.qid):
         ivar = data_model.get_ivars(qid, calibrated=True)
 
     with bench.show(f'Inpainting ivar for {qid}'):        
-        wav_noise.inpaint_ivar(ivar, mask_bool)
+        inpaint.inpaint_ivar(ivar, mask_bool)
 
     if args.downgrade != 1:
         with bench.show(f'Downgrading ivar for {qid}'):        

@@ -1,4 +1,4 @@
-from mnms import simio, tiled_ndmap, utils, tiled_noise, wav_noise
+from mnms import simio, tiled_ndmap, utils, tiled_noise, wav_noise, inpaint
 from soapack import interfaces as sints
 from pixell import enmap, wcsutils
 from enlib import bench
