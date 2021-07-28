@@ -310,171 +310,171 @@ def get_KS_stats(data, sim, window=None, sample_size=50000, plot=True, save_path
     return ks_stats, ks_ps
 
 
-def get_stats_by_tile(data, sim, stat='Cl', window=None, ledges=None, width_deg=2, height_deg=2, lmax=6000, mode='fft',
-                            normalize=True, weight_func=None, true_ratio=False, sample_size=50000):
-    """If stat=='Cl':
-    Return the normalized Cl difference sim - data by each tile specified by the 
-    input arguments. We also follow the normalization convention for the spectra:
+# def get_stats_by_tile(data, sim, stat='Cl', window=None, ledges=None, width_deg=2, height_deg=2, lmax=6000, mode='fft',
+#                             normalize=True, weight_func=None, true_ratio=False, sample_size=50000):
+#     """If stat=='Cl':
+#     Return the normalized Cl difference sim - data by each tile specified by the 
+#     input arguments. We also follow the normalization convention for the spectra:
 
-    If data is: C_wx, the cross of components wx
-    And sim is: C_yz, the cross of components yz
+#     If data is: C_wx, the cross of components wx
+#     And sim is: C_yz, the cross of components yz
 
-    Then the spectrum result is (C_yz - C_wx) / (C_ww*C_xx*C_yy*C_zz)^0.25 + 1
+#     Then the spectrum result is (C_yz - C_wx) / (C_ww*C_xx*C_yy*C_zz)^0.25 + 1
 
-    If stat=='KS'
-    Return the 2-sample (2-sided) KS statistic between the data and sim maps.
-    Specifically, filter the maps by each ell bin, then bring them back to
-    map space. Then get the KS statistic on that filtered map. 
+#     If stat=='KS'
+#     Return the 2-sample (2-sided) KS statistic between the data and sim maps.
+#     Specifically, filter the maps by each ell bin, then bring them back to
+#     map space. Then get the KS statistic on that filtered map. 
 
-    Tiling is done by a tiled_noise TiledSimulator object and follows
-    that convention in either case.
+#     Tiling is done by a tiled_noise TiledSimulator object and follows
+#     that convention in either case.
 
-    Parameters
-    ----------
-    data : ndmap
-        Input data map to tile, of shape (nmaps, npol, ny, nx)
-    sim : ndmap
-        Map to compare to data, must be same shape
-    stat : str
-        'Cl' or 'KS' -- the statistic we are generating
-    window : ndmap, optional
-        A global mask to apply across the map region, by default None
-    ledges : Iterable, optional
-        A sequence to define the ell bin edges, by default None
-    width_deg : int, optional
-        Tile width in degrees, by default 6
-    height_deg : int, optional
-        Tile height in degrees, by default 6
-    lmax : int, optional
-        Maximum ell, by default 6000. Only used if ledges is None to define
-        one ell bin from 0 to lmax
-    mode : str, optional
-        The method of calculating spectra in each tile, by default 'fft'
-    normalize : bool, optional
-        The normalization style to pass if mode='fft, by default True
-    weights: array-like, optional
-        An array of weights to apply to the spectra, if we want to calculate 
-        a weighted-Cl. Must be broadcastable with imap's shape. The default is
-        None, in which case weights of 1 are applied to each mode
-    sample_size : int, optional
-        Whether to take a subsample of pixels within a tile for a 'KS' comparison.
-        This can speed up the calculation at the cost of statistical variation
-        in the value of the statistic itself within the tile, by default None. If 
-        None, don't subsample.
+#     Parameters
+#     ----------
+#     data : ndmap
+#         Input data map to tile, of shape (nmaps, npol, ny, nx)
+#     sim : ndmap
+#         Map to compare to data, must be same shape
+#     stat : str
+#         'Cl' or 'KS' -- the statistic we are generating
+#     window : ndmap, optional
+#         A global mask to apply across the map region, by default None
+#     ledges : Iterable, optional
+#         A sequence to define the ell bin edges, by default None
+#     width_deg : int, optional
+#         Tile width in degrees, by default 6
+#     height_deg : int, optional
+#         Tile height in degrees, by default 6
+#     lmax : int, optional
+#         Maximum ell, by default 6000. Only used if ledges is None to define
+#         one ell bin from 0 to lmax
+#     mode : str, optional
+#         The method of calculating spectra in each tile, by default 'fft'
+#     normalize : bool, optional
+#         The normalization style to pass if mode='fft, by default True
+#     weights: array-like, optional
+#         An array of weights to apply to the spectra, if we want to calculate 
+#         a weighted-Cl. Must be broadcastable with imap's shape. The default is
+#         None, in which case weights of 1 are applied to each mode
+#     sample_size : int, optional
+#         Whether to take a subsample of pixels within a tile for a 'KS' comparison.
+#         This can speed up the calculation at the cost of statistical variation
+#         in the value of the statistic itself within the tile, by default None. If 
+#         None, don't subsample.
 
-    Returns
-    -------
-    Tiled1dStats
-        An object storing the tiled statistics. Its output shape is appropriate given
-        the type of statistic:
-            (ntiles, nmaps, npol, nmaps, npol, nbins) for 'Cl'
-            (ntiles, nmaps, npol, nbins) for 'KS'
-    """
-    # prepare ell bin edges
-    if ledges is None:
-        ledges = [0, lmax]
-    assert len(ledges) > 1
-    ledges = np.atleast_1d(ledges)
-    assert len(ledges.shape) == 1
-    nbins = len(ledges)-1
+#     Returns
+#     -------
+#     Tiled1dStats
+#         An object storing the tiled statistics. Its output shape is appropriate given
+#         the type of statistic:
+#             (ntiles, nmaps, npol, nmaps, npol, nbins) for 'Cl'
+#             (ntiles, nmaps, npol, nbins) for 'KS'
+#     """
+#     # prepare ell bin edges
+#     if ledges is None:
+#         ledges = [0, lmax]
+#     assert len(ledges) > 1
+#     ledges = np.atleast_1d(ledges)
+#     assert len(ledges.shape) == 1
+#     nbins = len(ledges)-1
 
-    # prepare data and sim arrays
-    assert wcsutils.is_compatible(data.wcs, sim.wcs)
+#     # prepare data and sim arrays
+#     assert wcsutils.is_compatible(data.wcs, sim.wcs)
 
-    assert len(data.shape) >=2 and len(data.shape) <=4
-    if len(data.shape) == 2:
-        data = data[None, None, ...]
-    elif len(data.shape) == 3:
-        data = data[None, ...]
+#     assert len(data.shape) >=2 and len(data.shape) <=4
+#     if len(data.shape) == 2:
+#         data = data[None, None, ...]
+#     elif len(data.shape) == 3:
+#         data = data[None, ...]
     
-    assert len(sim.shape) >=2 and len(sim.shape) <=4
-    if len(sim.shape) == 2:
-        sim = sim[None, None, ...]
-    elif len(sim.shape) == 3:
-        sim = sim[None, ...]
+#     assert len(sim.shape) >=2 and len(sim.shape) <=4
+#     if len(sim.shape) == 2:
+#         sim = sim[None, None, ...]
+#     elif len(sim.shape) == 3:
+#         sim = sim[None, ...]
 
-    assert data.shape == sim.shape
+#     assert data.shape == sim.shape
 
-    # prepare window
-    if window is None:
-        window = enmap.ones(data.shape[-2:], wcs=data.wcs)
+#     # prepare window
+#     if window is None:
+#         window = enmap.ones(data.shape[-2:], wcs=data.wcs)
 
-    # prepare Tiler object
-    # if doing Cl, need a "spectra-like" shape
-    # elif doing a KS, just need the shape of the map
-    if stat == 'Cl':
-        s = data.shape
-        num_maps = s[-4]
-        num_pol = s[-3]
-        shape = (num_maps, num_pol) + s
-    elif stat == 'KS':
-        shape = data.shape
+#     # prepare Tiler object
+#     # if doing Cl, need a "spectra-like" shape
+#     # elif doing a KS, just need the shape of the map
+#     if stat == 'Cl':
+#         s = data.shape
+#         num_maps = s[-4]
+#         num_pol = s[-3]
+#         shape = (num_maps, num_pol) + s
+#     elif stat == 'KS':
+#         shape = data.shape
     
-    tiled_stats = tn.Tiled1dStats(shape, data.wcs, ledges=ledges, width_deg=width_deg,
-        height_deg=height_deg)
-    tiled_stats.initialize_output('Tiled1dStats')
+#     tiled_stats = tn.Tiled1dStats(shape, data.wcs, ledges=ledges, width_deg=width_deg,
+#         height_deg=height_deg)
+#     tiled_stats.initialize_output('Tiled1dStats')
 
-    # if doing KS stats, first need to filter the maps by ell bin
-    if stat == 'KS':
-        print('Generating maps filtered by ell bin')
-        f_data = enmap.zeros((nbins,) + data.shape, wcs=data.wcs)
-        f_sim = enmap.zeros((nbins,) + sim.shape, wcs=sim.wcs)
-        for i in tqdm(range(nbins)):
-            _lmin = ledges[i]
-            _lmax = ledges[i+1]
-            lfunc = lambda x: np.where(np.logical_and(_lmin <= x, x < _lmax), 1, 0)
-            f_data[i] = utils.ell_filter(data*window, lfunc, mode=mode, lmax=lmax, nthread=8)
-            f_sim[i] = utils.ell_filter(sim*window, lfunc, mode=mode, lmax=lmax, nthread=8)
+#     # if doing KS stats, first need to filter the maps by ell bin
+#     if stat == 'KS':
+#         print('Generating maps filtered by ell bin')
+#         f_data = enmap.zeros((nbins,) + data.shape, wcs=data.wcs)
+#         f_sim = enmap.zeros((nbins,) + sim.shape, wcs=sim.wcs)
+#         for i in tqdm(range(nbins)):
+#             _lmin = ledges[i]
+#             _lmax = ledges[i+1]
+#             lfunc = lambda x: np.where(np.logical_and(_lmin <= x, x < _lmax), 1, 0)
+#             f_data[i] = utils.ell_filter(data*window, lfunc, mode=mode, lmax=lmax, nthread=8)
+#             f_sim[i] = utils.ell_filter(sim*window, lfunc, mode=mode, lmax=lmax, nthread=8)
 
-    # iterate over the tiles
-    stats = []
-    for i in tqdm(range(tiled_stats.nTiles)):
-        _, extracter, _, _, _ = tiled_stats.tiles(i)
-        ewindow = extracter(window)
+#     # iterate over the tiles
+#     stats = []
+#     for i in tqdm(range(tiled_stats.nTiles)):
+#         _, extracter, _, _, _ = tiled_stats.tiles(i)
+#         ewindow = extracter(window)
 
-        # fill with exactly 0 if fully masked (these are removed from both map and histogram plots for the same window)
-        if np.all(ewindow == 0):
-            stats.append(tiled_stats.get_empty_map()[0])
-            continue
+#         # fill with exactly 0 if fully masked (these are removed from both map and histogram plots for the same window)
+#         if np.all(ewindow == 0):
+#             stats.append(tiled_stats.get_empty_map()[0])
+#             continue
 
-        # get the Cl differences from the tiled maps
-        # apodize the window before taking an fft
-        if stat == 'Cl':
-            edata = extracter(data)
-            esim = extracter(sim)
+#         # get the Cl differences from the tiled maps
+#         # apodize the window before taking an fft
+#         if stat == 'Cl':
+#             edata = extracter(data)
+#             esim = extracter(sim)
 
-            # get weights
-            if weight_func is not None:
-                eweights = weight_func(edata.modlmap())
-            else:
-                eweights = None
+#             # get weights
+#             if weight_func is not None:
+#                 eweights = weight_func(edata.modlmap())
+#             else:
+#                 eweights = None
             
-            # get the cl's and append their differences                      
-            cl_data, _ = map2binned_Cl(edata, mode=mode, window=ewindow*tiled_stats.apod(i), 
-                                        normalize=normalize, weights=eweights, ledges=ledges)
-            cl_sim, _ = map2binned_Cl(esim, mode=mode, window=ewindow*tiled_stats.apod(i),
-                                        normalize=normalize, weights=eweights, ledges=ledges)
+#             # get the cl's and append their differences                      
+#             cl_data, _ = map2binned_Cl(edata, mode=mode, window=ewindow*tiled_stats.apod(i), 
+#                                         normalize=normalize, weights=eweights, ledges=ledges)
+#             cl_sim, _ = map2binned_Cl(esim, mode=mode, window=ewindow*tiled_stats.apod(i),
+#                                         normalize=normalize, weights=eweights, ledges=ledges)
 
-            # select the tile difference function
-            if true_ratio:
-                stats.append(get_Cl_ratios(cl_data, cl_sim, plot=False))
-            else:
-                stats.append(get_Cl_diffs(cl_data, cl_sim, plot=False))
+#             # select the tile difference function
+#             if true_ratio:
+#                 stats.append(get_Cl_ratios(cl_data, cl_sim, plot=False))
+#             else:
+#                 stats.append(get_Cl_diffs(cl_data, cl_sim, plot=False))
 
-        # get the KS statistic from the tiled maps
-        elif stat == 'KS':
-            ef_data = extracter(f_data)
-            ef_sim = extracter(f_sim)
+#         # get the KS statistic from the tiled maps
+#         elif stat == 'KS':
+#             ef_data = extracter(f_data)
+#             ef_sim = extracter(f_sim)
 
-            # this will have shape (nellbin, nmap, npol), so we need to move 
-            # the first axis to the last axis
-            omap, _ = get_KS_stats(ef_data, ef_sim, window=ewindow, sample_size=sample_size, plot=False)
-            imap = np.moveaxis(omap, 0, -1)
-            stats.append(imap)
+#             # this will have shape (nellbin, nmap, npol), so we need to move 
+#             # the first axis to the last axis
+#             omap, _ = get_KS_stats(ef_data, ef_sim, window=ewindow, sample_size=sample_size, plot=False)
+#             imap = np.moveaxis(omap, 0, -1)
+#             stats.append(imap)
     
-    tiled_stats.outputs['Tiled1dStats'][0] = enmap.samewcs(stats, data)
-    tiled_stats.loadedPower = True
-    return tiled_stats
+#     tiled_stats.outputs['Tiled1dStats'][0] = enmap.samewcs(stats, data)
+#     tiled_stats.loadedPower = True
+#     return tiled_stats
 
 def get_stats_by_tile2(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=2, height_deg=2, lmax=6000, mode='fft',
                             normalize=True, weights=None, true_ratio=False, nthreads=0):
@@ -792,41 +792,3 @@ def get_Cl_ratio(data_map, sim_map, window=1, ledges=None, lmax=6000, method='cu
         out.append(np.mean(y/bias))
 
     return np.array(out)
-
-def get_Cl_ratio_by_tile_single_map(data, sim, window=1, ledges=None, width_deg=6, height_deg=6, lmax=6000, mode='curvedsky'):
-    window = enmap.ones(data.shape[-2:], wcs=window.wcs)*window
-    base_shape = (len(ledges)-1,) + data.shape[-2:]
-
-    tiler = tn.TiledSimulator(base_shape, data.wcs, width_deg=width_deg, height_deg=height_deg)
-    tiler.initialize_output('out')
-    hist = []
-
-    def tile_worker(i):
-        print(f'Doing tile {i+1} of {tiler.nTiles}')
-        _, extracter, inserter, eshape, ewcs = tiler.tiles(i)
-        
-        sub_mask = extracter(window)
-        print(f'Shape: {sub_mask.shape}')
-
-        # Compute the patch f_sky. Dont use this function on patchs with very high masking fractions. Skip these patches
-        f_sky = np.mean((tiler.apod(i)*sub_mask)**2)
-        if np.all(tiler.apod(i)*sub_mask == 0) or f_sky < 1e-3:
-            print(f'Skipping tile {i+1}. The tile is too heavily masked, f_sky = {f_sky}')
-            return
-
-        # Extract tiles and get Cl ratios
-        sub_data = extracter(data)
-        sub_sim = extracter(sim)
-        Cl_ratios = get_Cl_ratio(sub_data, sub_sim, sub_mask*tiler.apod(i), ledges=ledges, lmax=lmax, plot=False, mode=mode)
-        eshape = (len(Cl_ratios),) + eshape
-        Cl_ratios_map = enmap.samewcs(Cl_ratios[:, None, None] * np.ones(eshape), ewcs) # generate a sub_map that is filled with the ratios
-
-        # update return objects
-        tiler.update_output('out', Cl_ratios_map, inserter, pow=1)
-        hist.append(Cl_ratios)
-
-    # Cycle through the tiles
-    for i in range(tiler.nTiles):
-        tile_worker(i)
-
-    return tiler.outputs['out'][0], np.array(hist).T

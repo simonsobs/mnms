@@ -76,6 +76,7 @@ class MPIManager:
                 from mpi4py import MPI
                 self.mpi = True
             except ImportError:
+                warnings.warn('Failed to import mpi4py, continuing without MPI', RuntimeWarning)
                 self.mpi = False
             
             if self.mpi:
