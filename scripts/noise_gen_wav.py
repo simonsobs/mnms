@@ -9,7 +9,7 @@ from optweight import noise_utils, wavtrans
 from soapack import interfaces as sints
 from enlib import bench
 
-from mnms import wav_noise, simio, utils
+from mnms import wav_noise, simio, utils, inpaint
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--qid', dest='qid', nargs='+', type=str, required=True,
@@ -78,7 +78,7 @@ for qidx, qid in enumerate(args.qid):
 
     with bench.show(f'Inpaint ivar for {qid}'):
         # Inpaint ivar to get rid of a few cut pixels around point sources.
-        wav_noise.inpaint_ivar(ivar, mask_bool_ivar)
+        inpaint.inpaint_ivar(ivar, mask_bool_ivar)
 
     # Inpaint point sources.
     if args.union_sources:
@@ -86,7 +86,7 @@ for qidx, qid in enumerate(args.qid):
             ra, dec = sints.get_act_mr3f_union_sources(version=args.union_sources) 
             catalog = np.radians(np.vstack([dec, ra]))
             ivar_eff = utils.get_ivar_eff(ivar, use_inf=True)
-            wav_noise.inpaint_noise_catalog(imap, ivar_eff, mask_bool, catalog,
+            inpaint.inpaint_noise_catalog(imap, ivar_eff, mask_bool, catalog,
                                             inplace=True, radius=6, ivar_threshold=4)
             del ivar_eff
 
