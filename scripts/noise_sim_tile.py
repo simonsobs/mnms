@@ -57,4 +57,4 @@ assert np.all(maps >= 0)
 # Iterate over sims
 for i, s in enumerate(splits):
     for j, m in enumerate(maps):
-        model.get_sim(s, m, write=True)
+        model.get_sim(s, m, check_on_disk=False, write=True, verbose=True)

@@ -279,7 +279,6 @@ def get_ivar_eff(ivar, use_inf=False):
         out[~mask] = np.inf
     else:
         # Fill with largest value allowed by dtype to mimic np.nan_to_num.
-        print(out.dtype)
         out[~mask] = np.finfo(out.dtype).max
 
     return out
