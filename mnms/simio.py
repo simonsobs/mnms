@@ -92,7 +92,7 @@ def get_tiled_sim_map_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, spl
     fn += f'w{width_deg}_h{height_deg}_lsmooth{delta_ell_smooth}_lmax{lmax}_{notes}'
 
     # prepare or set (split) and map num tags
-    fn += f'set{split_num}_map{sim_num}.fits'
+    fn += f'set{split_num}_map{str(sim_num).zfill(4)}.fits'
     return fn
 
 # def get_2Dlowell_sim_map_fn(qid, sync_version=default_sync, mask_version=default_mask, bin_apod=True, mask_name=None, \

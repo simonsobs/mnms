@@ -224,8 +224,9 @@ def get_coadd_map(imap, ivar):
     # as a split where that split is the only non-zero ivar in that pixel
     num = np.sum(imap * ivar, axis=-4, keepdims=True) 
     den = np.sum(ivar, axis=-4, keepdims=True)
-    mask = den != 0 
-    coadd = np.divide(num, den, where=mask)
+    mask = den != 0
+    coadd = np.zeros_like(num) 
+    np.divide(num, den, where=mask, out=coadd)
 
     # find pixels where exactly one split has a nonzero ivar
     single_nonzero_ivar_mask = np.sum(ivar!=0, axis=-4, keepdims=True) == 1
@@ -275,6 +276,7 @@ def get_ivar_eff(ivar, use_inf=False):
         out[~mask] = np.inf
     else:
         # Fill with largest value allowed by dtype to mimic np.nan_to_num.
+        print(out.dtype)
         out[~mask] = np.finfo(out.dtype).max
 
     return out

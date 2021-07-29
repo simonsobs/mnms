@@ -188,11 +188,18 @@ class TiledNoiseModel(NoiseModel):
             calibrated=self._calibrated, downgrade=self._downgrade, **self._kwargs
         )
 
-    def get_model(self, nthread=0, flat_triu_axis=1, write=True, keep=False, verbose=False, **kwargs):
+    def get_model(self, nthread=0, flat_triu_axis=1, check_on_disk=True, write=True, keep=False, verbose=False, **kwargs):
+        if check_on_disk:
+            try:
+                self._get_model_from_disk(keep=keep) 
+                return 
+            except FileNotFoundError:
+                if verbose:
+                    print('Model not found on disk, generating instead')
+
         # the model needs data, so we need to load it
         imap = self._get_data()
-        
-        with bench.show('Getting noise model'):
+        with bench.show('Generating noise model'):
             covsqrt, sqrt_cov_ell = tiled_noise.get_tiled_noise_covsqrt(
                 imap, ivar=self._ivar, mask=self._mask, width_deg=self._width_deg, height_deg=self._height_deg, delta_ell_smooth=self._delta_ell_smooth, lmax=self._lmax, 
                 nthread=nthread, flat_triu_axis=flat_triu_axis, verbose=verbose
@@ -211,7 +218,7 @@ class TiledNoiseModel(NoiseModel):
             self._covsqrt = covsqrt
             self._sqrt_cov_ell = sqrt_cov_ell
 
-    def _get_model_from_disk(self, **kwargs):
+    def _get_model_from_disk(self, keep=True, **kwargs):
         fn = self._get_model_fn()
         covsqrt, extra_header, extra_hdu = tiled_ndmap.read_tiled_ndmap(
             fn, extra_header=['FLAT_TRIU_AXIS'], extra_hdu=['SQRT_COV_ELL']
@@ -225,8 +232,11 @@ class TiledNoiseModel(NoiseModel):
             covsqrt, axis1=flat_triu_axis, axis2=flat_triu_axis+1, flat_triu_axis=flat_triu_axis
             )
         covsqrt = enmap.ndmap(covsqrt, wcs)
-        self._covsqrt = tiled_ndmap.tiled_ndmap(covsqrt, **tiled_info)
-        self._sqrt_cov_ell = sqrt_cov_ell
+        covsqrt = tiled_ndmap.tiled_ndmap(covsqrt, **tiled_info)
+
+        if keep:
+            self._covsqrt = covsqrt
+            self._sqrt_cov_ell = sqrt_cov_ell
 
     def get_sim(self, split_num, sim_num, nthread=0, check_on_disk=True, write=False, verbose=False, **kwargs):
         fn = self._get_sim_fn(split_num, sim_num)
@@ -239,17 +249,20 @@ class TiledNoiseModel(NoiseModel):
                     print('Sim not found on disk, generating instead')
         
         if self._covsqrt is None:
+            if verbose:
+                print('Model not loaded, loading from disk')
             self._get_model_from_disk()
 
         seed = utils.get_seed(*(split_num, sim_num, self._data_model, *self._qids))
 
-        smap = tiled_noise.get_tiled_noise_sim(
-            self._covsqrt, ivar=self._ivar, num_arrays=self._num_arrays, sqrt_cov_ell=self._sqrt_cov_ell, split=split_num, 
-            seed=seed, nthread=nthread, verbose=verbose
-            )
+        with bench.show('Generating noise model'):
+            smap = tiled_noise.get_tiled_noise_sim(
+                self._covsqrt, ivar=self._ivar, num_arrays=self._num_arrays, sqrt_cov_ell=self._sqrt_cov_ell, split=split_num, 
+                seed=seed, nthread=nthread, verbose=verbose
+                )
+            smap *= self._mask
 
         if write:
             enmap.write_map(fn, smap)
         return smap
-        
-
+    
