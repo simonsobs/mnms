@@ -356,17 +356,13 @@ class WaveletNoiseModel(NoiseModel):
         dmap = self._get_data()
         dmap = utils.get_noise_map(dmap, self._ivar)
 
-        dmap = np.asarray(dmap)
-        dmap = np.ascontiguousarray(np.swapaxes(dmap, 0, 1))
-        dmap = enmap.enmap(dmap, wcs=self._mask.wcs, copy=False)
-
         sqrt_cov_wavs = {}
         sqrt_cov_ells = {}
         w_ells = {}
         with bench.show('Generating noise model'):
             for s in range(self._num_splits):
                 sqrt_cov_wav, sqrt_cov_ell, w_ell = wav_noise.estimate_sqrt_cov_wav_from_enmap(
-                    dmap[s], self._mask, self._lmax, lamb=self._lamb, smooth_loc=self._smooth_loc
+                    dmap[:, s], self._mask, self._lmax, lamb=self._lamb, smooth_loc=self._smooth_loc
                     )
                 sqrt_cov_wavs[s] = sqrt_cov_wav
                 sqrt_cov_ells[s] = sqrt_cov_ell

@@ -130,8 +130,8 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
     noise the generated noise needs to be filtered by sqrt(cov_ell) and 
     masked using the pixel mask.
     '''
-    print(imap.flags['C_CONTIGUOUS'])
-    assert imap.flags['C_CONTIGUOUS']
+    mask = grow_mask(mask, lmax)
+    imap *= mask
 
     if lmax_from_wcs(imap.wcs) < lmax:
         raise ValueError(f'Pixelization input map (cdelt : {imap.wcs.wcs.cdelt} '
