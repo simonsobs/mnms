@@ -74,7 +74,7 @@ def get_tiled_model_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, notes
     fn += f'w{width_deg}_h{height_deg}_lsmooth{delta_ell_smooth}_lmax{lmax}{notes}.fits'
     return fn
 
-def get_tiled_sim_map_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, split_num, sim_num, notes=None, **kwargs):
+def get_tiled_sim_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, split_num, sim_num, notes=None, **kwargs):
     # cast to floating point for consistency
     width_deg = float(width_deg)
     height_deg = float(height_deg)
@@ -87,12 +87,98 @@ def get_tiled_sim_map_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, spl
     if notes is None:
         notes = ''
     else:
-        notes = f'{notes}_'
+        notes = f'_{notes}'
 
-    fn += f'w{width_deg}_h{height_deg}_lsmooth{delta_ell_smooth}_lmax{lmax}_{notes}'
+    fn += f'w{width_deg}_h{height_deg}_lsmooth{delta_ell_smooth}_lmax{lmax}{notes}_'
 
     # prepare or set (split) and map num tags
     fn += f'set{split_num}_map{str(sim_num).zfill(4)}.fits'
+    return fn
+
+def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, notes=None, **kwargs):
+    """
+    Determine filename for square-root wavelet covariance file.
+
+    Arguments
+    ---------
+    qid : str
+        Array identifier.
+    split_num : int
+        Split index.
+    lamb : float
+        'Parameter specifying width of wavelets kernels in log(ell).'
+    lmax : int
+        Max multipole.
+    smooth_loc : bool, optional
+        If set, use smoothing kernel that varies over the map, 
+        smaller along edge of mask.
+
+    Returns
+    -------
+    fn : str
+        Absolute path for file.
+    """
+    # cast to floating point for consistency
+    lamb = float(lamb)
+
+    # get root fn
+    fn = config['covmat_path']
+    fn += _get_sim_fn_root(qid, **kwargs)
+
+    # allow for possibility of no notes
+    if notes is None:
+        notes = ''
+    else:
+        notes = f'_{notes}'
+    
+    fn += f'lamb{lamb}_lmax{lmax}_smoothloc_{smooth_loc}{notes}_set{split_num}.hdf5'
+    return fn
+    
+def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, sim_num, alm=False, notes=None, **kwargs):
+    """
+    Determine filename for simulated noise map.
+
+    Arguments
+    ---------
+    qid : str
+        Array identifier.
+    split_num : int
+        Split index.
+    lamb : float
+        'Parameter specifying width of wavelets kernels in log(ell).'
+    lmax : int
+        Max multipole.
+    smooth_loc : bool, optional
+        If set, use smoothing kernel that varies over the map, 
+        smaller along edge of mask.
+    sim_num : int
+        Simulation number.
+    alm : bool
+        Whether filename ends in "map" (False) or "alm" (True)
+
+    Returns
+    -------
+    fn : str
+        Absolute path for file.
+    """
+    # cast to floating point for consistency
+    lamb = float(lamb)
+
+    # get root fn
+    fn = config['covmat_path']
+    fn += _get_sim_fn_root(qid, **kwargs)
+
+    # allow for possibility of no notes
+    if notes is None:
+        notes = ''
+    else:
+        notes = f'_{notes}'
+    
+    fn += f'lamb{lamb}_lmax{lmax}_smoothloc_{smooth_loc}{notes}_set{split_num}_'
+
+    # prepare or set (split) and map num tags
+    mapalm = 'alm' if alm else 'map'
+    fn += f'{mapalm}{str(sim_num).zfill(4)}.fits'
     return fn
 
 # def get_2Dlowell_sim_map_fn(qid, sync_version=default_sync, mask_version=default_mask, bin_apod=True, mask_name=None, \
@@ -266,104 +352,3 @@ def get_tiled_sim_map_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, spl
     
 #     fn_2d = fbase + fn_root + f'w{width_deg}_h{height_deg}_smoothell{smoothell}_{covtype}{notes}' + 'noise_tiled_2d.fits'
 #     return fn_2d
-
-# def get_wav_sqrt_cov_fn(qid, split_idx, lmax, sync_version=default_sync, mask_version=default_mask,
-#                          bin_apod=True, mask_name=None, galcut=None, apod_deg=None,
-#                          calibrated=True, downgrade=None, notes=None, basepath='scratch'):
-#     '''
-#     Determine filename for square-root wavelet covariance file.
-
-#     Arguments
-#     ---------
-#     qid : str
-#         Array identifier.
-#     split_idx : int
-#         Split index.
-#     lmax : int
-#         Max multipole.
-
-#     Returns
-#     -------
-#     fn : str
-#         Absolute path for file.
-#     '''
-#     fbase = config['covmat_path']
-#     fn_root = _get_sim_fn_root(qid, sync_version=sync_version, mask_version=mask_version,
-#                                bin_apod=bin_apod, mask_name=mask_name, galcut=galcut,
-#                                apod_deg=apod_deg, calibrated=calibrated, downgrade=downgrade)
-
-#     if notes is None:
-#         notes = ''
-#     else:
-#         notes = f'{notes}_'
-    
-#     fn = fbase + fn_root + f'{notes}' + f'lmax{lmax}_set{split_idx}_sqrt_cov_wav.hdf5'
-#     return fn
-    
-# def get_wav_sim_map_fn(qid, lmax, sync_version=default_sync, mask_version=default_mask,
-#                        bin_apod=True, mask_name=None, galcut=None, apod_deg=None,
-#                        calibrated=True, downgrade=None, notes=None, splitnum=None,
-#                        map_id=None, return_map_id=False, basepath='scratch',
-#                        write_alm=False):
-#     '''
-#     Determine filename for simulated noise map.
-
-#     Arguments
-#     ---------
-#     qid : str
-#         Array identifier.
-#     lmax : int
-#         Max multipole.
-#     write_alm : bool, optional
-#         If set, give filename for alm instead of map.
-    
-#     Returns
-#     -------
-#     fn : str
-#         Absolute path for file.
-#     '''
-
-#     fbase = config['maps_path']
-
-#     fn_root = _get_sim_fn_root(qid, sync_version=sync_version, mask_version=mask_version,
-#                                bin_apod=bin_apod, mask_name=mask_name, galcut=galcut,
-#                                apod_deg=apod_deg, calibrated=calibrated, downgrade=downgrade)
-
-#     if write_alm:
-#         type_str = 'alm'
-#     else:
-#         type_str = 'map'
-
-#     if notes is None:
-#         notes = ''
-#     else:
-#         notes = f'{notes}_'
-
-#     fn_root += f'{notes}' + f'lmax{lmax}_'
-
-#     assert splitnum in (0,1,2,3), 'All ACT arrays have no more than 4 splits'
-#     mstr = f'set{splitnum}_'
-
-#     # if map_id is None, increment most recent map with same fn by 1
-#     # Does not mix alms and maps at the moment.
-#     if map_id is None:
-#         fn_re = fn_root + mstr + type_str + '_(.+)' + '.fits'
-
-#         fns = os.listdir(config['maps_path'])
-#         high_id = 0
-#         for fn in fns:
-#             searcher = re.search(fn_re, fn)
-#             if searcher is not None:
-#                 this_id = int(searcher.groups()[0])
-#                 if this_id > high_id:
-#                     high_id = this_id
-        
-#         # one more than current highest id
-#         map_id = high_id + 1
-
-#     fn = fbase + fn_root + mstr + f'{type_str}_' + str(map_id).zfill(3) + '.fits'
-    
-#     if return_map_id:
-#         return fn, map_id
-#     else:
-#         return fn

@@ -28,6 +28,9 @@ def get_default_mask_version():
         mask_version = config['default_mask_version']
     return mask_version
 
+def get_nsplits_by_qid(qid, data_model):
+    return int(data_model.adf[data_model.adf['#qid']==qid]['nsplits'])
+
 def slice_geometry_by_pixbox(ishape, iwcs, pixbox):
     pb = np.asarray(pixbox)
     return enmap.slice_geometry(ishape[-2:], iwcs, (slice(*pb[:, -2]), slice(*pb[:, -1])), nowrap=True)

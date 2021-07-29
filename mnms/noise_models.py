@@ -182,7 +182,7 @@ class TiledNoiseModel(NoiseModel):
 
     def _get_sim_fn(self, split_num, sim_num):
         # only difference w.r.t. above is split_num, sim_num
-        return simio.get_tiled_sim_map_fn(
+        return simio.get_tiled_sim_fn(
             self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, split_num, sim_num, notes=self._notes, 
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
             calibrated=self._calibrated, downgrade=self._downgrade, **self._kwargs
@@ -265,4 +265,63 @@ class TiledNoiseModel(NoiseModel):
         if write:
             enmap.write_map(fn, smap)
         return smap
-    
+
+class WaveletNoiseModel(NoiseModel):
+
+    def __init__(self, *qids, data_model=None, mask=None, ivar=None, calibrated=True, downgrade=1, mask_version=None, mask_name=None, notes=None,
+                    lamb=1.3, lmax=None, smooth_loc=False, **kwargs):
+            super().__init__(
+                *qids, data_model=data_model, mask=mask, ivar=ivar, calibrated=calibrated, downgrade=downgrade, mask_version=mask_version, mask_name=mask_name, notes=notes, **kwargs
+                )
+        
+            # save model-specific info
+            self._num_splits = self._ivar.shape[-4]
+            assert self._num_splits == utils.get_nsplits_by_qid(self._qids[0], self._data_model), \
+                'Num_splits inferred from ivar shape != num_splits from data model table'
+            self._lamb = lamb
+            if lmax is None:
+                lmax = wav_noise.lmax_from_wcs(self._mask.wcs)
+            self._lmax = lmax
+            self._smooth_loc = smooth_loc
+
+            # save correction factors for later
+            with bench.show('Getting correction factors'):
+                corr_fact = utils.get_corr_fact(self._ivar)
+                corr_fact = enmap.extract(corr_fact, self._mask.shape, self._mask.wcs)
+                self._corr_fact = corr_fact
+
+            # initialize unloaded noise model
+            self._sqrt_cov_wav = None
+            self._sqrt_cov_ell = None
+            self._w_ell = None
+
+    def _get_model_fn(self):
+        return [
+            simio.get_wav_model_fn(
+                self._qids, s, self._lamb, self._lmax, self._smooth_loc, notes=self._notes,
+                data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
+                calibrated=self._calibrated, downgrade=self._downgrade, **self._kwargs
+                ) for s in range(self._num_splits)
+            ]
+
+    def _get_sim_fn(self, split_num, sim_num, alm=False):
+        # only difference w.r.t. above is split_num, sim_num, and alm flag
+        return simio.get_wav_sim_fn(
+            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, sim_num, alm=alm, notes=self._notes,
+            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
+            calibrated=self._calibrated, downgrade=self._downgrade, **self._kwargs
+        )
+
+    def get_model(self, check_on_disk=True, write=True, keep=False, verbose=False, **kwargs):
+        pass
+
+    def _get_model_from_disk(self, keep=True, **kwargs):
+        pass
+
+    def get_sim(self, split_num, sim_num, alm=False, check_on_disk=True, write=False, verbose=False, **kwargs):
+        pass
+
+
+
+
+
