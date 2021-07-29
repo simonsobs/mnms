@@ -130,13 +130,19 @@ def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, notes=None, **kwarg
     fn = config['covmat_path']
     fn += _get_sim_fn_root(qid, **kwargs)
 
+    # allow for possibility of no smooth_loc
+    if not smooth_loc:
+        smooth_loc = ''
+    else:
+        smooth_loc = '_smoothloc'
+
     # allow for possibility of no notes
     if notes is None:
         notes = ''
     else:
         notes = f'_{notes}'
-    
-    fn += f'lamb{lamb}_lmax{lmax}_smoothloc_{smooth_loc}{notes}_set{split_num}.hdf5'
+        
+    fn += f'lamb{lamb}_lmax{lmax}{smooth_loc}{notes}_set{split_num}.hdf5'
     return fn
     
 def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, sim_num, alm=False, notes=None, **kwargs):
@@ -173,13 +179,19 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, sim_num, alm=False, n
     fn = config['maps_path']
     fn += _get_sim_fn_root(qid, **kwargs)
 
+    # allow for possibility of no smooth_loc
+    if not smooth_loc:
+        smooth_loc = ''
+    else:
+        smooth_loc = '_smoothloc'
+
     # allow for possibility of no notes
     if notes is None:
         notes = ''
     else:
         notes = f'_{notes}'
     
-    fn += f'lamb{lamb}_lmax{lmax}_smoothloc_{smooth_loc}{notes}_set{split_num}_'
+    fn += f'lamb{lamb}_lmax{lmax}{smooth_loc}{notes}_set{split_num}_'
 
     # prepare or set (split) and map num tags
     mapalm = 'alm' if alm else 'map'

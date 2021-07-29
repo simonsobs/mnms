@@ -152,7 +152,7 @@ class NoiseModel(ABC):
         
         assert self._union_sources is not None, f'Inpainting needs union-sources, got {self._union_sources}'
             
-        ra, dec = self_data_model.get_act_mr3f_union_sources(version=self._union_sources) 
+        ra, dec = self._data_model.get_act_mr3f_union_sources(version=self._union_sources) 
         catalog = np.radians(np.vstack([dec, ra]))
         ivar_eff = utils.get_ivar_eff(self._ivar, use_inf=True)
 
