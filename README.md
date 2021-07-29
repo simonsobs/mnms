@@ -8,8 +8,12 @@ This codebase is under active-development -- we can't guarantee future commits w
 Users wishing to filter data or generate noise simulations should have the following dependencies in their environment:
 * from `simonsobs`: `pixell`, `soapack`
 * from individuals: [`enlib`](https://github.com/amaurea/enlib), [`optweight`](https://github.com/AdriJD/optweight), [`orphics`](https://github.com/msyriac/orphics) 
-* less-common distributions: `astropy`, `mpi4py`, `tqdm`
-* common distributions: `numpy`, `scipy`, `matplotlib`
+* less-common distributions: `astropy`
+* common distributions: `numpy`, `scipy`
+* optional but good idea to have: `mpi4py`,  `matplotlib`, `tqdm`
+
+A note on [`enlib`](https://github.com/amaurea/enlib): users need access to the top-level python modules and the compiled library "array ops." The first is achieved just by adding  the repo to your `PYTHONPATH`. The second must be compiled via `make array_ops` executed from within the top-level directory. Please see the enlib docs for more info on how to do this on your system. We have had success using an up-to-date intel `c` compiler with intel `mkl` loaded in your environment, if available.
+
 
 ## Installation
 Clone this repo and `cd` to `/path/to/mnms/`:
@@ -31,9 +35,9 @@ This package looks for raw data and saves products using the functionality in `s
 ```
 mkdir ~/.soapack.yml
 ```
-Currently only raw ACT data is supported. Users must configure their `soapack` configuration file accordingly: there must be a `dr5` block that points to raw data on disk. Required fields within this block are `coadd_input_path`, `coadd_output_path`, `coadd_beam_path`, `planck_path`, `mask_path`. Optionally users can add a `default_mask_version` field or accept the `soapack` default of `masks_20200723`. Further details can be gleaned from the `soapack` [source](https://github.com/simonsobs/soapack/blob/master/soapack/interfaces.py). Sample configuration files with prepopulated paths to raw data for various clusters can be found [in this repository](https://github.com/ACTCollaboration/soapack_configs).
+Currently only raw ACT data is supported. Users must configure their `soapack` configuration file accordingly: there must be a `dr5` and/or `dr6` block that points to raw data on disk. Required fields within this block are `coadd_input_path`, `coadd_output_path`, `coadd_beam_path`, `planck_path`, `mask_path`. Optionally users can add a `default_mask_version` field or accept the `soapack` default of `masks_20200723`. Further details can be gleaned from the `soapack` [source](https://github.com/simonsobs/soapack/blob/master/soapack/interfaces.py). Sample configuration files with prepopulated paths to raw data for various clusters can be found [in this repository](https://github.com/ACTCollaboration/soapack_configs).
 
-To support storing products out of this repository, users must also include a `mnms` block in their `soapack` configuration file. Required fields include `maps_path`, `covmat_path`, `mask_path`, and `default_sync_version`. Optionally users can add a `default_mask_version` or accept the `default_mask_version` that results from their `dr5` block.
+To support storing products out of this repository, users must also include a `mnms` block in their `soapack` configuration file. Required fields include `maps_path`, `covmat_path`, `mask_path`, and `default_data_model`, where the value of the `default_data_model` must be the string name of either the `dr5` or `dr6` block.
 
 An example of a sufficient `soapack.yml` file (which would work on any `tigress` cluster) is here:
 ```
@@ -49,28 +53,29 @@ mnms:
     maps_path: "/scratch/gpfs/zatkins/data/ACTCollaboration/mnms/maps/"
     covmat_path: "/scratch/gpfs/zatkins/data/ACTCollaboration/mnms/covmats/"
     mask_path: "/scratch/gpfs/zatkins/data/ACTCollaboration/mnms/masks/"
-    default_sync_version: "20201207"
+    default_data_model: "dr5"
 ```
 
 ### Outputs
 Let's explain what the `mnms` settings mean. We defer that discussion for the `dr5` block to an understanding of `soapack`, but in short it defines the default locations of raw data.
 
-The code in this repository generically happens in two steps: (1) building a noise model from maps, and (2) drawing a simulation from that noise model. Step 1 saves a covariance-like object (exact form depends on the model) in `covmat_path`. Step 2 loads that product from disk, and saves simulations in `maps_path`. The hyperparameters of the model/simulation combo are recorded in the filenames of the files-on-disk. This is how a simulation with a given set of hyperparameters, for instance tile size or wavelet spacing, can find the correct covariance file in `covmat_path`. The generation/parsing of these filenames is provided by the functions in `mnms/simio.py`. 
+The code in this repository generically happens in two steps: (1) building a noise model from maps, and (2) drawing a simulation from that noise model. Step 1 saves a covariance-like object (exact form depends on the model) in `covmat_path`. Step 2 loads that product from disk, and optionally saves simulations in `maps_path`. The hyperparameters of the model/simulation combo are recorded in the filenames of the files-on-disk. This is how a simulation with a given set of hyperparameters, for instance tile size or wavelet spacing, can find the correct covariance file in `covmat_path`. The generation/parsing of these filenames is provided by the functions in `mnms/simio.py`. 
 
-One hyperparameter of every noise model/simulation combo is the analysis mask. The function `simio.get_sim_mask` is used in the scripts to load either an "off-the-shelf" mask from the `dr5` block raw data (or a custom mask from the `mnms` block `mask_path`) if the function kwarg `bin_apod` is `True` (`False`). In either case, the kwarg `mask_version` defaults to the corresponding `default_mask_version` from the `dr5` (`mnms`) block. Other function kwargs (for instance, `mask_name`) specificy which file to load from within the directory `mask_path` + `mask_version`. 
+One hyperparameter of every noise model/simulation combo is the analysis mask. The function `simio.get_sim_mask_fn` is used in the classes to load either an "off-the-shelf" mask from the `dr5` block (in the example config) raw data (or a custom mask from the `mnms` block `mask_path`) if the function kwarg `use_default_mask` is `True` (`False`).  If not provided, the kwarg `mask_version` defaults to the `default_mask_version` `mnms` block if it exists, or the same from the `default_data_model` (e.g. `dr5`) block. Other function kwargs (for instance, `mask_name`) specify which file to load from within the directory `mask_path` + `mask_version`. 
 
-Another hyperparameter is the raw data itself. For convenience, this must be specified in the `mnms` block as `default_sync_version`. If the raw data is synced/updated at a later date, users will want to change this value to correctly tag their products.
+Another hyperparameter is the raw data itself. This is pointed to by the `soapack` data models. The classes/methods here use the `default_data_model` if none is explicitly provided.
 
 An example set of filenames produced by `simio.py` for the tiled noise model are shown here:
 ```
 /scratch/gpfs/zatkins/data/ACTCollaboration/mnms/covmats/
-    s18_04_sync_20201207_v1_BN_bottomcut_cal_True_dg2_smooth1d5_mnms2_noise_1d.fits
-    s18_04_sync_20201207_v1_BN_bottomcut_cal_True_dg2_w4.0_h4.0_smoothell400_mnms2_noise_tiled_2d.fits
+    s18_04_dr5_v1_BN_bottomcut_cal_True_dg2_lamb1.3_lmax5000_smoothloc_False_nm_test_20210728_set1.hdf5
+    s18_04_dr5_v1_BN_bottomcut_cal_True_dg4_w4.0_h4.0_lsmooth400_lmax5400_nm_test_20210728.fits
     
 /scratch/gpfs/zatkins/data/ACTCollaboration/mnms/maps/
-    s18_04_sync_20201207_v1_BN_bottomcut_cal_True_dg2_smooth1d5_w4.0_h4.0_smoothell400_scale200_taper200_mnms2_set1_map_002.fits
+    s18_04_dr5_v1_BN_bottomcut_cal_True_dg2_lamb1.3_lmax5000_smoothloc_False_nm_test_20210728_set1_map0001.fits
+    s18_04_dr5_v1_BN_bottomcut_cal_True_dg4_w4.0_h4.0_lsmooth400_lmax5400_nm_test_20210728_set1_map0001.fits
 ```
-There are two covariance files because the tiled noise model requires a second model to inpaint the largest scales (~tile size), see the scientific documentation. Anyway, you can see common information in the filenames: the detector array is `s18_04`. The `sync` version is the `default_sync_version`. The mask is not the default; it is instead set by passing `bin_apod=False, mask_version='v1', mask_name='BN_bottomcut'` to `simio.get_sim_mask` (you could also eliminate the need to pass the `mask_version` kwarg explicitly by adding `default_mask_version: v1` to the `mnms` block). A change to any of these hyperparameters -- the raw data "sync," or the analysis mask -- would result in a need to regenerate any noise models and simulations.
+We show a covariance file for each of the wavelet and tiled noise models, likewise for some simulated maps. You can see common information in the filenames: the detector array is `s18_04`. The mask is not the default; it is instead set by passing `use_default_mask=False, mask_version='v1', mask_name='BN_bottomcut'` to `simio.get_sim_mask_fn` (you could also eliminate the need to pass the `mask_version` kwarg explicitly by adding `default_mask_version: v1` to the `mnms` block). A change to any of these hyperparameters would result in a need to regenerate any noise models and simulations.
 
 The next set of hyperparameters are described next.
 
