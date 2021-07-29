@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 
 class NoiseModel(ABC):
 
-    def __init__(self, *qids, data_model=None, mask=None, ivar=None, calibrated=True, downgrade=1, mask_version=None, mask_name=None, notes=None, **kwargs):
+    def __init__(self, *qids, data_model=None, mask=None, ivar=None, calibrated=True, downgrade=1, mask_version=None, mask_name=None, notes=None, union_sources=None, **kwargs):
 
         # if mask and ivar are provided, there is no way of checking whether calibrated, what downgrade, etc
         
@@ -26,7 +26,8 @@ class NoiseModel(ABC):
         self._mask_version = mask_version
         self._mask_name = mask_name
         self._notes = notes
-        self._kwargs = kwargs
+        self._union_sources = union_sources
+        self._kwargs = kwargs        
 
         # get derived instance properties
         self._num_arrays = len(self._qids)
@@ -116,7 +117,12 @@ class NoiseModel(ABC):
             with bench.show(f'Loading imap for {qid}'):
                 # get the data and extract to mask geometry
                 imap = self._data_model.get_splits(qid, calibrated=self._calibrated)
-                imap = enmap.extract(imap, shape, wcs)
+
+            if self._union_sources:
+                with bench.show(f'Inpaint point sources for {qid}'):
+                    self._inpaint(imap)
+
+            imap = enmap.extract(imap, shape, wcs)
                 
             if self._downgrade != 1:
                 with bench.show(f'Downgrading imap for {qid}'):  
@@ -128,8 +134,34 @@ class NoiseModel(ABC):
         imaps = enmap.enmap(imaps, wcs=imap.wcs)
         return imaps
 
-    def _inpaint(self):
-        pass
+    def _inpaint(self, imap, radius=6, ivar_threshold=4, inplace=True):
+        '''
+        Inpaint point sources given by the union catalog in input map.
+        
+        Parameters
+        ---------
+        radius : float, optional
+            Radius in arcmin of inpainted region around each source.
+        ivar_threshold : float, optional
+            Also inpaint ivar and maps at pixels where the ivar map is below this 
+            number of median absolute deviations below the median ivar in the 
+            thumbnail. To inpaint erroneously cut regions around point sources
+        inplace : bool, optional
+            Modify input map.
+        '''
+        
+        assert self._union_sources is not None, f'Inpainting needs union-sources, got {self._union_sources}'
+            
+        ra, dec = self_data_model.get_act_mr3f_union_sources(version=self._union_sources) 
+        catalog = np.radians(np.vstack([dec, ra]))
+        ivar_eff = utils.get_ivar_eff(self._ivar, use_inf=True)
+
+        mask_bool = np.ones(self._mask.shape, dtype=np.bool)
+        # Make sure mask is actually zero in unobserved regions.
+        mask_bool[self._mask < 0.01] = False
+
+        inpaint.inpaint_noise_catalog(imap, ivar_eff, mask_bool, catalog, inplace=inplace,
+                                      radius=radius, ivar_threshold=ivar_threshold)
 
     @abstractmethod
     def _get_model_fn(self):
@@ -154,9 +186,10 @@ class NoiseModel(ABC):
 class TiledNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, mask=None, ivar=None, calibrated=True, downgrade=1, mask_version=None, mask_name=None, notes=None,
-                    width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, **kwargs):
+                    width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, union_sources=None, **kwargs):
         super().__init__(
-            *qids, data_model=data_model, mask=mask, ivar=ivar, calibrated=calibrated, downgrade=downgrade, mask_version=mask_version, mask_name=mask_name, notes=notes, **kwargs
+            *qids, data_model=data_model, mask=mask, ivar=ivar, calibrated=calibrated, downgrade=downgrade, mask_version=mask_version, mask_name=mask_name,
+            notes=notes, union_sources=union_sources, **kwargs
             )
 
         # save model-specific info
@@ -175,7 +208,7 @@ class TiledNoiseModel(NoiseModel):
         return simio.get_tiled_model_fn(
             self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, notes=self._notes, 
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
-            calibrated=self._calibrated, downgrade=self._downgrade, **self._kwargs
+            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
         )
 
     def _get_sim_fn(self, split_num, sim_num):
@@ -183,7 +216,7 @@ class TiledNoiseModel(NoiseModel):
         return simio.get_tiled_sim_fn(
             self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, split_num, sim_num, notes=self._notes, 
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
-            calibrated=self._calibrated, downgrade=self._downgrade, **self._kwargs
+            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
         )
 
     def get_model(self, nthread=0, flat_triu_axis=1, check_on_disk=True, write=True, keep=False, verbose=False, **kwargs):
@@ -267,9 +300,10 @@ class TiledNoiseModel(NoiseModel):
 class WaveletNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, mask=None, ivar=None, calibrated=True, downgrade=1, mask_version=None, mask_name=None, notes=None,
-                    lamb=1.3, lmax=None, smooth_loc=False, **kwargs):
+                    lamb=1.3, lmax=None, smooth_loc=False, union_sources=None, **kwargs):
             super().__init__(
-                *qids, data_model=data_model, mask=mask, ivar=ivar, calibrated=calibrated, downgrade=downgrade, mask_version=mask_version, mask_name=mask_name, notes=notes, **kwargs
+                *qids, data_model=data_model, mask=mask, ivar=ivar, calibrated=calibrated, downgrade=downgrade, mask_version=mask_version,
+                mask_name=mask_name, notes=notes, union_sources=union_sources, **kwargs
                 )
         
             # save model-specific info
@@ -297,7 +331,7 @@ class WaveletNoiseModel(NoiseModel):
         return simio.get_wav_model_fn(
             self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, notes=self._notes,
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
-            calibrated=self._calibrated, downgrade=self._downgrade, **self._kwargs
+            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
         )
 
     def _get_sim_fn(self, split_num, sim_num, alm=False):
@@ -305,7 +339,7 @@ class WaveletNoiseModel(NoiseModel):
         return simio.get_wav_sim_fn(
             self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, sim_num, alm=alm, notes=self._notes,
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
-            calibrated=self._calibrated, downgrade=self._downgrade, **self._kwargs
+            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
         )
 
     def get_model(self, check_on_disk=True, write=True, keep=False, verbose=False, **kwargs):
