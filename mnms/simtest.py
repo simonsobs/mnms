@@ -16,38 +16,6 @@ def eshow(x, *args, title=None, write=False, fname='',**kwargs):
         enplot.write(fname, plots)
     enplot.show(plots, title=title)
 
-# def fft2Cl_einsum(smap, ledges):
-#     """Go from a map of 2D fourier spectra to an array of 1D power spectra,
-#     with ell bin edges given by the sequence "ledges".
-
-#     Parameters
-#     ----------
-#     smap : ndmap
-#         A set of 2D fourier spectra, with any prepended shape
-#     ledges : iterable
-#         A sequence of bin edges
-
-#     Returns
-#     -------
-#     ndmap
-#         A set of 1D power spectra, with the same prepended shape as smap,
-#         and whose last dimension is the number of bins.
-#     """
-#     ledges = np.atleast_1d(ledges)
-#     assert len(ledges) >= 2
-#     assert len(ledges.shape) == 1
-
-#     # first make array of filtered modlmaps by ell range
-#     # this will have shape (nbins, ky, kx)
-#     modlmap = smap.modlmap()
-#     ledges = np.einsum('b,xy->bxy', ledges, np.ones(modlmap.shape))
-#     bin_modlmaps = np.where(np.logical_and(ledges[:-1] <= modlmap, modlmap < ledges[1:]), 1, 0)
-
-#     # get the bincounts and weighted sum, then normalize
-#     bin_counts = np.sum(bin_modlmaps, axis = (-2, -1))
-#     clmap = np.einsum('bxy,...xy->...b', bin_modlmaps, smap)
-#     return clmap/bin_counts
-
 def map2binned_Cl(imap, mode='fft', window=None, lmax=6000, ledges=None, weights=None, normalize=True, spin=[0]):
     if mode == 'fft':
         return _map2binned_Cl_fft(imap, window=window, normalize=normalize, weights=weights, lmax=lmax, ledges=ledges)
@@ -232,7 +200,6 @@ def get_Cl_ratios(data_clmap, sim_clmap, plot=True, save_path=None, map1=0, map2
                 plt.show()
 
     return np.nan_to_num(omap)
-
 
 def get_KS_stats(data, sim, window=None, sample_size=50000, plot=True, save_path=None):
     # prepare window

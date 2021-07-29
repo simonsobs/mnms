@@ -1,14 +1,12 @@
 from mnms import simio, tiled_ndmap, utils, tiled_noise, wav_noise, inpaint
-from soapack import interfaces as sints
 from pixell import enmap, wcsutils
+import healpy as hp
 from enlib import bench
-from optweight import noise_utils, wavtrans
+from optweight import wavtrans
 
 import numpy as np
 
 from abc import ABC, abstractmethod
-from operator import xor
-import os
 
 class NoiseModel(ABC):
 
@@ -255,7 +253,7 @@ class TiledNoiseModel(NoiseModel):
 
         seed = utils.get_seed(*(split_num, sim_num, self._data_model, *self._qids))
 
-        with bench.show('Generating noise model'):
+        with bench.show('Generating noise sim'):
             smap = tiled_noise.get_tiled_noise_sim(
                 self._covsqrt, ivar=self._ivar, num_arrays=self._num_arrays, sqrt_cov_ell=self._sqrt_cov_ell, split=split_num, 
                 seed=seed, nthread=nthread, verbose=verbose
@@ -291,21 +289,19 @@ class WaveletNoiseModel(NoiseModel):
                 self._corr_fact = corr_fact
 
             # initialize unloaded noise model
-            self._sqrt_cov_wav = None
-            self._sqrt_cov_ell = None
-            self._w_ell = None
+            self._sqrt_cov_wavs = {}
+            self._sqrt_cov_ells = {}
+            self._w_ells = {}
 
-    def _get_model_fn(self):
-        return [
-            simio.get_wav_model_fn(
-                self._qids, s, self._lamb, self._lmax, self._smooth_loc, notes=self._notes,
-                data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
-                calibrated=self._calibrated, downgrade=self._downgrade, **self._kwargs
-                ) for s in range(self._num_splits)
-            ]
+    def _get_model_fn(self, split_num):
+        return simio.get_wav_model_fn(
+            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, notes=self._notes,
+            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
+            calibrated=self._calibrated, downgrade=self._downgrade, **self._kwargs
+        )
 
     def _get_sim_fn(self, split_num, sim_num, alm=False):
-        # only difference w.r.t. above is split_num, sim_num, and alm flag
+        # only difference w.r.t. above is sim_num and alm flag
         return simio.get_wav_sim_fn(
             self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, sim_num, alm=alm, notes=self._notes,
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
@@ -313,13 +309,107 @@ class WaveletNoiseModel(NoiseModel):
         )
 
     def get_model(self, check_on_disk=True, write=True, keep=False, verbose=False, **kwargs):
-        pass
+        if check_on_disk:
+            try:
+                for s in range(self._num_splits):
+                    self._get_model_from_disk(s, keep=keep) 
+                return 
+            except (FileNotFoundError, OSError):
+                if verbose:
+                    print('Model not found on disk, generating instead')
 
-    def _get_model_from_disk(self, keep=True, **kwargs):
-        pass
+        # the model needs data, so we need to load it
+        dmap = self._get_data()
+        dmap = utils.get_noise_map(dmap, self._ivar)
+
+        sqrt_cov_wavs = {}
+        sqrt_cov_ells = {}
+        w_ells = {}
+        with bench.show('Generating noise model'):
+            for s in range(self._num_splits):
+                sqrt_cov_wav, sqrt_cov_ell, w_ell = wav_noise.estimate_sqrt_cov_wav_from_enmap(
+                    dmap[:, s], self._mask, self._lmax, lamb=self._lamb, smooth_loc=self._smooth_loc
+                    )
+                sqrt_cov_wavs[s] = sqrt_cov_wav
+                sqrt_cov_ells[s] = sqrt_cov_ell
+                w_ells[s] = w_ell
+
+        if write:
+            for s in range(self._num_splits):
+                fn = self._get_model_fn(s)
+                wavtrans.write_wav(
+                    fn, sqrt_cov_wavs[s], symm_axes=[0,1], extra={'sqrt_cov_ell': sqrt_cov_ells[s], 'w_ell': w_ells[s]}
+                    )
+
+        if keep:
+            self._sqrt_cov_wavs.update(sqrt_cov_wavs)
+            self._sqrt_cov_ells.update(sqrt_cov_ells)
+            self._w_ells.update(w_ells)
+
+    def _get_model_from_disk(self, split_num, keep=True, **kwargs):
+        sqrt_cov_wavs = {}
+        sqrt_cov_ells = {}
+        w_ells = {}
+
+        fn = self._get_model_fn(split_num)
+        sqrt_cov_wav, extra_dict = wavtrans.read_wav(
+            fn, extra=['sqrt_cov_ell', 'w_ell']
+            )
+        sqrt_cov_ell = extra_dict['sqrt_cov_ell']
+        w_ell = extra_dict['w_ell']
+        sqrt_cov_wavs[split_num] = sqrt_cov_wav
+        sqrt_cov_ells[split_num] = sqrt_cov_ell
+        w_ells[split_num] = w_ell
+
+        if keep:
+            self._sqrt_cov_wavs.update(sqrt_cov_wavs)
+            self._sqrt_cov_ells.update(sqrt_cov_ells)
+            self._w_ells.update(w_ells)
 
     def get_sim(self, split_num, sim_num, alm=False, check_on_disk=True, write=False, verbose=False, **kwargs):
-        pass
+        fn = self._get_sim_fn(split_num, sim_num, alm=alm)
+
+        if check_on_disk:
+            try:
+                if alm:
+                    return hp.read_alm(fn)
+                else:
+                    return enmap.read_map(fn)
+            except FileNotFoundError:
+                if verbose:
+                    print('Sim not found on disk, generating instead')
+        
+        if split_num not in self._sqrt_cov_wavs:
+            if verbose:
+                print(f'Model for split {split_num} not loaded, loading from disk')
+            self._get_model_from_disk(split_num)
+
+        seed = utils.get_seed(*(split_num, sim_num, self._data_model, *self._qids))
+
+        with bench.show('Generating noise sim'):
+            if alm:
+                sim, _ = wav_noise.rand_alm_from_sqrt_cov_wav(
+                    self._sqrt_cov_wavs[split_num], self._sqrt_cov_ells[split_num], self._lmax, self._w_ells[split_num],
+                    dtype=np.complex64, seed=seed
+                    )
+                assert sim.ndim == 3, 'Alm must have shape (num_arrays, num_pol, nelem)'
+            else:
+                sim = wav_noise.rand_enmap_from_sqrt_cov_wav(
+                    self._sqrt_cov_wavs[split_num], self._sqrt_cov_ells[split_num], self._mask, self._lmax, self._w_ells[split_num],
+                    dtype=np.float32, seed=seed
+                    )
+                sim *= self._corr_fact[:, split_num]*self._mask
+                assert sim.ndim == 4, 'Map must have shape (num_arrays, num_pol, ny, nx)'
+
+
+        # want shape (num_arrays, num_splits=1, num_pol, ny, nx)
+        sim = sim.reshape(sim.shape[0], 1, *sim.shape[1:])
+        if write:
+            if alm:
+                hp.write_alm(fn, sim, overwrite=True)
+            else:
+                enmap.write_map(fn, sim)
+        return sim
 
 
 
