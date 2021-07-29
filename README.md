@@ -8,7 +8,7 @@ This codebase is under active-development -- we can't guarantee future commits w
 Users wishing to filter data or generate noise simulations should have the following dependencies in their environment:
 * from `simonsobs`: `pixell`, `soapack`
 * from individuals: [`enlib`](https://github.com/amaurea/enlib), [`optweight`](https://github.com/AdriJD/optweight), [`orphics`](https://github.com/msyriac/orphics) 
-* less-common distributions: `astropy`
+* less-common distributions: `astropy`, `numba`
 * common distributions: `numpy`, `scipy`
 * optional but good idea to have: `mpi4py`,  `matplotlib`, `tqdm`
 
@@ -85,15 +85,21 @@ Each noise model -- tiled, wavelets -- have two scripts, one to generate the cov
 ```
 python noise_{gen/sim}_{tile/wav}.py --help
 ```
-For example, in the tiled case, a user would first run `noise_gen_tile.py`.  In addition to the array, data "sync," and mask hyperparameters, users specify whether to downgrade maps (useful for testing, speed/memory performancel e.g. `--downgrade 2` above), tile geometry in degrees (width, height e.g. `--width-deg 4.0 --height-deg 4.0` above), smoothing scale (to reduce sample variance from the small number of input realizations e.g. `--delta-ell-smooth 400`) and an optional `notes` flag (to distinguish otherwise identical hyperparameter sets. e.g. `--notes mnms2` above). For the tiled model, we also specify parameters of the low-ell inpainted model (a global, 1D isotropic power spectrum), e.g. the smoothing width in ell via `--smooth-1d 5`. Most of these particular hyperparameters are the script defaults, acessible in the help string. All these hyperparameters are recorded in the filenames and the products saved in `covmat_path`.
+For example, in the tiled case, a user would first run `noise_gen_tile.py`.  In addition to the array, data model, and mask hyperparameters, users specify whether to downgrade maps (useful for testing, speed/memory performancel e.g. `--downgrade 2` above), tile geometry in degrees (width, height e.g. `--width-deg 4.0 --height-deg 4.0` above), smoothing scale (to reduce sample variance from the small number of input realizations e.g. `--delta-ell-smooth 400`) and an optional `notes` flag (to distinguish otherwise identical hyperparameter sets. e.g. `--notes nm_test_20210728` above). Most of these particular hyperparameters are the script defaults, acessible in the help string. All these hyperparameters are recorded in the simulation filenames and the products saved in `covmat_path`.
 
-To draw a simulation, users run `noise_gen_wav.py`. Specifying the same hyperparameters as before allows `simio` to find the proper products in `covmat_path`. A new set of simulation-specific parameters are then supplied, for example how many maps to generate, or in the case of the tiled noise model, at what large angular scale to "blend-in" a draw from the global, 1D isotropic model. Again, these parameters are recorded in the map files saved in `maps_path`. 
+To draw a simulation, users would run `noise_sim_tile.py`. Specifying the same hyperparameters as before allows `simio` to find the proper products in `covmat_path`. A new set of simulation-specific parameters are then supplied, for example how many maps to generate. Again, these parameters are recorded in the map files saved in `maps_path`. 
+
+## On-the-fly simulations
+
+Simulations can also be drawn on-the-fly (this is actually what the scripts do, of course, they just automatically save the results to disk). We have the same two steps as before: (1) building a (square-root) covariance matrix (which will save itself to disk by default), and (2) drawing a simulation from that matrix. To do this we must first build a `NoiseModel` object (either a `TiledNoiseModel` or `WaveletNoiseModel`). For instance, from the wavelet case:
+```
+
+```
 
 ## Other Notes
 
-* Both noise models can account for correlated detector-arrays and polarizations.
-    * The latter is handled by default, since the calls to `soapack` for a given detector array will load all 3 Stokes components.
-    * The former correlations can be introduced on top by passing a list of array names to the command-line argument `--qid` of any script instead of just one array name.
+* Both noise models can account for correlated detector-arrays.
+    * The array correlations can be introduced on top by passing a list of array names to the command-line argument `--qid` of any script instead of just one array name.
 
 * The timing performance in the scientific documentation assumes properly parallelized slurm jobs.
     * The tiled noise model is currently parallelized using `mpi`; please ensure to set `ntasks` and use `srun` or `mpirun` appropriately in your slurm scripts.
