@@ -27,7 +27,7 @@ def get_sim_mask_fn(qid, data_model, use_default_mask=True, mask_version=None, m
         return f'{fbase}{mask_version}/{mask_name}'
 
 def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=None, mask_name=None, \
-    galcut=None, apod_deg=None, calibrated=None, downgrade=None):
+                     galcut=None, apod_deg=None, calibrated=None, downgrade=None, union_sources=None):
     '''
     '''
     qid = '_'.join(qid)
@@ -53,7 +53,12 @@ def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=None, mask_nam
     else:
         dg_flag = f'dg{downgrade}_'
 
-    fn = f'{qid}_{data_model.name}_{mask_version}_{mask_flag}cal_{calibrated}_{dg_flag}'
+    if union_sources is None:
+        inpaint_flag = ''
+    else:
+        inpaint_flag = f'ip{union_sources}_'
+
+    fn = f'{qid}_{data_model.name}_{mask_version}_{mask_flag}cal_{calibrated}_{dg_flag}_{inpaint_flag}'
     return fn
 
 def get_tiled_model_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, notes=None, **kwargs):
