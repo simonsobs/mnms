@@ -58,7 +58,7 @@ def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=None, mask_nam
     else:
         inpaint_flag = f'ip{union_sources}_'
 
-    fn = f'{qid}_{data_model.name}_{mask_version}_{mask_flag}cal_{calibrated}_{dg_flag}_{inpaint_flag}'
+    fn = f'{qid}_{data_model.name}_{mask_version}_{mask_flag}cal_{calibrated}_{dg_flag}{inpaint_flag}'
     return fn
 
 def get_tiled_model_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, notes=None, **kwargs):
