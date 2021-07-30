@@ -109,11 +109,10 @@ class NoiseModel(ABC):
                         mask.wcs, main_mask.wcs), 'qids do not share a common mask wcs -- this is required!'
 
         if self._downgrade != 1:
-            if i == 0:
-                with bench.show(f'Downgrading mask for {qid}'):
-                    mask = mask.downgrade(self._downgrade)
+            with bench.show(f'Downgrading mask for {qid}'):
+                main_mask = main_mask.downgrade(self._downgrade)
 
-        return mask
+        return main_mask
 
     def _get_ivar(self):
         """Load the inverse-variance maps according to instance attributes"""
