@@ -68,11 +68,11 @@ Another hyperparameter is the raw data itself. This is pointed to by the `soapac
 An example set of filenames produced by `simio.py` for the tiled noise model are shown here:
 ```
 /scratch/gpfs/zatkins/data/ACTCollaboration/mnms/covmats/
-    s18_04_dr5_v1_BN_bottomcut_cal_True_dg2_lamb1.3_lmax5000_smoothloc_False_nm_test_20210728_set1.hdf5
+    s18_04_dr5_v1_BN_bottomcut_cal_True_dg2_lamb1.3_lmax5000_nm_test_20210728_set1.hdf5
     s18_04_dr5_v1_BN_bottomcut_cal_True_dg4_w4.0_h4.0_lsmooth400_lmax5400_nm_test_20210728.fits
     
 /scratch/gpfs/zatkins/data/ACTCollaboration/mnms/maps/
-    s18_04_dr5_v1_BN_bottomcut_cal_True_dg2_lamb1.3_lmax5000_smoothloc_False_nm_test_20210728_set1_map0001.fits
+    s18_04_dr5_v1_BN_bottomcut_cal_True_dg2_lamb1.3_lmax5000_nm_test_20210728_set1_map0001.fits
     s18_04_dr5_v1_BN_bottomcut_cal_True_dg4_w4.0_h4.0_lsmooth400_lmax5400_nm_test_20210728_set1_map0001.fits
 ```
 We show a covariance file for each of the wavelet and tiled noise models, likewise for some simulated maps. You can see common information in the filenames: the detector array is `s18_04`. The mask is not the default; it is instead set by passing `use_default_mask=False, mask_version='v1', mask_name='BN_bottomcut'` to `simio.get_sim_mask_fn` (you could also eliminate the need to pass the `mask_version` kwarg explicitly by adding `default_mask_version: v1` to the `mnms` block). A change to any of these hyperparameters would result in a need to regenerate any noise models and simulations.
