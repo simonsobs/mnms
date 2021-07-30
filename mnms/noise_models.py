@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 class NoiseModel(ABC):
 
     def __init__(self, *qids, data_model=None, mask=None, ivar=None, calibrated=True, downgrade=1,
-                    mask_version=None, mask_name=None, union_sources=None, notes=None, **kwargs):
+                 mask_version=None, mask_name=None, union_sources=None, notes=None, **kwargs):
         """Base class for all NoiseModel subclasses. Supports loading raw data necessary for all 
         subclasses, such as masks and ivars. Also defines some class methods usable in subclasses.
 
@@ -93,7 +93,7 @@ class NoiseModel(ABC):
         for i, qid in enumerate(self._qids):
             with bench.show(f'Loading mask for {qid}'):
                 fn = simio.get_sim_mask_fn(
-                    qid, self._data_model, use_default_mask=self._use_default_mask, 
+                    qid, self._data_model, use_default_mask=self._use_default_mask,
                     mask_version=self._mask_version, mask_name=self._mask_name, **self._kwargs
                 )
                 mask = enmap.read_map(fn)
@@ -241,9 +241,9 @@ class NoiseModel(ABC):
 
 class TiledNoiseModel(NoiseModel):
 
-    def __init__(self, *qids, data_model=None, mask=None, ivar=None, calibrated=True, 
-                    downgrade=1, mask_version=None, mask_name=None, union_sources=None, notes=None,
-                    width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, **kwargs):
+    def __init__(self, *qids, data_model=None, mask=None, ivar=None, calibrated=True,
+                 downgrade=1, mask_version=None, mask_name=None, union_sources=None, notes=None,
+                 width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, **kwargs):
         """A TiledNoiseModel object supports drawing simulations which capture spatially-varying
         noise correlation directions in map-domain data. They also capture the total noise power
         spectrum, spatially-varying map depth, and array-array correlations.
@@ -309,12 +309,13 @@ class TiledNoiseModel(NoiseModel):
                             # will return None if model exists on-disk already
         >>> imap = tnm.get_sim(0, 123) # will get a sim of split 1 from the correlated arrays;
                                        # the map will have "index" 123, which is used in making
-                                       # the random seed
+                                       # the random seed whether or not the sim is saved to disk,
+                                       # and will be recorded in the filename if saved to disk.
         >>> print(imap.shape)
         >>> (2, 1, 3, 5600, 21600)
         """
         super().__init__(
-            *qids, data_model=data_model, mask=mask, ivar=ivar, calibrated=calibrated, downgrade=downgrade, 
+            *qids, data_model=data_model, mask=mask, ivar=ivar, calibrated=calibrated, downgrade=downgrade,
             mask_version=mask_version, mask_name=mask_name,
             notes=notes, union_sources=union_sources, **kwargs
         )
@@ -381,7 +382,8 @@ class TiledNoiseModel(NoiseModel):
         imap = self._get_data()
         with bench.show('Generating noise model'):
             covsqrt, sqrt_cov_ell = tiled_noise.get_tiled_noise_covsqrt(
-                imap, ivar=self._ivar, mask=self._mask, width_deg=self._width_deg, height_deg=self._height_deg, delta_ell_smooth=self._delta_ell_smooth, lmax=self._lmax,
+                imap, ivar=self._ivar, mask=self._mask, width_deg=self._width_deg, height_deg=self._height_deg, 
+                delta_ell_smooth=self._delta_ell_smooth, lmax=self._lmax,
                 nthread=nthread, flat_triu_axis=flat_triu_axis, verbose=verbose
             )
 
@@ -399,6 +401,7 @@ class TiledNoiseModel(NoiseModel):
             self._sqrt_cov_ell = sqrt_cov_ell
 
     def _get_model_from_disk(self, keep=True):
+        """Load a sqrt-covariance matrix from disk. If keep, store it in instance attributes."""
         fn = self._get_model_fn()
         covsqrt, extra_header, extra_hdu = tiled_ndmap.read_tiled_ndmap(
             fn, extra_header=['FLAT_TRIU_AXIS'], extra_hdu=['SQRT_COV_ELL']
@@ -419,6 +422,38 @@ class TiledNoiseModel(NoiseModel):
             self._sqrt_cov_ell = sqrt_cov_ell
 
     def get_sim(self, split_num, sim_num, nthread=0, check_on_disk=True, write=False, verbose=False):
+        """Generate a tiled sim from this TiledNoiseModel.
+
+        Parameters
+        ----------
+        split_num : int
+            The 0-based index of the split to simulate.
+        sim_num : int
+            The map index, used in setting the random seed. Must be non-negative. If the sim
+            is written to disk, this will be recorded in the filename. There is a maximum of
+            9999, ie, one cannot have more than 10_000 of the same sim, of the same split, 
+            from the same noise model (including the `notes`).
+        nthread : int, optional
+            Number of threads to use, by default 0.
+            If 0, use the maximum number of detectable cores (see `utils.get_cpu_count`)
+        check_on_disk : bool, optional
+            If True, first check if the exact sim (including the noise model `notes`), 
+            exists and disk, and if it does, load and return it. If it does not,
+            generate the sim on-the-fly instead, by default True.
+        write : bool, optional
+            Save the generated sim to disk, by default False.
+        verbose : bool, optional
+            Print possibly helpful messages, by default False.
+
+        Returns
+        -------
+        enmap.ndmap
+            A sim of this noise model with the specified sim num, with shape
+            (num_arrays, num_splits, num_pol, ny, nx), even if some of these
+            axes have dimension 1. As implemented, num_splits is always 1. 
+        """
+        assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
+
         fn = self._get_sim_fn(split_num, sim_num)
 
         if check_on_disk:
@@ -452,11 +487,80 @@ class TiledNoiseModel(NoiseModel):
 
 class WaveletNoiseModel(NoiseModel):
 
-    def __init__(self, *qids, data_model=None, mask=None, ivar=None, calibrated=True, downgrade=1, mask_version=None, mask_name=None, notes=None,
-                 lamb=1.3, lmax=None, smooth_loc=False, union_sources=None, **kwargs):
+    def __init__(self, *qids, data_model=None, mask=None, ivar=None, calibrated=True,
+                downgrade=1, mask_version=None, mask_name=None, union_sources=None, notes=None,
+                lamb=1.3, lmax=None, smooth_loc=False, **kwargs):
+        """A WaveletNoiseModel object supports drawing simulations which capture scale-dependent, 
+        spatially-varying map depth. They also capture the total noise power spectrum, and 
+        array-array correlations.
+
+        Parameters
+        ----------
+        qids : str
+            One or more qids to incorporate in model.
+        data_model : soapack.DataModel, optional
+            DataModel instance to help load raw products, by default None.
+            If None, will load the `default_data_model` from the `mnms` config.
+        mask : enmap.ndmap, optional
+            Data mask, by default None.
+            If None, will load a mask according to the `mask_version` and `mask_name` kwargs.
+        ivar : array-like, optional
+            Data inverse-variance maps, by default None.
+            If None, will be loaded via DataModel and according to `downgrade` and `calibrated` kwargs.
+        calibrated : bool, optional
+            Whether to load calibrated raw data, by default True.
+        downgrade : int, optional
+            The factor to downgrade map pixels by, by default 1.
+        mask_version : str, optional
+           The mask version folder name, by default None.
+           If None, will first look in config `mnms` block, then block of default data model.
+        mask_name : str, optional
+            Name of mask file, by default None.
+            If None, a default mask will be loaded from disk.
+        union_sources : str, optional
+            A soapack source catalog, by default None.
+        notes : str, optional
+            A descriptor string to differentiate this instance from
+            otherwise identical instances, by default None.
+        lamb : float, optional
+            Parameter specifying width of wavelets kernels in log(ell), by default 1.3
+        lmax : int, optional
+            The bandlimit of the maps, by default None.
+            If None, will be set to exactly the theoretical CAR limit, ie 90/wcs.wcs.cdelt[1].
+        smooth_loc : bool, optional
+            If passed, use smoothing kernel that varies over the map, smaller along edge of 
+            mask, by default False.
+        kwargs : dict, optional
+            Optional keyword arguments to pass to simio.get_sim_mask_fn (currently just
+            `galcut` and `apod_deg`), by default None.
+
+        Notes
+        -----
+        Unless passed explicitly, the mask and ivar will be loaded at object instantiation time, 
+        and stored as instance attributes.
+
+        Raises
+        ------
+        NotImplementedError
+            Inpainting is not implemented, so `union_sources` must be left None.
+
+        Examples
+        --------
+        >>> from mnms import noise_models as nm
+        >>> wnm = nm.WaveletNoiseModel('s18_03', 's18_04', downgrade=2, notes='my_model')
+        >>> wnm.get_model() # will take several minutes and require a lot of memory
+                            # if running this exact model for the first time, otherwise
+                            # will return None if model exists on-disk already
+        >>> imap = wnm.get_sim(0, 123) # will get a sim of split 1 from the correlated arrays;
+                                       # the map will have "index" 123, which is used in making
+                                       # the random seed whether or not the sim is saved to disk,
+                                       # and will be recorded in the filename if saved to disk.
+        >>> print(imap.shape)
+        >>> (2, 1, 3, 5600, 21600)
+        """
         super().__init__(
             *qids, data_model=data_model, mask=mask, ivar=ivar, calibrated=calibrated, downgrade=downgrade, mask_version=mask_version,
-            mask_name=mask_name, notes=notes, union_sources=union_sources, **kwargs
+            mask_name=mask_name, union_sources=union_sources, notes=notes, **kwargs
         )
 
         # save model-specific info
@@ -496,15 +600,31 @@ class WaveletNoiseModel(NoiseModel):
             calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
         )
 
-    def get_model(self, check_on_disk=True, write=True, keep=False, verbose=False, **kwargs):
+    def get_model(self, check_on_disk=True, write=True, keep=False, verbose=False):
+        """Generate (or load) a sqrt-covariance matrix for this TiledNoiseModel instance.
+
+        Parameters
+        ----------
+        check_on_disk : bool, optional
+            If True, first check if an identical model (including by `notes`) exists
+            on disk. If it does, do nothing or store it in the object attributes,
+            depending on the `keep` kwarg. If it does not, generate the model
+            instead. By default True.
+        write : bool, optional
+            Save the generated model to disk, by default True.
+        keep : bool, optional
+            Store the generated (or loaded) model in the instance attributes, by 
+            default False.
+        verbose : bool, optional
+            Print possibly helpful messages, by default False.
+        """
         if check_on_disk:
             try:
                 for s in range(self._num_splits):
                     self._get_model_from_disk(s, keep=keep)
                 return
             except (FileNotFoundError, OSError):
-                if verbose:
-                    print('Model not found on disk, generating instead')
+                print('Model not found on disk, generating instead')
 
         # the model needs data, so we need to load it
         dmap = self._get_data()
@@ -534,7 +654,8 @@ class WaveletNoiseModel(NoiseModel):
             self._sqrt_cov_ells.update(sqrt_cov_ells)
             self._w_ells.update(w_ells)
 
-    def _get_model_from_disk(self, split_num, keep=True, **kwargs):
+    def _get_model_from_disk(self, split_num, keep=True):
+        """Load a sqrt-covariance matrix from disk. If keep, store it in instance attributes."""
         sqrt_cov_wavs = {}
         sqrt_cov_ells = {}
         w_ells = {}
@@ -554,10 +675,48 @@ class WaveletNoiseModel(NoiseModel):
             self._sqrt_cov_ells.update(sqrt_cov_ells)
             self._w_ells.update(w_ells)
 
-    def get_sim(self, split_num, sim_num, alm=False, check_on_disk=True, write=False, verbose=False, **kwargs):
+    def get_sim(self, split_num, sim_num, alm=False, check_on_disk=True, write=False, verbose=False):
+        """Generate a tiled sim from this WaveletNoiseModel.
+
+        Parameters
+        ----------
+        split_num : int
+            The 0-based index of the split to simulate.
+        sim_num : int
+            The map index, used in setting the random seed. Must be non-negative. If the sim
+            is written to disk, this will be recorded in the filename. There is a maximum of
+            9999, ie, one cannot have more than 10_000 of the same sim, of the same split, 
+            from the same noise model (including the `notes`).
+        alm : bool, optional
+            Generate simulated alms instead of a simulated map, by default False
+        check_on_disk : bool, optional
+            If True, first check if the exact sim (including the noise model `notes`), 
+            exists and disk, and if it does, load and return it. If it does not,
+            generate the sim on-the-fly instead, by default True.
+        write : bool, optional
+            Save the generated sim to disk, by default False.
+        verbose : bool, optional
+            Print possibly helpful messages, by default False.
+
+        Returns
+        -------
+        enmap.ndmap
+            A sim of this noise model with the specified sim num, with shape
+            (num_arrays, num_splits, num_pol, ny, nx), even if some of these
+            axes have dimension 1. As implemented, num_splits is always 1. 
+
+        Raises
+        ------
+        NotImplementedError
+            Generating alms instead of a map is not implemented, so `alm` must 
+            be left False.
+        """
         if alm:
-            raise NotImplementedError('Generating sims as alms not yet implemented')
-            
+            raise NotImplementedError(
+                'Generating sims as alms not yet implemented')
+
+        assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
+
         fn = self._get_sim_fn(split_num, sim_num, alm=alm)
 
         if check_on_disk:
@@ -567,19 +726,15 @@ class WaveletNoiseModel(NoiseModel):
                 else:
                     return enmap.read_map(fn)
             except FileNotFoundError:
-                if verbose:
-                    print('Sim not found on disk, generating instead')
+                print('Sim not found on disk, generating instead')
 
         if split_num not in self._sqrt_cov_wavs:
             if verbose:
-                print(
-                    f'Model for split {split_num} not loaded, loading from disk')
+                print(f'Model for split {split_num} not loaded, loading from disk')
             try:
                 self._get_model_from_disk(split_num)
             except (FileNotFoundError, OSError):
-                if verbose:
-                    print('Model not found on disk, generating instead')
-            self._get_model_from_disk(split_num)
+                print('Model does not exist on-disk, please generate it first')
 
         seed = utils.get_seed(
             *(split_num, sim_num, self._data_model, *self._qids))
