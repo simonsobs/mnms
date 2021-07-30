@@ -91,9 +91,18 @@ To draw a simulation, users would run `noise_sim_tile.py`. Specifying the same h
 
 ## On-the-fly simulations
 
-Simulations can also be drawn on-the-fly (this is actually what the scripts do, of course, they just automatically save the results to disk). We have the same two steps as before: (1) building a (square-root) covariance matrix (which will save itself to disk by default), and (2) drawing a simulation from that matrix. To do this we must first build a `NoiseModel` object (either a `TiledNoiseModel` or `WaveletNoiseModel`). For instance, from the wavelet case:
+Simulations can also be drawn on-the-fly (this is actually what the scripts do, of course, they just automatically save the results to disk). We have the same two steps as before: (1) building a (square-root) covariance matrix (which will save itself to disk by default), and (2) drawing a simulation from that matrix. To do this we must first build a `NoiseModel` object (either a `TiledNoiseModel` or `WaveletNoiseModel`). For instance, from the tiled case:
 ```
-
+from mnms import noise_models as nm
+tnm = nm.TiledNoiseModel('s18_03', 's18_04', downgrade=2, notes='my_model')
+tnm.get_model() # will take several minutes and require a lot of memory
+                # if running this exact model for the first time, otherwise
+                # will return None if model exists on-disk already
+imap = tnm.get_sim(0, 123) # will get a sim of split 1 from the correlated arrays;
+                           # the map will have "index" 123, which is used in making
+                          # the random seed
+print(imap.shape)
+(2, 1, 3, 5600, 21600)
 ```
 
 ## Other Notes
