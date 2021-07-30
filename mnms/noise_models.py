@@ -108,10 +108,10 @@ class NoiseModel(ABC):
                     assert wcsutils.is_compatible(
                         mask.wcs, main_mask.wcs), 'qids do not share a common mask wcs -- this is required!'
 
-            if self._downgrade != 1:
-                if i == 0:
-                    with bench.show(f'Downgrading mask for {qid}'):
-                        mask = mask.downgrade(self._downgrade)
+        if self._downgrade != 1:
+            if i == 0:
+                with bench.show(f'Downgrading mask for {qid}'):
+                    mask = mask.downgrade(self._downgrade)
 
         return mask
 
