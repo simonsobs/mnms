@@ -100,7 +100,8 @@ tnm.get_model() # will take several minutes and require a lot of memory
                 # will return None if model exists on-disk already
 imap = tnm.get_sim(0, 123) # will get a sim of split 1 from the correlated arrays;
                            # the map will have "index" 123, which is used in making
-                          # the random seed
+                           # the random seed whether or not the sim is saved to disk,
+                           # and will be recorded in the filename if saved to disk.
 print(imap.shape)
 (2, 1, 3, 5600, 21600)
 ```
