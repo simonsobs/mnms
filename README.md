@@ -111,10 +111,9 @@ print(imap.shape)
     * The array correlations can be introduced on top by passing a list of array names to the command-line argument `--qid` of any script instead of just one array name.
 
 * The timing performance in the scientific documentation assumes properly parallelized slurm jobs.
-    * The tiled noise model is currently parallelized using `mpi`; please ensure to set `ntasks` and use `srun` or `mpirun` appropriately in your slurm scripts.
-    * The wavelet noise model is multithreaded; please ensure to set the environment variable `OMP_NUM_THREADS` appropriately in your slurm scripts.
+    * Both noise models are multithreaded; please ensure to set the environment variable `OMP_NUM_THREADS` appropriately in your slurm scripts.
 
 * All map products assume the following axis assignment convention: (array, split, polarizaiton, y, x). Because simulations are per-split, the -4 axis always has dimension 1. 
 
 ## Scientific Documentation
-A very brief summary of the two implemented noise models (2D tiled Fourier, 1D wavelets) can be found [here](https://docs.google.com/presentation/d/1Mi6kY25XoiCWD9eNnescAUPJUqoamzAk-KgK_Zzgv94/edit?usp=sharing).
+A very brief summary of the two implemented noise models (2D tiled Fourier, 1D wavelets) can be found [here](https://docs.google.com/presentation/d/1VlqeiXAlzX3Ysn8vUebQWVg6hGEme34UQ2tfeqwE8cM/edit#slide=id.ge63fea64de_0_135).
