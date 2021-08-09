@@ -36,7 +36,7 @@ parser.add_argument('--union-sources', dest='union_sources', type=str, default=N
                     help="Version string for soapack's union sources. E.g. " 
                     "'20210209_sncut_10_aggressive'. Will be used for inpainting.")
 
-parser.add_argument('--data-model', dest='data_model', type=str, default='DR5', 
+parser.add_argument('--data-model', dest='data_model', type=str, default=None, 
                     help='soapack DataModel class to use (default: %(default)s)')
 
 parser.add_argument('--split', nargs='+', dest='split', type=int, 
@@ -68,7 +68,11 @@ parser.add_argument('--alm', dest='alm', default=False,
 
 args = parser.parse_args()
 
-data_model = getattr(sints,args.data_model)()
+if args.data_model:
+    data_model = getattr(sints,args.data_model)()
+else:
+    data_model = None
+    
 model = nm.WaveletNoiseModel(
     *args.qid, data_model=data_model, downgrade=args.downgrade, mask_version=args.mask_version, mask_name=args.mask_name, notes=args.notes,
     lamb=args.lamb, lmax=args.lmax, smooth_loc=args.smooth_loc

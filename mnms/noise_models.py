@@ -324,7 +324,7 @@ class TiledNoiseModel(NoiseModel):
         self._height_deg = height_deg
         self._delta_ell_smooth = delta_ell_smooth
         if lmax is None:
-            lmax = utils.lmax_from_wcs(self._mask)
+            lmax = utils.lmax_from_wcs(self._mask.wcs)
         self._lmax = lmax
 
         # initialize unloaded noise model

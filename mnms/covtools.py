@@ -9,7 +9,7 @@ def smooth_ps_grid_uniform(ps, res, zero_dc=True, diag=False, fill=False, fill_l
     # first fill any values beyond max lmax
     if fill:
         if fill_lmax is None:
-            fill_lmax = utils.lmax_from_wcs(ps)
+            fill_lmax = utils.lmax_from_wcs(ps.wcs)
         fill_boundary(ps, fill_lmax=fill_lmax, fill_lmax_est_width=fill_lmax_est_width, fill_value=fill_value)
     if diag: assert np.all(ps>=0), 'If diag input ps must be positive semi-definite'
     # First get our pixel size in l
@@ -28,7 +28,7 @@ def fill_boundary(ps, fill_lmax=None, fill_lmax_est_width=0, fill_value=None):
     """
     modlmap = ps.modlmap()
     if fill_lmax is None:
-        fill_lmax = utils.lmax_from_wcs(ps)
+        fill_lmax = utils.lmax_from_wcs(ps.wcs)
     assert fill_lmax_est_width > 0 or fill_value is not None, 'Must supply at least fill_lmax_est_width or fill_value'
     if fill_lmax_est_width > 0 and fill_value is None:
         fill_value = get_avg_value_by_ring(ps, modlmap, fill_lmax - fill_lmax_est_width, fill_lmax)

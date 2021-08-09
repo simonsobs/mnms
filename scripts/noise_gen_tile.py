@@ -17,10 +17,14 @@ parser.add_argument('--width-deg',dest='width_deg',type=float,default=4.0,help='
 parser.add_argument('--height-deg',dest='height_deg',type=float,default=4.0,help='height in degrees of central tile size (default: %(default)s)')
 parser.add_argument('--delta-ell-smooth',dest='delta_ell_smooth',type=int,default=400,help='smooth 2D tiled power spectra by a square of this size in Fourier space (default: %(default)s)')
 parser.add_argument('--notes',dest='notes',type=str,default=None,help='a simple notes string to manually distinguish this set of sims (default: %(default)s)')
-parser.add_argument('--data-model',dest='data_model',type=str,default='DR5',help='soapack DataModel class to use (default: %(default)s)')
+parser.add_argument('--data-model',dest='data_model',type=str,default=None,help='soapack DataModel class to use (default: %(default)s)')
 args = parser.parse_args()
 
-data_model = getattr(sints,args.data_model)()
+if args.data_model:
+    data_model = getattr(sints,args.data_model)()
+else:
+    data_model = None
+    
 model = nm.TiledNoiseModel(
     *args.qid, data_model=data_model, downgrade=args.downgrade, mask_version=args.mask_version, mask_name=args.mask_name, notes=args.notes,
     width_deg=args.width_deg, height_deg=args.height_deg, delta_ell_smooth=args.delta_ell_smooth

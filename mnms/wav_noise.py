@@ -243,5 +243,5 @@ def lmax_from_wcs(wcs):
         Max multipole.    
     '''
     
-    return int(180 / np.abs(wcs.wcs.cdelt[0]) / 2)
+    return int(180 / np.abs(wcs.wcs.cdelt[1]) / 2)
 

@@ -189,7 +189,7 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
         mask = np.array([1])
     mask = mask.astype(imap.dtype, copy=False)
     if lmax is None:
-        lmax = utils.lmax_from_wcs(imap)
+        lmax = utils.lmax_from_wcs(imap.wcs)
     imap, sqrt_cov_ell = utils.ell_flatten(imap, mask=mask, return_cov=True, mode='curvedsky', lmax=lmax)
 
     # get the tiled data, apod window
@@ -314,7 +314,7 @@ def get_tiled_noise_sim(covsqrt, ivar=None, num_arrays=None, sqrt_cov_ell=None, 
     if sqrt_cov_ell is not None:
 
         # determine lmax from sqrt_cov_ell, and build the lfilter
-        lmax = min(utils.lmax_from_wcs(omap), sqrt_cov_ell.shape[-1]-1)
+        lmax = min(utils.lmax_from_wcs(omap.wcs), sqrt_cov_ell.shape[-1]-1)
         assert (num_arrays, num_pol) == sqrt_cov_ell.shape[:-1], 'sqrt_cov_ell shape does not match (num_arrays, num_pol, ...)'
         lfilter = sqrt_cov_ell[..., :lmax+1]
         lfilter = np.sqrt(lfilter) # assume sqrt_cov_ell, tile_lfunc defined in terms of power spectra

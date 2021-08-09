@@ -428,8 +428,8 @@ def interp1d_bins(bins, y, return_vals=False, **interp1d_kwargs):
         return interp1d(x, y, fill_value=fill_value, **interp1d_kwargs)
 
 # this is twice the theoretical CAR bandlimit!
-def lmax_from_wcs(imap):
-    return int(180/imap.wcs.wcs.cdelt[1])
+def lmax_from_wcs(wcs):
+    return int(180/np.abs(wcs.wcs.cdelt[1]))
 
 # forces shape to (num_arrays, num_splits, num_pol, ny, nx) and averages over splits
 def ell_flatten(imap, mask=None, return_cov=False, mode='fft', ledges=None, weights=None, lmax=None, ainfo=None, nthread=0):
@@ -474,7 +474,7 @@ def ell_flatten(imap, mask=None, return_cov=False, mode='fft', ledges=None, weig
     
     elif mode == 'curvedsky':
         if lmax is None:
-            lmax = lmax_from_wcs(imap)
+            lmax = lmax_from_wcs(imap.wcs)
 
         # initialize objects to fill up cls
         alms = []
@@ -532,7 +532,7 @@ def ell_filter(imap, lfilter, mode='fft', ainfo=None, lmax=None, nthread=0):
 
         # get the lfilter, which might be different per pol component
         if lmax is None:
-            lmax = lmax_from_wcs(imap)
+            lmax = lmax_from_wcs(imap.wcs)
         if callable(lfilter):
             lfilter = lfilter(np.arange(lmax+1), dtype=imap.dtype)
         assert lfilter.ndim in [1, 2]
