@@ -48,6 +48,15 @@ dr5:
     planck_path: "/projects/ACT/zatkins/sync/20201207/synced_maps/planck_hybrid/"
     mask_path: "/projects/ACT/zatkins/sync/20201207/masks/"
     default_mask_version: "masks_20200723"
+    
+dr6:
+    coadd_input_path: "/projects/ACT/zatkins/sync/20210809/release/"
+    coadd_output_path: "/projects/ACT/zatkins/sync/20201207/synced_maps/imaps_2019/"
+    coadd_beam_path: "/projects/ACT/zatkins/sync/20201207/synced_beams/ibeams_2019/"
+    planck_path: "/projects/ACT/zatkins/sync/20201207/synced_maps/planck_hybrid/"
+    wmap_path: ""
+    mask_path: "/projects/ACT/zatkins/sync/20201207/masks/"
+    default_mask_version: "masks_20200723"
 
 mnms:
     maps_path: "/scratch/gpfs/zatkins/data/ACTCollaboration/mnms/maps/"
@@ -57,7 +66,7 @@ mnms:
 ```
 
 ### Outputs
-Let's explain what the `mnms` settings mean. We defer that discussion for the `dr5` block to an understanding of `soapack`, but in short it defines the default locations of raw data.
+Let's explain what the `mnms` settings mean. We defer that discussion for the `dr5` or `dr6` block to an understanding of `soapack`, but in short it defines the default locations of raw data.
 
 The code in this repository generically happens in two steps: (1) building a noise model from maps, and (2) drawing a simulation from that noise model. Step 1 saves a covariance-like object (exact form depends on the model) in `covmat_path`. Step 2 loads that product from disk, and optionally saves simulations in `maps_path`. The hyperparameters of the model/simulation combo are recorded in the filenames of the files-on-disk. This is how a simulation with a given set of hyperparameters, for instance tile size or wavelet spacing, can find the correct covariance file in `covmat_path`. The generation/parsing of these filenames is provided by the functions in `mnms/simio.py`. 
 
