@@ -1,4 +1,4 @@
-from mnms import simio, tiled_ndmap, utils, tiled_noise, wav_noise, inpaint
+from mnms import simio, tiled_ndmap, utils, soapack_utils as s_utils, tiled_noise, wav_noise, inpaint
 from pixell import enmap, wcsutils
 import healpy as hp
 from enlib import bench
@@ -68,6 +68,7 @@ class NoiseModel(ABC):
 
         # get derived instance properties
         self._num_arrays = len(self._qids)
+        self._num_splits = utils.get_nsplits_by_qid(self._qids[0], self._data_model)
         self._use_default_mask = mask_name is None
 
         # Get ivars and mask -- every noise model needs these for every operation.
@@ -75,11 +76,14 @@ class NoiseModel(ABC):
             self._mask = mask
         else:
             self._mask = self._get_mask()
-
         if ivar is not None:
             self._ivar = ivar
         else:
             self._ivar = self._get_ivar()
+
+        # sanity checks
+        assert self._num_splits == self._ivar.shape[-4], \
+            'Num_splits inferred from ivar shape != num_splits from data model table'
 
     def _get_mask(self):
         """Load the data mask from disk according to instance attributes.
@@ -109,9 +113,8 @@ class NoiseModel(ABC):
                         mask.wcs, main_mask.wcs), 'qids do not share a common mask wcs -- this is required!'
                     
         if self._downgrade != 1:
-            with bench.show(f'Downgrading mask for {qid}'):
+            with bench.show('Downgrading mask'):
                 main_mask = main_mask.downgrade(self._downgrade)
-
         return main_mask
 
     def _get_ivar(self):
@@ -122,8 +125,11 @@ class NoiseModel(ABC):
         ivars : (nmaps, nsplits, npol, ny, nx) enmap
             Inverse-variance maps, possibly downgraded.
         """
+        # load the first ivar map geometry so that we may allocate a buffer to accumulate
+        # all ivar maps in -- this has shape (nmaps, nsplits, npol, ny, nx)
+        ivars = self._empty(ivar=True)
 
-        ivars = []
+        # now fill in the buffer
         for i, qid in enumerate(self._qids):
             fn = simio.get_sim_mask_fn(
                 qid, self._data_model, use_default_mask=self._use_default_mask,
@@ -141,26 +147,31 @@ class NoiseModel(ABC):
                     assert wcsutils.is_compatible(
                         wcs, main_wcs), 'qids do not share a common mask wcs -- this is required!'
 
-            with bench.show(f'Loading ivar for {qid}'):
-                # get the data and extract to mask geometry
-                ivar = self._data_model.get_ivars(
-                    qid, calibrated=self._calibrated)
-                ivar = enmap.extract(ivar, shape, wcs)
+            with bench.show(self._action_str(qid, ivar=True)):
+                if self._calibrated:
+                    mul = s_utils.get_mult_fact(self._data_model, qid, ivar=True)
+                else:
+                    mul = 1
 
-            if self._downgrade != 1:
-                with bench.show(f'Downgrading ivar for {qid}'):
-                    ivar = ivar.downgrade(self._downgrade, op=np.sum)
-
-            ivars.append(ivar)
-
-        # convert to enmap -- this has shape (nmaps, nsplits, npol, ny, nx)
-        ivars = enmap.enmap(ivars, wcs=ivar.wcs)
-
+                # we want to do this split-by-split in case we can save
+                # memory by downgrading one split at a time
+                for j in range(self._num_splits):
+                    ivar = s_utils.read_map(self._data_model, qid, j, ivar=True)
+                    ivar = enmap.extract(ivar, shape, wcs)
+                    
+                    if self._downgrade != 1:
+                        ivar = ivar.downgrade(self._downgrade, op=np.sum)
+                    
+                    ivars[i, j] = ivar * mul
         return ivars
 
     def _get_data(self):
         """Load data maps according to instance attributes, only performed during `get_model` call"""
-        imaps = []
+        # load the first data map geometry so that we may allocate a buffer to accumulate
+        # all data maps in -- this has shape (nmaps, nsplits, npol, ny, nx)
+        imaps = self._empty(ivar=False)
+
+        # now fill in the buffer
         for i, qid in enumerate(self._qids):
             fn = simio.get_sim_mask_fn(
                 qid, self._data_model, use_default_mask=self._use_default_mask,
@@ -178,16 +189,15 @@ class NoiseModel(ABC):
                     assert wcsutils.is_compatible(
                         wcs, main_wcs), 'qids do not share a common mask wcs -- this is required!'
 
-            with bench.show(f'Loading imap for {qid}'):
-                # get the data and extract to mask geometry
-                imap = self._data_model.get_splits(
-                    qid, calibrated=self._calibrated)
+            with bench.show(self._action_str(qid, ivar=False)):
+                if self._calibrated:
+                    mul = s_utils.get_mult_fact(self._data_model, qid, ivar=False)
+                else:
+                    mul = 1
 
-            imap = enmap.extract(imap, shape, wcs)
-
-            if self._union_sources:                
-                with bench.show(f'Inpainting imap for {qid}'):
-
+                # possibly prepare required ivar_upgrade, mask_bool
+                # for inpainting
+                if self._union_sources:                
                     if self._downgrade != 1:
                         # Upgrade the mask and ivar, this is a good approximation.
                         ivar_up = enmap.upgrade(self._ivar[i], self._downgrade)
@@ -200,19 +210,19 @@ class NoiseModel(ABC):
                         if i == 0:
                             mask_bool = utils.get_mask_bool(self._mask)
 
-                    # Note, add split_num kwarg to inpaint once we switch to per-split
-                    # loading of data to get unique seeds per split.
-                    self._inpaint(imap, ivar_up, mask_bool, qid=qid) 
-                    del ivar_up, mask_bool
+                # we want to do this split-by-split in case we can save
+                # memory by downgrading one split at a time
+                for j in range(self._num_splits):
+                    imap = s_utils.read_map(self._data_model, qid, j, ivar=False)
+                    imap = enmap.extract(imap, shape, wcs)
 
-            if self._downgrade != 1:
-                with bench.show(f'Downgrading imap for {qid}'):
-                    imap = imap.downgrade(self._downgrade)
+                    if self._union_sources:
+                        self._inpaint(imap, ivar_up, mask_bool, qid=qid, split_num=j) 
 
-            imaps.append(imap)
-
-        # convert to enmap -- this has shape (nmaps, nsplits, npol, ny, nx)
-        imaps = enmap.enmap(imaps, wcs=imap.wcs)
+                    if self._downgrade != 1:
+                        imap = imap.downgrade(self._downgrade)
+                    
+                    imaps[i, j] = imap * mul
         return imaps
 
     def _inpaint(self, imap, ivar, mask, inplace=True, qid=None, split_num=None):
@@ -242,14 +252,71 @@ class NoiseModel(ABC):
 
         if qid:
             # This makes sure each qid gets a unique seed. The sim index is fixed.
-            split_idx = 0 if split_num is None else split_idx
-            seed = utils.get_seed(*(split_idx, 999999999, self._data_model, qid))
+            split_idx = 0 if split_num is None else split_num
+            seed = utils.get_seed(*(split_idx, 999_999_999, self._data_model, qid))
         else:
             seed = None
 
         return inpaint.inpaint_noise_catalog(imap, ivar, mask_bool, catalog, inplace=inplace, 
                                              seed=seed)
 
+    def _empty(self, ivar=False):
+        """Allocate an empty buffer that will broadcast against the Noise Model 
+        number of arrays, number of splits, and the map (or ivar) shape.
+
+        Parameters
+        ----------
+        ivar : bool, optional
+            If True, load the inverse-variance map shape for the qid and
+            split. If False, load the source-free map shape for the same,
+            by default False.
+
+        Returns
+        -------
+        enmap.ndmap
+            An empty ndmap with shape (num_arrays, num_splits, num_pol, ny, nx),
+            with dtype of the instance soapack.DataModel. If ivar is True, num_pol
+            likely is 1. If ivar is False, num_pol likely is 3.
+        """
+        shape, wcs = s_utils.read_map_geometry(self._data_model, self._qids[0], 0, ivar=ivar)
+        if self._downgrade != 1:
+            shape = (shape[0], *np.array(shape[-2:]) // self._downgrade)
+        shape = (self._num_arrays, self._num_splits, *self.shape)
+        return enmap.empty(shape, wcs=wcs, dtype=self._data_model.dtype)
+
+    def _action_str(self, qid, ivar=False):
+        """Get a string for benchmarking the loading step of a map product.
+
+        Parameters
+        ----------
+        qid : str
+            Map identification string
+        ivar : bool, optional
+            If True, print 'ivar' where appropriate. If False, print 'imap'
+            where appropriate, by default False.
+
+        Returns
+        -------
+        str
+            Benchmarking action string.
+
+        Examples
+        --------
+        >>> from mnms import noise_models as nm
+        >>> tnm = nm.TiledNoiseModel('s18_03', downgrade=2, union_sources='20210209_sncut_10_aggressive', notes='my_model')
+        >>> tnm._action_str('s18_03')
+        >>> 'Loading, inpainting, downgrading imap for s18_03'
+        """
+        mapstr = 'ivar' if ivar else 'imap'
+        if self._downgrade != 1 and self._union_sources:
+            return f'Loading, inpainting, downgrading {mapstr} for {qid}'
+        elif self._downgrade != 1 and not self._union_sources:
+            return f'Loading, downgrading {mapstr} for {qid}'
+        elif self._downgrade == 1 and self._union_sources:
+            return f'Loading, inpainting {mapstr} for {qid}'
+        else:
+            return f'Loading for {qid}'
+        
     @abstractmethod
     def _get_model_fn(self):
         pass
@@ -596,9 +663,6 @@ class WaveletNoiseModel(NoiseModel):
         )
 
         # save model-specific info
-        self._num_splits = self._ivar.shape[-4]
-        assert self._num_splits == utils.get_nsplits_by_qid(self._qids[0], self._data_model), \
-            'Num_splits inferred from ivar shape != num_splits from data model table'
         self._lamb = lamb
         if lmax is None:
             lmax = wav_noise.lmax_from_wcs(self._mask.wcs)

@@ -170,7 +170,7 @@ def get_iso_curvedsky_noise_sim(covar, ivar=None, flat_triu_axis=0, oshape=None,
     return omap
 
 def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, 
-                                        nthread=0, flat_triu_axis=1, verbose=False):
+                                        nthread=0, verbose=False):
     '''Generate the 2d noise spectra for each of the tiles
     '''
 
@@ -263,7 +263,7 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
     return imap.sametiles(smap), sqrt_cov_ell
 
 def get_tiled_noise_sim(covsqrt, ivar=None, num_arrays=None, sqrt_cov_ell=None, nthread=0,
-                        split=None, seed=None, seedgen_args=None, lowell_seed=False, verbose=True):
+                        split=None, seed=None, verbose=True):
     
     # check that covsqrt is a tiled tiled_ndmap instance    
     assert covsqrt.tiled, 'Covsqrt must be tiled'
