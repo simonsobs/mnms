@@ -22,7 +22,7 @@ args = parser.parse_args()
 
 data_model = getattr(sints,args.data_model)()
 model = nm.TiledNoiseModel(
-    *args.qid, data_model=data_model, downgrade=args.downgrade, mask_version=args.mask_version, mask_name=args.mask_name, notes=args.notes,
-    width_deg=args.width_deg, height_deg=args.height_deg, delta_ell_smooth=args.delta_ell_smooth
-    )
+    *args.qid, data_model=data_model, downgrade=args.downgrade, mask_version=args.mask_version,
+    mask_name=args.mask_name, notes=args.notes, width_deg=args.width_deg, height_deg=args.height_deg,
+    delta_ell_smooth=args.delta_ell_smooth, union_sources=args.union_sources)
 model.get_model(check_on_disk=False, verbose=True)

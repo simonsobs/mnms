@@ -41,7 +41,7 @@ args = parser.parse_args()
 
 data_model = getattr(sints,args.data_model)()
 model = nm.WaveletNoiseModel(
-    *args.qid, data_model=data_model, downgrade=args.downgrade, mask_version=args.mask_version, mask_name=args.mask_name, notes=args.notes,
-    lamb=args.lamb, lmax=args.lmax, smooth_loc=args.smooth_loc
-    )
+    *args.qid, data_model=data_model, downgrade=args.downgrade, mask_version=args.mask_version,
+    mask_name=args.mask_name, notes=args.notes, lamb=args.lamb, lmax=args.lmax, 
+    smooth_loc=args.smooth_loc, union_sources=args.union_sources)
 model.get_model(check_on_disk=False, verbose=True)
