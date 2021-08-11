@@ -40,18 +40,13 @@ class NoiseModel(ABC):
             Name of mask file, by default None.
             If None, a default mask will be loaded from disk.
         union_sources : str, optional
-            A soapack source catalog, by default None.
+            A soapack source catalog, by default None. If given, inpaint data and ivar maps.
         notes : str, optional
             A descriptor string to differentiate this instance from
             otherwise identical instances, by default None.
         kwargs : dict, optional
             Optional keyword arguments to pass to simio.get_sim_mask_fn (currently just
             `galcut` and `apod_deg`), by default None.
-
-        Raises
-        ------
-        NotImplementedError
-            Inpainting is not implemented, so `union_sources` must be left None.
         """
 
         # if mask and ivar are provided, there is no way of checking whether calibrated, what downgrade, etc
@@ -68,8 +63,6 @@ class NoiseModel(ABC):
         self._mask_version = mask_version
         self._mask_name = mask_name
         self._notes = notes
-        if union_sources is not None:
-            raise NotImplementedError('Inpainting not yet implemented')
         self._union_sources = union_sources
         self._kwargs = kwargs
 
@@ -77,7 +70,7 @@ class NoiseModel(ABC):
         self._num_arrays = len(self._qids)
         self._use_default_mask = mask_name is None
 
-        # get ivars and mask -- every noise model needs these for every operation
+        # Get ivars and mask -- every noise model needs these for every operation.
         if mask is not None:
             self._mask = mask
         else:
@@ -89,7 +82,14 @@ class NoiseModel(ABC):
             self._ivar = self._get_ivar()
 
     def _get_mask(self):
-        """Load the data mask from disk according to instance attributes."""
+        """Load the data mask from disk according to instance attributes.
+
+        Returns
+        -------
+        mask : (ny, nx) enmap
+            Sky mask. Dowgraded if requested.
+        """
+
         for i, qid in enumerate(self._qids):
             with bench.show(f'Loading mask for {qid}'):
                 fn = simio.get_sim_mask_fn(
@@ -107,7 +107,7 @@ class NoiseModel(ABC):
                         mask, main_mask), 'qids do not share a common mask -- this is required!'
                     assert wcsutils.is_compatible(
                         mask.wcs, main_mask.wcs), 'qids do not share a common mask wcs -- this is required!'
-
+                    
         if self._downgrade != 1:
             with bench.show(f'Downgrading mask for {qid}'):
                 main_mask = main_mask.downgrade(self._downgrade)
@@ -115,7 +115,14 @@ class NoiseModel(ABC):
         return main_mask
 
     def _get_ivar(self):
-        """Load the inverse-variance maps according to instance attributes"""
+        """Load the inverse-variance maps according to instance attributes.
+
+        Returns
+        -------
+        ivars : (nmaps, nsplits, npol, ny, nx) enmap
+            Inverse-variance maps, possibly downgraded.
+        """
+
         ivars = []
         for i, qid in enumerate(self._qids):
             fn = simio.get_sim_mask_fn(
@@ -148,6 +155,7 @@ class NoiseModel(ABC):
 
         # convert to enmap -- this has shape (nmaps, nsplits, npol, ny, nx)
         ivars = enmap.enmap(ivars, wcs=ivar.wcs)
+
         return ivars
 
     def _get_data(self):
@@ -177,6 +185,26 @@ class NoiseModel(ABC):
 
             imap = enmap.extract(imap, shape, wcs)
 
+            if self._union_sources:                
+                with bench.show(f'Inpainting imap for {qid}'):
+
+                    if self._downgrade != 1:
+                        # Upgrade the mask and ivar, this is a good approximation.
+                        ivar_up = enmap.upgrade(self._ivar[i], self._downgrade)
+                        ivar_up /= self._downgrade ** 2
+                        if i == 0:
+                            mask_bool = utils.get_mask_bool(
+                                enmap.upgrade(self._mask, self._downgrade))
+                    else:
+                        ivar_up = self._ivar[i]
+                        if i == 0:
+                            mask_bool = utils.get_mask_bool(self._mask)
+
+                    # Note, add split_num kwarg to inpaint once we switch to per-split
+                    # loading of data to get unique seeds per split.
+                    self._inpaint(imap, ivar_up, mask_bool, qid=qid) 
+                    del ivar_up, mask_bool
+
             if self._downgrade != 1:
                 with bench.show(f'Downgrading imap for {qid}'):
                     imap = imap.downgrade(self._downgrade)
@@ -187,35 +215,40 @@ class NoiseModel(ABC):
         imaps = enmap.enmap(imaps, wcs=imap.wcs)
         return imaps
 
-    def _inpaint(self, imap, radius=6, ivar_threshold=4, inplace=True):
-        """
-        Inpaint point sources given by the union catalog in input map.
+    def _inpaint(self, imap, ivar, mask, inplace=True, qid=None, split_num=None):
+        """Inpaint point sources given by the union catalog in input map.
 
         Parameters
         ---------
-        radius : float, optional
-            Radius in arcmin of inpainted region around each source.
-        ivar_threshold : float, optional
-            Also inpaint ivar and maps at pixels where the ivar map is below this 
-            number of median absolute deviations below the median ivar in the 
-            thumbnail. To inpaint erroneously cut regions around point sources
+        imap : (..., 3, Ny, Nx) enmap
+            Maps to be inpainted.
+        ivar : (Ny, Nx) or (..., 1 Ny, Nx) enmap
+            Inverse variance map. If not 2d, shape[:-3] must match imap.
+        mask : (Ny, Nx) bool array
+            Mask, True in observed regions.
         inplace : bool, optional
             Modify input map.
+        qid : str, optional
+            Array identifier, used to determine seed for inpainting.
+        split_num : int, optional
+            The 0-based index of the split that is inpainted, used to get unique seeds 
+            per split if this function is called per split. Otherwise defaults to 0.
         """
 
         assert self._union_sources is not None, f'Inpainting needs union-sources, got {self._union_sources}'
 
-        ra, dec = self._data_model.get_act_mr3f_union_sources(
-            version=self._union_sources)
-        catalog = np.radians(np.vstack([dec, ra]))
-        ivar_eff = utils.get_ivar_eff(self._ivar, use_inf=True)
+        catalog = utils.get_catalog(self._union_sources)
+        mask_bool = utils.get_mask_bool(mask)
 
-        mask_bool = np.ones(self._mask.shape, dtype=np.bool)
-        # Make sure mask is actually zero in unobserved regions.
-        mask_bool[self._mask < 0.01] = False
+        if qid:
+            # This makes sure each qid gets a unique seed. The sim index is fixed.
+            split_idx = 0 if split_num is None else split_idx
+            seed = utils.get_seed(*(split_idx, 999999999, self._data_model, qid))
+        else:
+            seed = None
 
-        inpaint.inpaint_noise_catalog(imap, ivar_eff, mask_bool, catalog, inplace=inplace,
-                                      radius=radius, ivar_threshold=ivar_threshold)
+        return inpaint.inpaint_noise_catalog(imap, ivar, mask_bool, catalog, inplace=inplace, 
+                                             seed=seed)
 
     @abstractmethod
     def _get_model_fn(self):

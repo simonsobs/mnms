@@ -3,8 +3,10 @@ import numpy as np
 from optweight import mat_utils
 from pixell import enmap, utils
 
+from mnms import utils as m_utils
+
 def catalog_to_mask(catalog, shape, wcs, radius=np.radians(4/60)):
-    '''
+    """
     Convert catalog with DEC, RA values to binary point source mask.
 
     Parameters
@@ -22,7 +24,7 @@ def catalog_to_mask(catalog, shape, wcs, radius=np.radians(4/60)):
     -------
     mask : (Ny, Nx) enmap
         Binary mask. False in circles around point sources.
-    '''
+    """
 
     pix = enmap.sky2pix(shape[-2:], wcs, catalog.T).astype(int)
     mask = enmap.zeros(shape[-2:], wcs=wcs, dtype=bool)
@@ -31,7 +33,7 @@ def catalog_to_mask(catalog, shape, wcs, radius=np.radians(4/60)):
     return ~enmap.grow_mask(mask, radius)
 
 def inpaint_ivar(ivar, mask, thumb_width=40):
-    '''
+    """
     Inpaint small unobserved patches in inverse variance map with mean 
     of surrounding pixels. Done inplace!
 
@@ -48,7 +50,7 @@ def inpaint_ivar(ivar, mask, thumb_width=40):
     -----
     Meant for small amount (~1000s) of clustered unobserved pixels, i.e. 
     erroneously cut point sources, do not use to inpaint large patches.
-    '''
+    """
 
     mask = mask.astype(bool)
 
@@ -71,10 +73,91 @@ def inpaint_ivar(ivar, mask, thumb_width=40):
             ivar_thumb[mask_inpaint] = np.mean(ivar_thumb[mask_est])
 
             insert_thumbnail(ivar_thumb, ivar_view, idxs[0], idxs[1])
-                                                
-def inpaint_noise_catalog(imap, ivar, mask, catalog, radius=4, thumb_width=120,
+                
+def inpaint_ivar_catalog(ivar, mask, catalog, thumb_width=120, ivar_threshold=4,
+                         inplace=False):
+    """
+    Inpaint a noise map at locations specified by a source catalog.
+
+    Parameters
+    ----------
+    ivar : (Ny, Nx) or (..., 1 Ny, Nx) enmap
+        Inverse variance map.
+    mask : (Ny, Nx) bool array
+        Mask, True in observed regions. If not bool, will be converted to bool.
+    catalog : (2, N) array
+        DEC and RA values (in radians) for each point source.
+    thumb_width : float, optional
+        Width in arcmin of thumbnail around each source.
+    ivar_threshold : float, optional
+        Inpaint ivar at pixels where the ivar map is below this 
+        number of median absolute deviations below the median ivar in the 
+        thumbnail. To inpaint erroneously cut regions around point sources
+    inplace : bool, optional
+        Modify input ivar map.
+
+    Returns
+    -------
+    ivar : (..., 3, Ny, Nx) enmap
+        Inpainted map. Copy depending on `inplace`.
+    """
+
+    if not inplace:
+        ivar = ivar.copy()
+
+    if mask.dtype != bool:
+        mask = m_utils.get_mask_bool(mask)
+
+    # Convert to pixel units, this ignores the curvature of the sky.
+    nthumb = utils.nint((thumb_width / 60) / np.min(np.abs(ivar.wcs.wcs.cdelt)))
+    nedge = 3 * nthumb // 7
+
+    # Convert dec, ra to pix y, x and loop over catalog.
+    pix = enmap.sky2pix(ivar.shape[-2:], ivar.wcs, catalog).astype(int)
+
+    for pix_y, pix_x in zip(*pix):
+
+        if not mask[pix_y,pix_x]:
+            # Do not inpaint sources outside mask.
+            continue
+
+        ivarslice = extract_thumbnail(ivar, pix_y, pix_x, nthumb)
+        maskslice = extract_thumbnail(mask, pix_y, pix_x, nthumb)
+
+        # Set pixels below threshold to False.
+        mask_ivar = mask_threshold(ivarslice, ivar_threshold, mask=maskslice)
+        # We do not want to inpaint ivar outside the global mask.
+        mask_ivar[...,~maskslice] = True            
+
+        # Skip inpainting ivar if no bad ivar pixels were found in middle part.
+        if np.all(mask_ivar[...,nedge:-nedge,nedge:-nedge]):
+            continue
+
+        # Grow the False part by 1 arcmin to get slighly more uniform mask.
+        mask_ivar = enmap.enmap(mask_ivar, ivarslice.wcs, copy=False)
+        for idxs in np.ndindex(ivarslice.shape[:-3]):
+            if np.any(mask_ivar[idxs]):
+                continue
+            mask_ivar[idxs] = enmap.shrink_mask(mask_ivar[idxs], np.radians(1 / 60))
+
+        # Invert such that to-be-inpainted parts become True.
+        mask_ivar_inpaint = ~mask_ivar
+        mask_ivar_inpaint[...,~maskslice] = False
+
+        # Inpaint too small ivar pixels with average value in thumbnail.
+        # Loop over outer dims (splits)
+        for idxs in np.ndindex(ivarslice.shape[:-3]):
+
+            ivarslice[idxs][mask_ivar_inpaint[idxs]] = np.mean(
+                ivarslice[idxs][mask_ivar[idxs]])
+
+        insert_thumbnail(ivarslice, ivar, pix_y, pix_x)
+        
+    return ivar
+                                
+def inpaint_noise_catalog(imap, ivar, mask, catalog, radius=6, thumb_width=120,
                           ivar_threshold=None, seed=None, inplace=False):
-    '''
+    """
     Inpaint a noise map at locations specified by a source catalog.
 
     Parameters
@@ -116,7 +199,7 @@ def inpaint_noise_catalog(imap, ivar, mask, catalog, radius=4, thumb_width=120,
     approximation that the 1/f noise is approximated by smoothed version of 
     surrounding pixels. White noise is drawn from ivar map. 
     Main point is that it is much faster than constrained realizations.
-    '''
+    """
 
     rng = np.random.default_rng(seed)
 
@@ -207,7 +290,7 @@ def inpaint_noise_catalog(imap, ivar, mask, catalog, radius=4, thumb_width=120,
     return imap.reshape(shape_in)
 
 def inpaint(imap, ivar, mask_apod, mask_src, mask_est, fwhm, seed=None):
-    '''
+    """
     Inpaint a region in the map (inplace). Uses smoothing to approximate
     1/f noise correlations between inpainted region and rest of map.
     
@@ -237,7 +320,7 @@ def inpaint(imap, ivar, mask_apod, mask_src, mask_est, fwhm, seed=None):
         If mask_src or mask_est are not 2D and not match shape of ivar.
         If mask_src and mask_est have different shapes.
         If leading dimensions of imap and ivar are not the same.
-    '''
+    """
 
     if mask_src.shape != mask_est.shape:
         raise ValueError('Mismatch shapes mask_src and mask_est : '
@@ -284,10 +367,10 @@ def inpaint(imap, ivar, mask_apod, mask_src, mask_est, fwhm, seed=None):
         noise_amps = np.asarray([1, np.sqrt(2), np.sqrt(2)])
         sqrtvar = sqrtvar * noise_amps[:,np.newaxis]
         noise *= sqrtvar
-        imap[idxs][:,mask_src] += noise 
+        imap[idxs][:,mask_src] += noise
 
 def mask_threshold(imap, threshold, mask=None):
-    '''
+    """
     Mask pixels that are below a given number of median absolute
     deviations below the median value in the map. 
 
@@ -305,7 +388,7 @@ def mask_threshold(imap, threshold, mask=None):
     -------
     mask_threshold : (..., Ny, Nx) bool array
         False for pixels below threshold.
-    '''
+    """
     
     mask_threshold = np.zeros(imap.shape, dtype=bool)
 
@@ -320,7 +403,7 @@ def mask_threshold(imap, threshold, mask=None):
     return mask_threshold
 
 def extract_thumbnail(imap, pix_y, pix_x, nthumb):
-    '''
+    """
     Extract square thumbnail from map.
 
     Parameters
@@ -342,7 +425,7 @@ def extract_thumbnail(imap, pix_y, pix_x, nthumb):
     Notes
     -----
     If center is too close to edge, missing pixels are set to zero.
-    '''
+    """
 
     ymin = pix_y - nthumb // 2
     ymax = ymin + nthumb
@@ -354,7 +437,7 @@ def extract_thumbnail(imap, pix_y, pix_x, nthumb):
     return enmap.padslice(imap, box, default=0.)
 
 def insert_thumbnail(thumbnail, imap, pix_y, pix_x):
-    '''
+    """
     Insert square thumbnail into map.
 
     Parameters
@@ -367,7 +450,7 @@ def insert_thumbnail(thumbnail, imap, pix_y, pix_x):
         Y pixel index of center.
     pix_x : int
         X pixel index of center.
-    '''
+    """
 
     if thumbnail.shape[:-2] != imap.shape[:-2]:
         raise ValueError('Leading dimensions of thumbnail and map do not match '

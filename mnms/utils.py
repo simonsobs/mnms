@@ -652,3 +652,44 @@ def get_seed(split_num, sim_num, data_model, *qids, n_max_qids=4, ndigits=9):
     for i in range(len(qids)):
         seed[i+3] = hash_qid(qids[i], ndigits=ndigits)
     return seed
+
+def get_mask_bool(mask, threshold=1e-3):
+    """
+    Return a boolean version of the input mask.
+
+    Parameters
+    ----------
+    mask : enmap
+        Input sky mask.
+    threshold : float, optional
+        Consider values below this number as unobserved (False).
+
+    Returns
+    -------
+    mask_bool : bool enmap
+        Boolean version of input mask.
+    """
+
+    # Makes a copy even if mask is already boolean, which is good.
+    mask_bool = mask.astype(bool)
+    if mask.dtype != bool:
+        mask_bool[mask < threshold] = False
+    return mask_bool
+
+def get_catalog(union_sources):
+    """Load and process source catalog.
+
+    Parameters
+    ----------
+    union_sources : str
+        A soapack source catalog.
+
+    Returns
+    -------
+    catalog : (2, N) array
+        DEC and RA values (in radians) for each point source.
+    """
+
+    ra, dec = sints.get_act_mr3f_union_sources(version=union_sources)
+    return np.radians(np.vstack([dec, ra]))        
+
