@@ -35,6 +35,10 @@ def slice_geometry_by_pixbox(ishape, iwcs, pixbox):
     pb = np.asarray(pixbox)
     return enmap.slice_geometry(ishape[-2:], iwcs, (slice(*pb[:, -2]), slice(*pb[:, -1])), nowrap=True)
 
+def slice_geometry_by_geometry(ishape, iwcs, oshape, owcs):
+    pb = enmap.pixbox_of(iwcs, oshape, owcs)
+    return enmap.slice_geometry(ishape[-2:], iwcs, (slice(*pb[:, -2]), slice(*pb[:, -1])), nowrap=True)
+
 # users must be careful with indices shape. it gets promoted to 2D array by
 # prepending a dimension if necessary. afterward, indices[i] (ie, indexing along
 # axis=0 of 2D indices array) corresponds to axis[i]

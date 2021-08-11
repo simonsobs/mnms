@@ -235,6 +235,10 @@ def inpaint_noise_catalog(imap, ivar, mask, catalog, radius=6, thumb_width=120,
 
     for pix_y, pix_x in zip(*pix):
 
+        if not (pix_y >= 0 and pix_y < mask.shape[-2]) or not (pix_x >= 0 and pix_x < mask.shape[-1]):
+            # Do not inpaint sources that are outside the footprint.
+            continue
+
         if not mask[pix_y,pix_x]:
             # Do not inpaint sources outside mask.
             continue

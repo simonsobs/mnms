@@ -125,28 +125,16 @@ class NoiseModel(ABC):
         ivars : (nmaps, nsplits, npol, ny, nx) enmap
             Inverse-variance maps, possibly downgraded.
         """
+        # first check for mask compatibility and get map geometry
+        shape, wcs = self._check_geometry()
+
         # load the first ivar map geometry so that we may allocate a buffer to accumulate
-        # all ivar maps in -- this has shape (nmaps, nsplits, npol, ny, nx)
+        # all ivar maps in -- this has shape (nmaps, nsplits, npol, ny, nx).
+        # NOTE: we pass in shape, wcs to get the extracted shape
         ivars = self._empty(ivar=True)
 
-        # now fill in the buffer
+        # finally, fill the buffer
         for i, qid in enumerate(self._qids):
-            fn = simio.get_sim_mask_fn(
-                qid, self._data_model, use_default_mask=self._use_default_mask,
-                mask_version=self._mask_version, mask_name=self._mask_name, **self._kwargs
-            )
-            shape, wcs = enmap.read_map_geometry(fn)
-
-            # check that we are using the same mask for each qid -- this is required!
-            if i == 0:
-                main_shape, main_wcs = shape, wcs
-            else:
-                with bench.show(f'Checking mask compatibility between {qid} and {self._qids[0]}'):
-                    assert(
-                        shape == main_shape), 'qids do not share a common mask wcs -- this is required!'
-                    assert wcsutils.is_compatible(
-                        wcs, main_wcs), 'qids do not share a common mask wcs -- this is required!'
-
             with bench.show(self._action_str(qid, ivar=True)):
                 if self._calibrated:
                     mul = s_utils.get_mult_fact(self._data_model, qid, ivar=True)
@@ -167,28 +155,16 @@ class NoiseModel(ABC):
 
     def _get_data(self):
         """Load data maps according to instance attributes, only performed during `get_model` call"""
+        # first check for mask compatibility and get map geometry
+        shape, wcs = self._check_geometry()
+
         # load the first data map geometry so that we may allocate a buffer to accumulate
         # all data maps in -- this has shape (nmaps, nsplits, npol, ny, nx)
+        # NOTE: we pass in shape, wcs to get the extracted shape
         imaps = self._empty(ivar=False)
 
         # now fill in the buffer
         for i, qid in enumerate(self._qids):
-            fn = simio.get_sim_mask_fn(
-                qid, self._data_model, use_default_mask=self._use_default_mask,
-                mask_version=self._mask_version, mask_name=self._mask_name, **self._kwargs
-            )
-            shape, wcs = enmap.read_map_geometry(fn)
-
-            # check that we are using the same mask for each qid -- this is required!
-            if i == 0:
-                main_shape, main_wcs = shape, wcs
-            else:
-                with bench.show(f'Checking mask compatibility between {qid} and {self._qids[0]}'):
-                    assert(
-                        shape == main_shape), 'qids do not share a common mask wcs -- this is required!'
-                    assert wcsutils.is_compatible(
-                        wcs, main_wcs), 'qids do not share a common mask wcs -- this is required!'
-
             with bench.show(self._action_str(qid, ivar=False)):
                 if self._calibrated:
                     mul = s_utils.get_mult_fact(self._data_model, qid, ivar=False)
@@ -217,7 +193,7 @@ class NoiseModel(ABC):
                     imap = enmap.extract(imap, shape, wcs)
 
                     if self._union_sources:
-                        self._inpaint(imap, ivar_up, mask_bool, qid=qid, split_num=j) 
+                        self._inpaint(imap, ivar_up[j], mask_bool, qid=qid, split_num=j) 
 
                     if self._downgrade != 1:
                         imap = imap.downgrade(self._downgrade)
@@ -232,7 +208,7 @@ class NoiseModel(ABC):
         ---------
         imap : (..., 3, Ny, Nx) enmap
             Maps to be inpainted.
-        ivar : (Ny, Nx) or (..., 1 Ny, Nx) enmap
+        ivar : (Ny, Nx) or (..., 1, Ny, Nx) enmap
             Inverse variance map. If not 2d, shape[:-3] must match imap.
         mask : (Ny, Nx) bool array
             Mask, True in observed regions.
@@ -260,6 +236,27 @@ class NoiseModel(ABC):
         return inpaint.inpaint_noise_catalog(imap, ivar, mask_bool, catalog, inplace=inplace, 
                                              seed=seed)
 
+    def _check_geometry(self):
+        """Check that each qid in this instance's qids has compatible shape and wcs with its mask.
+        """
+        for i, qid in enumerate(self._qids):
+            fn = simio.get_sim_mask_fn(
+                qid, self._data_model, use_default_mask=self._use_default_mask,
+                mask_version=self._mask_version, mask_name=self._mask_name, **self._kwargs
+            )
+            shape, wcs = enmap.read_map_geometry(fn)
+
+            # check that we are using the same mask for each qid -- this is required!
+            if i == 0:
+                main_shape, main_wcs = shape, wcs
+            else:
+                with bench.show(f'Checking mask compatibility between {qid} and {self._qids[0]}'):
+                    assert(
+                        shape == main_shape), 'qids do not share a common mask wcs -- this is required!'
+                    assert wcsutils.is_compatible(
+                        wcs, main_wcs), 'qids do not share a common mask wcs -- this is required!'
+        return main_shape, main_wcs
+
     def _empty(self, ivar=False):
         """Allocate an empty buffer that will broadcast against the Noise Model 
         number of arrays, number of splits, and the map (or ivar) shape.
@@ -278,11 +275,12 @@ class NoiseModel(ABC):
             with dtype of the instance soapack.DataModel. If ivar is True, num_pol
             likely is 1. If ivar is False, num_pol likely is 3.
         """
-        shape, wcs = s_utils.read_map_geometry(self._data_model, self._qids[0], 0, ivar=ivar)
-        if self._downgrade != 1:
-            shape = (shape[0], *np.array(shape[-2:]) // self._downgrade)
-        shape = (self._num_arrays, self._num_splits, *self.shape)
-        return enmap.empty(shape, wcs=wcs, dtype=self._data_model.dtype)
+        # read geometry from the map to be loaded. we really just need the first component,
+        # a.k.a "npol"
+        shape, _ = s_utils.read_map_geometry(self._data_model, self._qids[0], 0, ivar=ivar)
+        shape = (shape[0], *self._mask.shape)
+        shape = (self._num_arrays, self._num_splits, *shape)
+        return enmap.empty(shape, wcs=self._mask.wcs, dtype=self._data_model.dtype)
 
     def _action_str(self, qid, ivar=False):
         """Get a string for benchmarking the loading step of a map product.
@@ -307,15 +305,20 @@ class NoiseModel(ABC):
         >>> tnm._action_str('s18_03')
         >>> 'Loading, inpainting, downgrading imap for s18_03'
         """
-        mapstr = 'ivar' if ivar else 'imap'
-        if self._downgrade != 1 and self._union_sources:
-            return f'Loading, inpainting, downgrading {mapstr} for {qid}'
-        elif self._downgrade != 1 and not self._union_sources:
-            return f'Loading, downgrading {mapstr} for {qid}'
-        elif self._downgrade == 1 and self._union_sources:
-            return f'Loading, inpainting {mapstr} for {qid}'
+        if ivar:
+            if self._downgrade != 1:
+                return f'Loading, downgrading ivar for {qid}'
+            else:
+                return f'Loading ivar for {qid}'
         else:
-            return f'Loading for {qid}'
+            if self._downgrade != 1 and self._union_sources:
+                return f'Loading, inpainting, downgrading imap for {qid}'
+            elif self._downgrade != 1 and not self._union_sources:
+                return f'Loading, downgrading imap for {qid}'
+            elif self._downgrade == 1 and self._union_sources:
+                return f'Loading, inpainting imap for {qid}'
+            else:
+                return f'Loading imap for {qid}'
         
     @abstractmethod
     def _get_model_fn(self):
@@ -483,7 +486,7 @@ class TiledNoiseModel(NoiseModel):
             covsqrt, sqrt_cov_ell = tiled_noise.get_tiled_noise_covsqrt(
                 imap, ivar=self._ivar, mask=self._mask, width_deg=self._width_deg, height_deg=self._height_deg, 
                 delta_ell_smooth=self._delta_ell_smooth, lmax=self._lmax,
-                nthread=nthread, flat_triu_axis=flat_triu_axis, verbose=verbose
+                nthread=nthread, verbose=verbose
             )
 
         if write:
