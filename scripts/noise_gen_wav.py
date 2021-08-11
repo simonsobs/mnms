@@ -27,13 +27,13 @@ parser.add_argument('--lambda', dest='lamb', type=float, required=False, default
 parser.add_argument('--smooth-loc', dest='smooth_loc', default=False, action='store_true',
                     help='If passed, use smoothing kernel that varies over the map, smaller along edge of mask.')
 
-parser.add_argument('--notes', dest='notes', type=str, default=None, 
-                    help='a simple notes string to manually distinguish this set of '
-                    'sims (default: %(default)s)')
-
 parser.add_argument('--union-sources', dest='union_sources', type=str, default=None,
                     help="Version string for soapack's union sources. E.g. " 
                     "'20210209_sncut_10_aggressive'. Will be used for inpainting.")
+
+parser.add_argument('--notes', dest='notes', type=str, default=None, 
+                    help='a simple notes string to manually distinguish this set of '
+                    'sims (default: %(default)s)')
 
 parser.add_argument('--data-model', dest='data_model', type=str, default=None, 
                     help='soapack DataModel class to use (default: %(default)s)')
@@ -46,6 +46,6 @@ else:
     
 model = nm.WaveletNoiseModel(
     *args.qid, data_model=data_model, downgrade=args.downgrade, mask_version=args.mask_version,
-    mask_name=args.mask_name, notes=args.notes, lamb=args.lamb, lmax=args.lmax, 
-    smooth_loc=args.smooth_loc, union_sources=args.union_sources)
+    mask_name=args.mask_name, union_sources=args.union_sources, notes=args.notes, lamb=args.lamb, lmax=args.lmax, 
+    smooth_loc=args.smooth_loc)
 model.get_model(check_on_disk=False, verbose=True)
