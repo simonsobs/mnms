@@ -80,7 +80,7 @@ model = nm.WaveletNoiseModel(
 
 # get split nums
 if args.auto_split:
-	splits = np.arange(utils.get_nsplits_by_qid(args.qid[0], data_model))
+	splits = np.arange(model._num_splits)
 else:
 	splits = np.atleast_1d(args.split)
 assert np.all(splits >= 0)
