@@ -130,7 +130,6 @@ class NoiseModel(ABC):
 
         # load the first ivar map geometry so that we may allocate a buffer to accumulate
         # all ivar maps in -- this has shape (nmaps, nsplits, npol, ny, nx).
-        # NOTE: we pass in shape, wcs to get the extracted shape
         ivars = self._empty(ivar=True)
 
         # finally, fill the buffer
@@ -160,7 +159,6 @@ class NoiseModel(ABC):
 
         # load the first data map geometry so that we may allocate a buffer to accumulate
         # all data maps in -- this has shape (nmaps, nsplits, npol, ny, nx)
-        # NOTE: we pass in shape, wcs to get the extracted shape
         imaps = self._empty(ivar=False)
 
         # now fill in the buffer
