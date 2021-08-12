@@ -9,7 +9,6 @@ import argparse
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--qid', dest='qid',nargs='+',type=str,required=True,help='list of soapack DR5 array "qids"')
-parser.add_argument('--no-bin-apod',dest='bin_apod',default=True,action='store_false',help='if passed, do not load default binary apodized mask')
 parser.add_argument('--mask-version',dest='mask_version',type=str,default=None,help='if --no-bin-apod, look in mnms:mask_path/mask_version/ for mask (default: %(default)s)')
 parser.add_argument('--mask-name',dest='mask_name',type=str,default=None,help='if --no-bin-apod, attempt to load mnms:mask_path/mask_version/mask_name.fits (default: %(default)s)')
 parser.add_argument('--downgrade',dest='downgrade', type=int, default=1,help='downgrade all data in pixel space by square of this many pixels per side (default: %(default)s)')
