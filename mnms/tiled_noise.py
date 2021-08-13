@@ -205,6 +205,13 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
     num_arrays, num_splits, num_pol = imap.shape[1:4] # shape is (num_tiles, num_arrays, num_splits, num_pol, ...)
     ncomp = num_arrays * num_pol
     nspec = utils.triangular(ncomp)
+    if verbose:
+        print(
+            f'Number of Unmasked Tiles: {len(imap.unmasked_tiles)}\n' + \
+            f'Number of Arrays: {num_arrays}\n' + \
+            f'Number of Pols.: {num_pol}\n' + \
+            f'Tile shape: {imap.shape[-2:]}'
+            )
 
     # get all the 2D power spectra, averaged over splits
     smap = enmap.fft(imap*apod, normalize='phys', nthread=nthread)
@@ -212,17 +219,8 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
 
     # cycle through the tiles    
     for i, n in enumerate(imap.unmasked_tiles):
-        if verbose:
-            print('Doing tile {} of {}'.format(n, imap.numx*imap.numy-1))
-
-        # get the 2d tile PS, shape is (num_arrays, num_splits, num_pol, ny, nx)
-        # so trace over component -4
-        # this normalization is different than DR4 but avoids the need to save num_splits metadata, and we
-        # only ever simulate splits anyway...
+        # ewcs per tile is necessary for delta_ell_smooth to operate over correct number of Fourier pixels
         _, ewcs = imap.get_tile_geometry(n)
-
-        if verbose:
-            print(f'Shape: {smap[i].shape}')
 
         # iterate over spectra
         for j in range(nspec):
