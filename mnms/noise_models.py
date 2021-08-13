@@ -577,7 +577,7 @@ class TiledNoiseModel(NoiseModel):
 
         with bench.show('Generating noise sim'):
             smap = tiled_noise.get_tiled_noise_sim(
-                self._covsqrt, ivar=self._ivar, num_arrays=self._num_arrays, sqrt_cov_ell=self._sqrt_cov_ell, split=split_num,
+                self._covsqrt, ivar=self._ivar, num_arrays=self._num_arrays, sqrt_cov_ell=self._sqrt_cov_ell, split_num=split_num,
                 seed=seed, nthread=nthread, verbose=verbose
             )
             smap *= self._mask

@@ -424,6 +424,8 @@ def interp1d_bins(bins, y, return_vals=False, **interp1d_kwargs):
     assert len(bins) > 1
     assert bins.ndim == 1
     x = (bins[1:] + bins[:-1])/2
+
+    # want to extend the first and last y values to cover the full domain
     fill_value = (y[0], y[-1])
 
     if return_vals:
@@ -435,44 +437,49 @@ def interp1d_bins(bins, y, return_vals=False, **interp1d_kwargs):
 def lmax_from_wcs(wcs):
     return int(180/np.abs(wcs.wcs.cdelt[1]))
 
-# forces shape to (num_arrays, num_splits, num_pol, ny, nx) and averages over splits
-def ell_flatten(imap, mask=None, return_cov=False, mode='fft', ledges=None, weights=None, lmax=None, ainfo=None, nthread=0):
-    imap = atleast_nd(imap, 5)
+# forces shape to (num_arrays, num_splits, num_pol, ny, nx) and optionally averages over splits
+def ell_flatten(imap, mask=None, return_sqrt_cov=False, per_split=False, mode='fft', ledges=None, weights=None, lmax=None, ainfo=None, nthread=0):
     assert imap.ndim in range(2, 6)
-    num_arrays, num_splits, num_pol = imap.shape[:3]
+    imap = atleast_nd(imap, 5)
+    num_iarrays, num_isplits, num_ipol = imap.shape[:-2]
     
     if mask is None:
         mask = 1
     
     if mode == 'fft':
-
-        # get the power -- since filtering maps by their own power, only need diagonal
+        # get the power -- since filtering maps by their own power, only need diagonal.
+        # also apply mask correction
         kmap = enmap.fft(imap*mask, normalize='phys', nthread=nthread)
-        smap = np.mean(kmap * np.conj(kmap), axis=-4).real
-
-        # apply correction
         w2 = np.mean(mask**2)
-        smap /= num_splits*w2
+        smap = (kmap * np.conj(kmap)).real / w2
 
-        # bin the 2D power into ledges
+        if not per_split:
+            smap = smap.mean(axis=-4, keepdims=True).real
+
+        # get output preshape info from smap, so that if splits are averaged over, num_splits is 1
+        num_oarrays, num_osplits, num_opol = smap.shape[:-2]
+
+        # bin the 2D power into ledges and take the square-root
         modlmap = smap.modlmap().astype(imap.dtype) # modlmap is np.float64 always...
-        smap = radial_bin(smap, modlmap, ledges, weights=weights)
-        ys = []
-        for i in range(num_arrays):
-            for j in range(num_pol):
+        smap = radial_bin(smap, modlmap, ledges, weights=weights) ** 0.5
+        sqrt_cls = []
+        for i in range(num_oarrays):
+            for j in range(num_osplits):
+                for k in range(num_opol):
+                    # interpolate to the center of the bins and apply filter
+                    lfunc, y = interp1d_bins(ledges, smap[i, j, k], return_vals=True, kind='cubic', bounds_error=False)
+                    sqrt_cls.append(y)
+                    lfilter = 1/lfunc(modlmap)
+                    assert np.all(np.isfinite(lfilter)), f'{i,j,k}'
+                    assert np.all(lfilter > 0)
+                    kmap[i, j, k] *= lfilter
+        sqrt_cls = np.array(sqrt_cls).reshape(num_oarrays, num_osplits, num_opol, -1)
 
-                # interpolate to the center of the bins and apply filter
-                lfunc, y = interp1d_bins(ledges, smap[i, j], return_vals=True, kind='cubic', bounds_error=False)
-                ys.append(y)
-                lfilter = 1/np.sqrt(lfunc(modlmap))
-                assert np.all(np.isfinite(lfilter)), f'{i,j}'
-                assert np.all(lfilter > 0)
-                kmap[i, :, j] *= lfilter
-        ys = np.array(ys)
-        ys = ys.reshape(num_arrays, num_pol, -1)
-
-        if return_cov:
-            return enmap.ifft(kmap, normalize='phys', nthread=nthread).real, ys
+        if return_sqrt_cov:
+            # for backwards compatibility, if per_split, slice out singleton split dimension
+            if not per_split:
+                sqrt_cls = sqrt_cls.reshape(num_oarrays, num_opol, -1)
+            return enmap.ifft(kmap, normalize='phys', nthread=nthread).real, sqrt_cls
         else:
             return enmap.ifft(kmap, normalize='phys', nthread=nthread).real
     
@@ -480,42 +487,51 @@ def ell_flatten(imap, mask=None, return_cov=False, mode='fft', ledges=None, weig
         if lmax is None:
             lmax = lmax_from_wcs(imap.wcs)
 
-        # initialize objects to fill up cls
+        # initialize objects to fill up sqrt_cls
         alms = []
         cls = []
 
-        # first average the cls over num_splits, since filtering maps by their own power only need diagonal
-        for i in range(num_arrays):
-            for j in range(num_splits):
+        # since filtering maps by their own power only need diagonal
+        for i in range(num_iarrays):
+            for j in range(num_isplits):
                 assert imap[i, j].ndim in [2, 3]
                 alms.append(curvedsky.map2alm(imap[i, j]*mask, ainfo=ainfo, lmax=lmax))
                 cls.append(curvedsky.alm2cl(alms[-1], ainfo=ainfo))
-        alms = np.array(alms).reshape(num_arrays, num_splits, num_pol, -1)
-        cls = np.array(cls, dtype=imap.dtype).reshape(num_arrays, num_splits, num_pol, -1)
-        cls = cls.mean(axis=-3)
+        alms = np.array(alms).reshape(num_iarrays, num_isplits, num_ipol, -1)
+        cls = np.array(cls, dtype=imap.dtype).reshape(num_iarrays, num_isplits, num_ipol, -1)
 
-        # apply correction
+        if not per_split:
+            cls = cls.mean(axis=-3, keepdims=True)
+        
+        # get output preshape info from cls, so that if splits are averaged over, num_splits is 1
+        num_oarrays, num_osplits, num_opol = cls.shape[:-1]
+
+        # apply correction and take sqrt
         pmap = enmap.pixsizemap(mask.shape, mask.wcs)
         w2 = np.sum((mask**2)*pmap) / np.pi / 4.
-        cls /= w2
+        sqrt_cls = (cls / w2)**0.5
 
         # then, filter the alms
-        out = np.zeros_like(cls)
-        lfilters = np.divide(1, np.sqrt(cls), where=cls!=0, out=out)
-        for i in range(num_arrays):
-            for k in range(num_pol):
-                assert alms[i, :, k].ndim in [1, 2]
-                alms[i, :, k] = curvedsky.almxfl(alms[i, :, k], lfilter=lfilters[i, k], ainfo=ainfo)
+        out = np.zeros_like(sqrt_cls)
+        lfilters = np.divide(1, sqrt_cls, where=sqrt_cls!=0, out=out)
+        for i in range(num_oarrays):
+            for j in range(num_oarrays):
+                for k in range(num_opol):
+                    assert alms[i, j, k].ndim in [1, 2]
+                    alms[i, j, k] = curvedsky.almxfl(alms[i, j, k], lfilter=lfilters[i, j, k], ainfo=ainfo)
 
         # finally go back to map space
         omap = enmap.empty(imap.shape, imap.wcs, dtype=imap.dtype)
-        for i in range(num_arrays):
-            for j in range(num_splits):
+        for i in range(num_oarrays):
+            for j in range(num_osplits):
                 assert alms[i, j].ndim in [1, 2]
                 omap[i, j] = curvedsky.alm2map(alms[i, j], omap[i, j], ainfo=ainfo)
 
-        if return_cov:
-            return omap, cls
+        if return_sqrt_cov:
+            # for backwards compatibility, if per_split, slice out singleton split dimension
+            if not per_split:
+                sqrt_cls = sqrt_cls.reshape(num_oarrays, num_opol, -1)
+            return omap, sqrt_cls
         else:
             return omap
 
