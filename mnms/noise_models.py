@@ -568,7 +568,9 @@ class TiledNoiseModel(NoiseModel):
             try:
                 self._get_model_from_disk()
             except FileNotFoundError:
-                print('Model does not exist on-disk, please generate it first')
+                fn = self._get_model_fn()
+                print(f'Model does not exist on-disk, please generate it first')
+                raise FileNotFoundError(fn)
 
         seed = utils.get_seed(
             *(split_num, sim_num, self._data_model, *self._qids))
@@ -831,7 +833,9 @@ class WaveletNoiseModel(NoiseModel):
             try:
                 self._get_model_from_disk(split_num)
             except (FileNotFoundError, OSError):
-                print('Model does not exist on-disk, please generate it first')
+                fn = self._get_model_fn(split_num)
+                print(f'Model does not exist on-disk, please generate it first')
+                raise FileNotFoundError(fn)
 
         seed = utils.get_seed(
             *(split_num, sim_num, self._data_model, *self._qids))
