@@ -209,6 +209,7 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
         print(
             f'Number of Unmasked Tiles: {len(imap.unmasked_tiles)}\n' + \
             f'Number of Arrays: {num_arrays}\n' + \
+            f'Number of Splits: {num_splits}\n' + \
             f'Number of Pols.: {num_pol}\n' + \
             f'Tile shape: {imap.shape[-2:]}'
             )
@@ -263,8 +264,8 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
 
     return imap.sametiles(smap), sqrt_cov_ell
 
-def get_tiled_noise_sim(covsqrt, ivar=None, num_arrays=None, sqrt_cov_ell=None, nthread=0,
-                        split_num=None, seed=None, verbose=True):
+def get_tiled_noise_sim(covsqrt, ivar=None, sqrt_cov_ell=None, num_arrays=None, num_splits=None, 
+                        nthread=0, split_num=None, seed=None, verbose=True):
     
     # check that covsqrt is a tiled tiled_ndmap instance    
     assert covsqrt.tiled, 'Covsqrt must be tiled'
@@ -276,9 +277,10 @@ def get_tiled_noise_sim(covsqrt, ivar=None, num_arrays=None, sqrt_cov_ell=None, 
         assert np.all(ivar >= 0)
         assert ivar.ndim in range(2, 6), 'Data must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
         ivar = utils.atleast_nd(ivar, 5) # make data 5d
-        num_arrays = ivar.shape[-5]
+        num_arrays, num_splits = ivar.shape[:-3]
     else:
         assert isinstance(num_arrays, int), 'If ivar not passed, must explicitly pass num_arrays as an python int'
+        assert isinstance(num_splits, int), 'If ivar not passed, must explicitly pass num_arrays as an python int'
 
     # get preshape information
     num_unmasked_tiles = covsqrt.num_tiles
@@ -288,6 +290,7 @@ def get_tiled_noise_sim(covsqrt, ivar=None, num_arrays=None, sqrt_cov_ell=None, 
         print(
             f'Number of Unmasked Tiles: {num_unmasked_tiles}\n' + \
             f'Number of Arrays: {num_arrays}\n' + \
+            f'Number of Splits: {num_splits}\n' + \
             f'Number of Pols.: {num_pol}\n' + \
             f'Tile shape: {covsqrt.shape[-2:]}'
             )
@@ -313,11 +316,11 @@ def get_tiled_noise_sim(covsqrt, ivar=None, num_arrays=None, sqrt_cov_ell=None, 
 
     # filter maps
     if sqrt_cov_ell is not None:
-        # if necessary, extract the particular split from sqrt_cov_ell
-        if sqrt_cov_ell.ndim == 4:
-            sqrt_cov_ell = sqrt_cov_ell[:, split_num]
-        assert (num_arrays, num_pol) == sqrt_cov_ell.shape[:-1], 'sqrt_cov_ell shape does not match (num_arrays, num_pol, ...)'
-
+        # extract the particular split from sqrt_cov_ell
+        assert (num_arrays, num_splits, num_pol) == sqrt_cov_ell.shape[:-1], \
+            'sqrt_cov_ell shape does not match (num_arrays, num_splits, num_pol, ...)'
+        sqrt_cov_ell = sqrt_cov_ell[:, split_num]
+        
         # determine lmax from sqrt_cov_ell, and build the lfilter
         lmax = min(utils.lmax_from_wcs(omap.wcs), sqrt_cov_ell.shape[-1]-1)
         lfilter = sqrt_cov_ell[..., :lmax+1]
