@@ -3,7 +3,7 @@ from soapack import interfaces as sints
 import numpy as np
 
 # get a list of qids from the data models DR5, DR6
-dms = [sints.DR5()]#, sints.DR6()]
+dms = [sints.DR5(), sints.DR6()]
 hashes = {}
 
 for dm in dms:
