@@ -701,7 +701,7 @@ class WaveletNoiseModel(NoiseModel):
         )
 
     def get_model(self, check_on_disk=True, write=True, keep=False, verbose=False):
-        """Generate (or load) a sqrt-covariance matrix for this TiledNoiseModel instance.
+        """Generate (or load) a sqrt-covariance matrix for this WaveletNoiseModel instance.
 
         Parameters
         ----------
@@ -776,7 +776,7 @@ class WaveletNoiseModel(NoiseModel):
             self._w_ells.update(w_ells)
 
     def get_sim(self, split_num, sim_num, alm=False, check_on_disk=True, write=False, verbose=False):
-        """Generate a tiled sim from this WaveletNoiseModel.
+        """Generate a wavelet sim from this WaveletNoiseModel.
 
         Parameters
         ----------
