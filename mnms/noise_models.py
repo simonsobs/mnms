@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 
 class NoiseModel(ABC):
 
-    def __init__(self, *qids, data_model=None, mask=None, ivar=None, calibrated=True, downgrade=1,
+    def __init__(self, *qids, data_model=None, mask=None, ivar=None, imap=None, calibrated=True, downgrade=1,
                  mask_version=None, mask_name=None, union_sources=None, notes=None, **kwargs):
         """Base class for all NoiseModel subclasses. Supports loading raw data necessary for all 
         subclasses, such as masks and ivars. Also defines some class methods usable in subclasses.
@@ -28,7 +28,11 @@ class NoiseModel(ABC):
             If None, will load a mask according to the `mask_version` and `mask_name` kwargs.
         ivar : array-like, optional
             Data inverse-variance maps, by default None.
-            If None, will be loaded via DataModel and according to `downgrade` and `calibrated` kwargs.
+            If None, will be loaded via DataModel according to `downgrade` and `calibrated` kwargs.
+        imap : array-like, optional
+            Data maps, by default None.
+            If None, will be loaded in call to NoiseModel.get_model(...), and may be retained in 
+            memory if keep_data=True is passed to that function.
         calibrated : bool, optional
             Whether to load calibrated raw data, by default True.
         downgrade : int, optional
@@ -80,6 +84,9 @@ class NoiseModel(ABC):
             self._ivar = ivar
         else:
             self._ivar = self._get_ivar()
+
+        # Possibly store input data
+        self._imap = imap
 
         # sanity checks
         assert self._num_splits == self._ivar.shape[-4], \
@@ -338,10 +345,14 @@ class NoiseModel(ABC):
     def get_sim(self):
         pass
 
+    @property
+    def num_splits(self):
+        return self._num_splits
+
 
 class TiledNoiseModel(NoiseModel):
 
-    def __init__(self, *qids, data_model=None, mask=None, ivar=None, calibrated=True,
+    def __init__(self, *qids, data_model=None, mask=None, ivar=None, imap=None, calibrated=True,
                  downgrade=1, mask_version=None, mask_name=None, union_sources=None, notes=None,
                  width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, **kwargs):
         """A TiledNoiseModel object supports drawing simulations which capture spatially-varying
@@ -360,7 +371,11 @@ class TiledNoiseModel(NoiseModel):
             If None, will load a mask according to the `mask_version` and `mask_name` kwargs.
         ivar : array-like, optional
             Data inverse-variance maps, by default None.
-            If None, will be loaded via DataModel and according to `downgrade` and `calibrated` kwargs.
+            If None, will be loaded via DataModel according to `downgrade` and `calibrated` kwargs.
+        imap : array-like, optional
+            Data maps, by default None.
+            If None, will be loaded in call to NoiseModel.get_model(...), and may be retained in 
+            memory if keep_data=True is passed to that function.
         calibrated : bool, optional
             Whether to load calibrated raw data, by default True.
         downgrade : int, optional
@@ -447,17 +462,12 @@ class TiledNoiseModel(NoiseModel):
             calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
         )
 
-    def get_model(self, nthread=0, flat_triu_axis=1, check_on_disk=True, write=True, keep=False, verbose=False):
+    def get_model(self, check_on_disk=True, write=True, keep=False, keep_data=False, verbose=False,
+                    nthread=0, flat_triu_axis=1):
         """Generate (or load) a sqrt-covariance matrix for this TiledNoiseModel instance.
 
         Parameters
         ----------
-        nthread : int, optional
-            Number of threads to use, by default 0.
-            If 0, use the maximum number of detectable cores (see `utils.get_cpu_count`)
-        flat_triu_axis : int, optional
-            The axis of the sqrt-covariance matrix buffer that will hold the upper-triangle
-            of the matrix, by default 1.
         check_on_disk : bool, optional
             If True, first check if an identical model (including by `notes`) exists
             on disk. If it does, do nothing or store it in the object attributes,
@@ -468,8 +478,17 @@ class TiledNoiseModel(NoiseModel):
         keep : bool, optional
             Store the generated (or loaded) model in the instance attributes, by 
             default False.
+        keep_data: bool, optional
+            Store the loaded raw data splits in the instance attributes, by 
+            default False.
         verbose : bool, optional
             Print possibly helpful messages, by default False.
+        nthread : int, optional
+            Number of threads to use, by default 0.
+            If 0, use the maximum number of detectable cores (see `utils.get_cpu_count`)
+        flat_triu_axis : int, optional
+            The axis of the sqrt-covariance matrix buffer that will hold the upper-triangle
+            of the matrix, by default 1.
         """
         if check_on_disk:
             try:
@@ -499,6 +518,9 @@ class TiledNoiseModel(NoiseModel):
         if keep:
             self._covsqrt = covsqrt
             self._sqrt_cov_ell = sqrt_cov_ell
+
+        if keep_data:
+            self._imap = imap
 
     def _get_model_from_disk(self, keep=True):
         """Load a sqrt-covariance matrix from disk. If keep, store it in instance attributes."""
@@ -590,7 +612,7 @@ class TiledNoiseModel(NoiseModel):
 
 class WaveletNoiseModel(NoiseModel):
 
-    def __init__(self, *qids, data_model=None, mask=None, ivar=None, calibrated=True,
+    def __init__(self, *qids, data_model=None, mask=None, ivar=None, imap=None, calibrated=True,
                 downgrade=1, mask_version=None, mask_name=None, union_sources=None, notes=None,
                 lamb=1.3, lmax=None, smooth_loc=False, **kwargs):
         """A WaveletNoiseModel object supports drawing simulations which capture scale-dependent, 
@@ -609,7 +631,11 @@ class WaveletNoiseModel(NoiseModel):
             If None, will load a mask according to the `mask_version` and `mask_name` kwargs.
         ivar : array-like, optional
             Data inverse-variance maps, by default None.
-            If None, will be loaded via DataModel and according to `downgrade` and `calibrated` kwargs.
+            If None, will be loaded via DataModel according to `downgrade` and `calibrated` kwargs.
+        imap : array-like, optional
+            Data maps, by default None.
+            If None, will be loaded in call to NoiseModel.get_model(...), and may be retained in 
+            memory if keep_data=True is passed to that function.
         calibrated : bool, optional
             Whether to load calibrated raw data, by default True.
         downgrade : int, optional
@@ -700,7 +726,7 @@ class WaveletNoiseModel(NoiseModel):
             calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
         )
 
-    def get_model(self, check_on_disk=True, write=True, keep=False, verbose=False):
+    def get_model(self, check_on_disk=True, write=True, keep=False, keep_data=False, verbose=False):
         """Generate (or load) a sqrt-covariance matrix for this WaveletNoiseModel instance.
 
         Parameters
@@ -715,6 +741,9 @@ class WaveletNoiseModel(NoiseModel):
         keep : bool, optional
             Store the generated (or loaded) model in the instance attributes, by 
             default False.
+        keep_data: bool, optional
+            Store the loaded raw data splits in the instance attributes, by 
+            default False.
         verbose : bool, optional
             Print possibly helpful messages, by default False.
         """
@@ -727,8 +756,8 @@ class WaveletNoiseModel(NoiseModel):
                 print('Model not found on disk, generating instead')
 
         # the model needs data, so we need to load it
-        dmap = self._get_data()
-        dmap = utils.get_noise_map(dmap, self._ivar)
+        imap = self._get_data()
+        imap = utils.get_noise_map(imap, self._ivar)
 
         sqrt_cov_wavs = {}
         sqrt_cov_ells = {}
@@ -736,7 +765,7 @@ class WaveletNoiseModel(NoiseModel):
         with bench.show('Generating noise model'):
             for s in range(self._num_splits):
                 sqrt_cov_wav, sqrt_cov_ell, w_ell = wav_noise.estimate_sqrt_cov_wav_from_enmap(
-                    dmap[:, s], self._mask, self._lmax, lamb=self._lamb, smooth_loc=self._smooth_loc
+                    imap[:, s], self._mask, self._lmax, lamb=self._lamb, smooth_loc=self._smooth_loc
                 )
                 sqrt_cov_wavs[s] = sqrt_cov_wav
                 sqrt_cov_ells[s] = sqrt_cov_ell
@@ -753,6 +782,9 @@ class WaveletNoiseModel(NoiseModel):
             self._sqrt_cov_wavs.update(sqrt_cov_wavs)
             self._sqrt_cov_ells.update(sqrt_cov_ells)
             self._w_ells.update(w_ells)
+
+        if keep_data:
+            self._imap = imap
 
     def _get_model_from_disk(self, split_num, keep=True):
         """Load a sqrt-covariance matrix from disk. If keep, store it in instance attributes."""

@@ -46,7 +46,7 @@ model = nm.TiledNoiseModel(
 
 # get split nums
 if args.auto_split:
-    splits = np.arange(model._num_splits)
+    splits = np.arange(model.num_splits)
 else:
     splits = np.atleast_1d(args.split)
 assert np.all(splits >= 0)
