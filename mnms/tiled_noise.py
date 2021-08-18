@@ -169,7 +169,7 @@ def get_iso_curvedsky_noise_sim(covar, ivar=None, flat_triu_axis=0, oshape=None,
 
     return omap
 
-def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, 
+def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, 
                                         nthread=0, verbose=False):
     '''Generate the 2d noise spectra for each of the tiles
     '''
@@ -180,19 +180,24 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
 
     # if ivar is not None, whiten the imap data using ivar
     if ivar is not None:
-        assert np.all(ivar >= 0)
+        if verbose:
+            print('Getting whitened difference maps')
         imap = utils.get_whitened_noise_map(imap, ivar)
 
     # filter map prior to tiling, get the c_ells.
     # we need to filter per-split, since >2-split arrays have widely-varying noise power spectra.
-    # imap is henceforth masked, as part of the filtering
     if mask is None:
         mask = np.array([1])
     mask = mask.astype(imap.dtype, copy=False)
     if lmax is None:
         lmax = utils.lmax_from_wcs(imap.wcs)
+
+    # we want to keep split axis at -4, but slice out our split to reduce cost.
+    # imap now has shape (num_arrays, 1, num_pol, ny, nx).
+    # imap is henceforth masked, as part of the filtering.
     imap, sqrt_cov_ell = utils.ell_flatten(
-        imap, mask=mask, return_sqrt_cov=True, per_split=True, mode='curvedsky', lmax=lmax
+        imap[..., split_num:split_num+1, :, :, :], mask=mask, return_sqrt_cov=True,
+        per_split=True, mode='curvedsky', lmax=lmax
         )
 
     # get the tiled data, apod window
@@ -202,7 +207,7 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
     apod = imap.apod()
 
     # get component shapes
-    num_arrays, num_splits, num_pol = imap.shape[1:4] # shape is (num_tiles, num_arrays, num_splits, num_pol, ...)
+    num_arrays, num_splits, num_pol = imap.shape[1:4] # shape is (num_tiles, num_arrays, 1, num_pol, ...)
     ncomp = num_arrays * num_pol
     nspec = utils.triangular(ncomp)
     if verbose:
@@ -214,9 +219,10 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
             f'Tile shape: {imap.shape[-2:]}'
             )
 
-    # get all the 2D power spectra, averaged over splits
-    smap = enmap.fft(imap*apod, normalize='phys', nthread=nthread)
-    smap = np.einsum('...miayx,...nibyx->...manbyx', smap, np.conj(smap)).real / num_splits
+    # get all the 2D power spectra for this split; note smap 
+    # has shape (num_tiles, num_arrays, num_pol, ny, nx) after this operation
+    smap = enmap.fft(imap[..., 0, :, :, :]*apod, normalize='phys', nthread=nthread)
+    smap = np.einsum('...mayx,...nbyx->...manbyx', smap, np.conj(smap)).real
 
     # cycle through the tiles    
     for i, n in enumerate(imap.unmasked_tiles):
@@ -264,8 +270,8 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
 
     return imap.sametiles(smap), sqrt_cov_ell
 
-def get_tiled_noise_sim(covsqrt, ivar=None, sqrt_cov_ell=None, num_arrays=None, num_splits=None, 
-                        nthread=0, split_num=None, seed=None, verbose=True):
+def get_tiled_noise_sim(covsqrt, split_num, ivar=None, sqrt_cov_ell=None, num_arrays=None, num_splits=None, 
+                        nthread=0, seed=None, verbose=True):
     
     # check that covsqrt is a tiled tiled_ndmap instance    
     assert covsqrt.tiled, 'Covsqrt must be tiled'
@@ -317,9 +323,9 @@ def get_tiled_noise_sim(covsqrt, ivar=None, sqrt_cov_ell=None, num_arrays=None, 
     # filter maps
     if sqrt_cov_ell is not None:
         # extract the particular split from sqrt_cov_ell
-        assert (num_arrays, num_splits, num_pol) == sqrt_cov_ell.shape[:-1], \
-            'sqrt_cov_ell shape does not match (num_arrays, num_splits, num_pol, ...)'
-        sqrt_cov_ell = sqrt_cov_ell[:, split_num]
+        assert (num_arrays, 1, num_pol) == sqrt_cov_ell.shape[:-1], \
+            'sqrt_cov_ell shape does not match (num_arrays, num_splits=1, num_pol, ...)'
+        sqrt_cov_ell = sqrt_cov_ell[:, 0]
         
         # determine lmax from sqrt_cov_ell, and build the lfilter
         lmax = min(utils.lmax_from_wcs(omap.wcs), sqrt_cov_ell.shape[-1]-1)

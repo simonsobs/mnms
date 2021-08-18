@@ -1,4 +1,5 @@
 import numpy as np
+import warnings
 
 from optweight import mat_utils
 from pixell import enmap, utils
@@ -200,9 +201,6 @@ def inpaint_noise_catalog(imap, ivar, mask, catalog, radius=6, thumb_width=120,
     surrounding pixels. White noise is drawn from ivar map. 
     Main point is that it is much faster than constrained realizations.
     """
-
-    rng = np.random.default_rng(seed)
-
     if radius > thumb_width // 2:
         raise ValueError(f'Radius exceeds thumbnail radius : '
                          f'{radius} > {thumb_width // 2}')
@@ -233,7 +231,7 @@ def inpaint_noise_catalog(imap, ivar, mask, catalog, radius=6, thumb_width=120,
     # Convert dec, ra to pix y, x and loop over catalog.
     pix = enmap.sky2pix(imap.shape[-2:], imap.wcs, catalog).astype(int)
 
-    for pix_y, pix_x in zip(*pix):
+    for cat_idx, (pix_y, pix_x) in enumerate(zip(*pix)):
 
         if not (pix_y >= 0 and pix_y < mask.shape[-2]) or not (pix_x >= 0 and pix_x < mask.shape[-1]):
             # Do not inpaint sources that are outside the footprint.
@@ -245,6 +243,11 @@ def inpaint_noise_catalog(imap, ivar, mask, catalog, radius=6, thumb_width=120,
 
         mslice = extract_thumbnail(imap, pix_y, pix_x, nthumb)
         ivarslice = extract_thumbnail(ivar, pix_y, pix_x, nthumb)
+
+        if not (ivarslice[..., mask_src] != 0).sum() > 0:
+            # Do not inpaint sources for which there are no observed pixels around the source
+            warnings.warn(f'No good ivars in mask_src at cat_idx {cat_idx}, pix {(pix_y, pix_x)}', RuntimeWarning)
+            continue
 
         if ivar_threshold:
 
@@ -285,9 +288,10 @@ def inpaint_noise_catalog(imap, ivar, mask, catalog, radius=6, thumb_width=120,
                 mask_ivar_est[idxs] |= mask_est
             
             inpaint(mslice, ivarslice, mask_apod, mask_ivar_inpaint,
-                    mask_ivar_est, fwhm)    
-        else:            
-            inpaint(mslice, ivarslice, mask_apod, mask_src, mask_est, fwhm)    
+                    mask_ivar_est, fwhm, seed=seed)    
+        else:
+            inpaint(mslice, ivarslice, mask_apod, mask_src, mask_est,
+                    fwhm, seed=seed)    
 
         insert_thumbnail(mslice, imap, pix_y, pix_x)
         
@@ -362,6 +366,7 @@ def inpaint(imap, ivar, mask_apod, mask_src, mask_est, fwhm, seed=None):
         ivar_src = ivar[idxs][:,mask_src]
         bad_ivar = ivar_src == 0
         good_ivar = ivar_src != 0
+        assert np.sum(good_ivar) > 0, 'No good ivars in mask_src'
         ivar_src[bad_ivar] = np.mean(ivar_src[good_ivar])
 
         # Add white noise to inpainted region. Q and U get sqrt(2) higher noise.

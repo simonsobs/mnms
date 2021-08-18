@@ -88,6 +88,10 @@ class NoiseModel(ABC):
         # Possibly store input data
         self._imap = imap
 
+        # initialize unloaded noise model
+        self._sqrt_cov_mats = {}
+        self._sqrt_cov_ells = {}
+
         # sanity checks
         assert self._num_splits == self._ivar.shape[-4], \
             'Num_splits inferred from ivar shape != num_splits from data model table'
@@ -107,7 +111,7 @@ class NoiseModel(ABC):
                     qid, self._data_model, use_default_mask=self._use_default_mask,
                     mask_version=self._mask_version, mask_name=self._mask_name, **self._kwargs
                 )
-                mask = enmap.read_map(fn)
+                mask = enmap.read_map(fn).astype(self._data_model.dtype, copy=False)
 
             # check that we are using the same mask for each qid -- this is required!
             if i == 0:
@@ -198,6 +202,7 @@ class NoiseModel(ABC):
                     imap = enmap.extract(imap, shape, wcs)
 
                     if self._union_sources:
+                        print(f'Array {i}, Split {j}')
                         self._inpaint(imap, ivar_up[j], mask_bool, qid=qid, split_num=j) 
 
                     if self._downgrade != 1:
@@ -242,8 +247,7 @@ class NoiseModel(ABC):
                                              seed=seed)
 
     def _check_geometry(self):
-        """Check that each qid in this instance's qids has compatible shape and wcs with its mask.
-        """
+        """Check that each qid in this instance's qids has compatible shape and wcs with its mask."""
         for i, qid in enumerate(self._qids):
             fn = simio.get_sim_mask_fn(
                 qid, self._data_model, use_default_mask=self._use_default_mask,
@@ -324,13 +328,73 @@ class NoiseModel(ABC):
                 return f'Loading, inpainting imap for {qid}'
             else:
                 return f'Loading imap for {qid}'
+
+    def _check_model_on_disk(self, split_num, keep=False, generate=True):
+        """Check if this NoiseModel's model for a given split exists on disk. 
+        If it does, return True. Depending on the 'keep' kwarg, possibly store
+        the model in memory. Depending on the 'generate' kwarg, return either 
+        False or raise a FileNotFoundError if it does not exist on-disk.
+
+        Parameters
+        ----------
+        split_num : int
+            The 0-based index of the split model to look for.
+        keep : bool, optional
+            Store the generated (or loaded) model in the instance attributes if it
+            exists on-disk, by default False.
+        generate : bool, optional
+            If the model does not exist on-disk and 'generate' is True, then return
+            False. If the model does not exist on-disk and 'generate' is False, then
+            raise a FileNotFoundError, by default True.
+
+        Returns
+        -------
+        bool
+            If the model exists on-disk, return True. If 'generate' is True and the 
+            model does not exist on-disk, return False.
+
+        Raises
+        ------
+        FileNotFoundError
+            If 'generate' is False and the model does not exist on-disk.
+        """
+        print(f'Loading model for split {split_num} from disk')
+        try:
+            self._get_model_from_disk(split_num, keep=keep)
+            return True
+        except (FileNotFoundError, OSError):
+            fn = self._get_model_fn(split_num)
+            if generate:
+                print(f'Model for split {split_num} not found on-disk, generating instead')
+                return False
+            else:
+                print(f'Model for split {split_num} not found on-disk, please generate it first')
+                raise FileNotFoundError(fn)
+
+    def _check_sim_on_disk(self, split_num, sim_num, alm=False):
+        """Check if sim with split_num, sim_num exists on-disk; if so return it, else return None."""
+        fn = self._get_sim_fn(split_num, sim_num)
+        try:
+            if alm:
+                return hp.read_alm(fn)
+            else:
+                return enmap.read_map(fn)
+        except FileNotFoundError:
+            print(f'Sim for split {split_num}, map {sim_num} not found on disk, generating instead')
+            return None
+
+    def _get_seed(self, split_num, sim_num):
+        """Return seed for sim with split_num, sim_num."""
+        return utils.get_seed(
+            *(split_num, sim_num, self._data_model, *self._qids)
+            )
         
     @abstractmethod
-    def _get_model_fn(self):
+    def _get_model_fn(self, split_num):
         pass
 
     @abstractmethod
-    def _get_sim_fn(self):
+    def _get_sim_fn(self, split_num, sim_num):
         pass
 
     @abstractmethod
@@ -430,9 +494,9 @@ class TiledNoiseModel(NoiseModel):
         >>> (2, 1, 3, 5600, 21600)
         """
         super().__init__(
-            *qids, data_model=data_model, mask=mask, ivar=ivar, calibrated=calibrated, downgrade=downgrade,
-            mask_version=mask_version, mask_name=mask_name,
-            notes=notes, union_sources=union_sources, **kwargs
+            *qids, data_model=data_model, mask=mask, ivar=ivar, imap=imap,
+            calibrated=calibrated, downgrade=downgrade, mask_version=mask_version,
+            mask_name=mask_name, notes=notes, union_sources=union_sources, **kwargs
         )
 
         # save model-specific info
@@ -443,19 +507,15 @@ class TiledNoiseModel(NoiseModel):
             lmax = utils.lmax_from_wcs(self._mask.wcs)
         self._lmax = lmax
 
-        # initialize unloaded noise model
-        self._covsqrt = None
-        self._sqrt_cov_ell = None
-
-    def _get_model_fn(self):
+    def _get_model_fn(self, split_num):
         return simio.get_tiled_model_fn(
-            self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, notes=self._notes,
+            self._qids, split_num, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, notes=self._notes,
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
             calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
         )
 
     def _get_sim_fn(self, split_num, sim_num):
-        # only difference w.r.t. above is split_num, sim_num
+        # only difference w.r.t. above is sim_num and alm flag
         return simio.get_tiled_sim_fn(
             self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, split_num, sim_num, notes=self._notes,
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
@@ -470,9 +530,9 @@ class TiledNoiseModel(NoiseModel):
         ----------
         check_on_disk : bool, optional
             If True, first check if an identical model (including by `notes`) exists
-            on disk. If it does, do nothing or store it in the object attributes,
-            depending on the `keep` kwarg. If it does not, generate the model
-            instead. By default True.
+            on-disk for each split. If it does, do nothing or store it in the object
+            attributes, depending on the `keep` kwarg. If it does not, generate the model
+            for the missing splits instead. By default True.
         write : bool, optional
             Save the generated model to disk, by default True.
         keep : bool, optional
@@ -491,59 +551,70 @@ class TiledNoiseModel(NoiseModel):
             of the matrix, by default 1.
         """
         if check_on_disk:
-            try:
-                self._get_model_from_disk(keep=keep)
+            # build a list of splits that don't have models on-disk
+            does_not_exist = []
+            for s in range(self._num_splits):
+                res = self._check_model_on_disk(s, keep=keep)
+                if not res:
+                    does_not_exist.append(s)
+            if not does_not_exist:
+                # if all models exist on-disk, exit this function
                 return
-            except FileNotFoundError:
-                print('Model not found on disk, generating instead')
 
-        # the model needs data, so we need to load it
+        # the model needs data, so we need to load it. we can pass whitened noise maps
+        # as input by not supplying the 'ivar' kwarg
         imap = self._get_data()
-        with bench.show('Generating noise model'):
-            covsqrt, sqrt_cov_ell = tiled_noise.get_tiled_noise_covsqrt(
-                imap, ivar=self._ivar, mask=self._mask, width_deg=self._width_deg, height_deg=self._height_deg, 
-                delta_ell_smooth=self._delta_ell_smooth, lmax=self._lmax,
-                nthread=nthread, verbose=verbose
-            )
+        dmap = utils.get_whitened_noise_map(imap, self._ivar)
 
-        if write:
-            fn = self._get_model_fn()
-            covsqrt = utils.to_flat_triu(
-                covsqrt, axis1=flat_triu_axis, axis2=flat_triu_axis+1, flat_triu_axis=flat_triu_axis
-            )
-            tiled_ndmap.write_tiled_ndmap(
-                fn, covsqrt, extra_header={'FLAT_TRIU_AXIS': flat_triu_axis}, extra_hdu={'SQRT_COV_ELL': sqrt_cov_ell}
-            )
+        for s in does_not_exist:
+            with bench.show(f'Generating noise model for split {s}'):
+                sqrt_cov_mat, sqrt_cov_ell = tiled_noise.get_tiled_noise_covsqrt(
+                    dmap, s, mask=self._mask, width_deg=self._width_deg, height_deg=self._height_deg, 
+                    delta_ell_smooth=self._delta_ell_smooth, lmax=self._lmax,
+                    nthread=nthread, verbose=verbose
+                )
 
-        if keep:
-            self._covsqrt = covsqrt
-            self._sqrt_cov_ell = sqrt_cov_ell
+            if keep:
+                self._sqrt_cov_mats[s] = sqrt_cov_mat
+                self._sqrt_cov_ells[s] = sqrt_cov_ell
+
+            if write:
+                fn = self._get_model_fn(s)
+                sqrt_cov_mat = utils.to_flat_triu(
+                    sqrt_cov_mat, axis1=flat_triu_axis, axis2=flat_triu_axis+1, flat_triu_axis=flat_triu_axis
+                )
+                tiled_ndmap.write_tiled_ndmap(
+                    fn, sqrt_cov_mat, extra_header={'FLAT_TRIU_AXIS': flat_triu_axis},
+                    extra_hdu={'SQRT_COV_ELL': sqrt_cov_ell}
+                )
 
         if keep_data:
             self._imap = imap
 
-    def _get_model_from_disk(self, keep=True):
+    def _get_model_from_disk(self, split_num, keep=True):
         """Load a sqrt-covariance matrix from disk. If keep, store it in instance attributes."""
-        fn = self._get_model_fn()
-        covsqrt, extra_header, extra_hdu = tiled_ndmap.read_tiled_ndmap(
+        # load products from disk
+        fn = self._get_model_fn(split_num)
+        sqrt_cov_mat, extra_header, extra_hdu = tiled_ndmap.read_tiled_ndmap(
             fn, extra_header=['FLAT_TRIU_AXIS'], extra_hdu=['SQRT_COV_ELL']
         )
         flat_triu_axis = extra_header['FLAT_TRIU_AXIS']
         sqrt_cov_ell = extra_hdu['SQRT_COV_ELL']
 
-        wcs = covsqrt.wcs
-        tiled_info = covsqrt.tiled_info()
-        covsqrt = utils.from_flat_triu(
-            covsqrt, axis1=flat_triu_axis, axis2=flat_triu_axis+1, flat_triu_axis=flat_triu_axis
+        wcs = sqrt_cov_mat.wcs
+        tiled_info = sqrt_cov_mat.tiled_info()
+        sqrt_cov_mat = utils.from_flat_triu(
+            sqrt_cov_mat, axis1=flat_triu_axis, axis2=flat_triu_axis+1, flat_triu_axis=flat_triu_axis
         )
-        covsqrt = enmap.ndmap(covsqrt, wcs)
-        covsqrt = tiled_ndmap.tiled_ndmap(covsqrt, **tiled_info)
+        sqrt_cov_mat = enmap.ndmap(sqrt_cov_mat, wcs)
+        sqrt_cov_mat = tiled_ndmap.tiled_ndmap(sqrt_cov_mat, **tiled_info)
 
         if keep:
-            self._covsqrt = covsqrt
-            self._sqrt_cov_ell = sqrt_cov_ell
+            self._sqrt_cov_mats[split_num] = sqrt_cov_mat
+            self._sqrt_cov_ells[split_num] = sqrt_cov_ell
 
-    def get_sim(self, split_num, sim_num, nthread=0, check_on_disk=True, write=False, verbose=False):
+    def get_sim(self, split_num, sim_num, alm=False, check_on_disk=True, write=False, verbose=False,
+                nthread=0):
         """Generate a tiled sim from this TiledNoiseModel.
 
         Parameters
@@ -555,9 +626,8 @@ class TiledNoiseModel(NoiseModel):
             is written to disk, this will be recorded in the filename. There is a maximum of
             9999, ie, one cannot have more than 10_000 of the same sim, of the same split, 
             from the same noise model (including the `notes`).
-        nthread : int, optional
-            Number of threads to use, by default 0.
-            If 0, use the maximum number of detectable cores (see `utils.get_cpu_count`)
+        alm : bool, optional
+            Generate simulated alms instead of a simulated map, by default False
         check_on_disk : bool, optional
             If True, first check if the exact sim (including the noise model `notes`), 
             exists and disk, and if it does, load and return it. If it does not,
@@ -566,48 +636,55 @@ class TiledNoiseModel(NoiseModel):
             Save the generated sim to disk, by default False.
         verbose : bool, optional
             Print possibly helpful messages, by default False.
+        nthread : int, optional
+            Number of threads to use, by default 0.
+            If 0, use the maximum number of detectable cores (see `utils.get_cpu_count`)
 
         Returns
         -------
         enmap.ndmap
             A sim of this noise model with the specified sim num, with shape
             (num_arrays, num_splits, num_pol, ny, nx), even if some of these
-            axes have dimension 1. As implemented, num_splits is always 1. 
+            axes have dimension 1. As implemented, num_splits is always 1.
+
+        Raises
+        ------
+        NotImplementedError
+            Generating alms instead of a map is not implemented, so `alm` must 
+            be left False. 
         """
+        if alm:
+            raise NotImplementedError(
+                'Generating sims as alms not yet implemented')
+
         assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
 
-        fn = self._get_sim_fn(split_num, sim_num)
-
         if check_on_disk:
-            try:
-                return enmap.read_map(fn)
-            except FileNotFoundError:
-                print('Sim not found on disk, generating instead')
+            res = self._check_sim_on_disk(split_num, sim_num, alm=alm)
+            if res:
+                return res
 
-        if self._covsqrt is None:
-            if verbose:
-                print('Model not loaded, loading from disk')
-            try:
-                self._get_model_from_disk()
-            except FileNotFoundError:
-                fn = self._get_model_fn()
-                print(f'Model does not exist on-disk, please generate it first')
-                raise FileNotFoundError(fn)
+        if split_num not in self._sqrt_cov_mats:
+            self._check_model_on_disk(split_num, keep=True, generate=False)
+            
+        seed = self._get_seed(split_num, sim_num)
 
-        seed = utils.get_seed(
-            *(split_num, sim_num, self._data_model, *self._qids))
-
-        with bench.show('Generating noise sim'):
-            smap = tiled_noise.get_tiled_noise_sim(
-                self._covsqrt, ivar=self._ivar, sqrt_cov_ell=self._sqrt_cov_ell, 
-                num_arrays=self._num_arrays, num_splits=self._num_splits,
-                split_num=split_num, seed=seed, nthread=nthread, verbose=verbose
+        with bench.show(f'Generating noise sim for split {split_num}'):
+            sim = tiled_noise.get_tiled_noise_sim(
+                self._sqrt_cov_mats[split_num], split_num, ivar=self._ivar,
+                sqrt_cov_ell=self._sqrt_cov_ells[split_num], num_arrays=self._num_arrays,
+                num_splits=self._num_splits, seed=seed, nthread=nthread, verbose=verbose
             )
-            smap *= self._mask
+
+            sim *= self._mask
 
         if write:
-            enmap.write_map(fn, smap)
-        return smap
+            fn = self._get_sim_fn(split_num, sim_num)
+            if alm:
+                hp.write_alm(fn, sim, overwrite=True)
+            else:
+                enmap.write_map(fn, sim)
+        return sim
 
 
 class WaveletNoiseModel(NoiseModel):
@@ -688,8 +765,9 @@ class WaveletNoiseModel(NoiseModel):
         >>> (2, 1, 3, 5600, 21600)
         """
         super().__init__(
-            *qids, data_model=data_model, mask=mask, ivar=ivar, calibrated=calibrated, downgrade=downgrade, mask_version=mask_version,
-            mask_name=mask_name, union_sources=union_sources, notes=notes, **kwargs
+            *qids, data_model=data_model, mask=mask, ivar=ivar, imap=imap,
+            calibrated=calibrated, downgrade=downgrade, mask_version=mask_version,
+            mask_name=mask_name, notes=notes, union_sources=union_sources, **kwargs
         )
 
         # save model-specific info
@@ -707,8 +785,6 @@ class WaveletNoiseModel(NoiseModel):
             self._corr_fact = corr_fact
 
         # initialize unloaded noise model
-        self._sqrt_cov_wavs = {}
-        self._sqrt_cov_ells = {}
         self._w_ells = {}
 
     def _get_model_fn(self, split_num):
@@ -733,9 +809,9 @@ class WaveletNoiseModel(NoiseModel):
         ----------
         check_on_disk : bool, optional
             If True, first check if an identical model (including by `notes`) exists
-            on disk. If it does, do nothing or store it in the object attributes,
-            depending on the `keep` kwarg. If it does not, generate the model
-            instead. By default True.
+            on-disk for each split. If it does, do nothing or store it in the object
+            attributes, depending on the `keep` kwarg. If it does not, generate the model
+            for the missing splits instead. By default True.
         write : bool, optional
             Save the generated model to disk, by default True.
         keep : bool, optional
@@ -748,64 +824,56 @@ class WaveletNoiseModel(NoiseModel):
             Print possibly helpful messages, by default False.
         """
         if check_on_disk:
-            try:
-                for s in range(self._num_splits):
-                    self._get_model_from_disk(s, keep=keep)
+            # build a list of splits that don't have models on-disk
+            does_not_exist = []
+            for s in range(self._num_splits):
+                res = self._check_model_on_disk(s, keep=keep)
+                if not res:
+                    does_not_exist.append(s)
+            if not does_not_exist:
+                # if all models exist on-disk, exit this function
                 return
-            except (FileNotFoundError, OSError):
-                print('Model not found on disk, generating instead')
 
-        # the model needs data, so we need to load it
+        # the model needs data, so we need to load it. this model in particular
+        # asks for noise maps as input
         imap = self._get_data()
-        imap = utils.get_noise_map(imap, self._ivar)
+        dmap = utils.get_noise_map(imap, self._ivar)
 
-        sqrt_cov_wavs = {}
-        sqrt_cov_ells = {}
-        w_ells = {}
-        with bench.show('Generating noise model'):
-            for s in range(self._num_splits):
-                sqrt_cov_wav, sqrt_cov_ell, w_ell = wav_noise.estimate_sqrt_cov_wav_from_enmap(
-                    imap[:, s], self._mask, self._lmax, lamb=self._lamb, smooth_loc=self._smooth_loc
+        for s in does_not_exist:
+            with bench.show(f'Generating noise model for split {s}'):
+                sqrt_cov_mat, sqrt_cov_ell, w_ell = wav_noise.estimate_sqrt_cov_wav_from_enmap(
+                    dmap[:, s], self._mask, self._lmax, lamb=self._lamb, smooth_loc=self._smooth_loc
                 )
-                sqrt_cov_wavs[s] = sqrt_cov_wav
-                sqrt_cov_ells[s] = sqrt_cov_ell
-                w_ells[s] = w_ell
 
-        if write:
-            for s in range(self._num_splits):
+            if keep:
+                self._sqrt_cov_mats[s] = sqrt_cov_mat
+                self._sqrt_cov_ells[s] = sqrt_cov_ell
+                self._w_ells[s] = w_ell
+
+            if write:
                 fn = self._get_model_fn(s)
                 wavtrans.write_wav(
-                    fn, sqrt_cov_wavs[s], symm_axes=[0, 1], extra={'sqrt_cov_ell': sqrt_cov_ells[s], 'w_ell': w_ells[s]}
+                    fn, sqrt_cov_mat, symm_axes=[0, 1],
+                    extra={'sqrt_cov_ell': sqrt_cov_ell, 'w_ell': w_ell}
                 )
-
-        if keep:
-            self._sqrt_cov_wavs.update(sqrt_cov_wavs)
-            self._sqrt_cov_ells.update(sqrt_cov_ells)
-            self._w_ells.update(w_ells)
 
         if keep_data:
             self._imap = imap
 
     def _get_model_from_disk(self, split_num, keep=True):
         """Load a sqrt-covariance matrix from disk. If keep, store it in instance attributes."""
-        sqrt_cov_wavs = {}
-        sqrt_cov_ells = {}
-        w_ells = {}
-
+        # load products from disk
         fn = self._get_model_fn(split_num)
-        sqrt_cov_wav, extra_dict = wavtrans.read_wav(
+        sqrt_cov_mat, extra_dict = wavtrans.read_wav(
             fn, extra=['sqrt_cov_ell', 'w_ell']
         )
         sqrt_cov_ell = extra_dict['sqrt_cov_ell']
         w_ell = extra_dict['w_ell']
-        sqrt_cov_wavs[split_num] = sqrt_cov_wav
-        sqrt_cov_ells[split_num] = sqrt_cov_ell
-        w_ells[split_num] = w_ell
 
         if keep:
-            self._sqrt_cov_wavs.update(sqrt_cov_wavs)
-            self._sqrt_cov_ells.update(sqrt_cov_ells)
-            self._w_ells.update(w_ells)
+            self._sqrt_cov_mats[split_num] = sqrt_cov_mat
+            self._sqrt_cov_ells[split_num] = sqrt_cov_ell
+            self._w_ells[split_num] = w_ell
 
     def get_sim(self, split_num, sim_num, alm=False, check_on_disk=True, write=False, verbose=False):
         """Generate a wavelet sim from this WaveletNoiseModel.
@@ -849,48 +917,31 @@ class WaveletNoiseModel(NoiseModel):
 
         assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
 
-        fn = self._get_sim_fn(split_num, sim_num, alm=alm)
-
         if check_on_disk:
-            try:
-                if alm:
-                    return hp.read_alm(fn)
-                else:
-                    return enmap.read_map(fn)
-            except FileNotFoundError:
-                print('Sim not found on disk, generating instead')
+            res = self._check_sim_on_disk(split_num, sim_num, alm=alm)
+            if res:
+                return res
 
-        if split_num not in self._sqrt_cov_wavs:
-            if verbose:
-                print(f'Model for split {split_num} not loaded, loading from disk')
-            try:
-                self._get_model_from_disk(split_num)
-            except (FileNotFoundError, OSError):
-                fn = self._get_model_fn(split_num)
-                print(f'Model does not exist on-disk, please generate it first')
-                raise FileNotFoundError(fn)
+        if split_num not in self._sqrt_cov_mats:
+            self._check_model_on_disk(split_num, keep=True, generate=False)
 
-        seed = utils.get_seed(
-            *(split_num, sim_num, self._data_model, *self._qids))
+        seed = self._get_seed(split_num, sim_num)
 
-        with bench.show('Generating noise sim'):
-            if alm:
-                sim, _ = wav_noise.rand_alm_from_sqrt_cov_wav(
-                    self._sqrt_cov_wavs[split_num], self._sqrt_cov_ells[split_num], self._lmax, self._w_ells[split_num],
-                    dtype=np.complex64, seed=seed
-                )
-                assert sim.ndim == 3, 'Alm must have shape (num_arrays, num_pol, nelem)'
-            else:
-                sim = wav_noise.rand_enmap_from_sqrt_cov_wav(
-                    self._sqrt_cov_wavs[split_num], self._sqrt_cov_ells[split_num], self._mask, self._lmax, self._w_ells[split_num],
-                    dtype=np.float32, seed=seed
-                )
-                sim *= self._corr_fact[:, split_num]*self._mask
-                assert sim.ndim == 4, 'Map must have shape (num_arrays, num_pol, ny, nx)'
+        with bench.show(f'Generating noise sim for split {split_num}'):
+            sim = wav_noise.rand_enmap_from_sqrt_cov_wav(
+                self._sqrt_cov_mats[split_num], self._sqrt_cov_ells[split_num],
+                self._mask, self._lmax, self._w_ells[split_num],
+                dtype=np.float32, seed=seed
+            )
+            # want shape (num_arrays, num_splits=1, num_pol, ny, nx)
+            assert sim.ndim == 4, 'Map must have shape (num_arrays, num_pol, ny, nx)'
+            sim = sim.reshape(sim.shape[0], 1, *sim.shape[1:])
+            sim *= self._corr_fact[:, split_num]
 
-        # want shape (num_arrays, num_splits=1, num_pol, ny, nx)
-        sim = sim.reshape(sim.shape[0], 1, *sim.shape[1:])
+            sim *= self._mask
+        
         if write:
+            fn = self._get_sim_fn(split_num, sim_num)
             if alm:
                 hp.write_alm(fn, sim, overwrite=True)
             else:

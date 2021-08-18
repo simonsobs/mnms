@@ -61,7 +61,7 @@ def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=None, mask_nam
     fn = f'{qid}_{data_model.name}_{mask_version}_{mask_flag}cal_{calibrated}_{dg_flag}{inpaint_flag}'
     return fn
 
-def get_tiled_model_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, notes=None, **kwargs):
+def get_tiled_model_fn(qid, split_num, width_deg, height_deg, delta_ell_smooth, lmax, notes=None, **kwargs):
     # cast to floating point for consistency
     width_deg = float(width_deg)
     height_deg = float(height_deg)
@@ -76,7 +76,7 @@ def get_tiled_model_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, notes
     else:
         notes = f'_{notes}'
 
-    fn += f'w{width_deg}_h{height_deg}_lsmooth{delta_ell_smooth}_lmax{lmax}{notes}.fits'
+    fn += f'w{width_deg}_h{height_deg}_lsmooth{delta_ell_smooth}_lmax{lmax}{notes}_set{split_num}.fits'
     return fn
 
 def get_tiled_sim_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, split_num, sim_num, notes=None, **kwargs):

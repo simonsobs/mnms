@@ -741,7 +741,6 @@ def get_mask_bool(mask, threshold=1e-3):
     mask_bool : bool enmap
         Boolean version of input mask.
     """
-
     # Makes a copy even if mask is already boolean, which is good.
     mask_bool = mask.astype(bool)
     if mask.dtype != bool:
@@ -761,7 +760,5 @@ def get_catalog(union_sources):
     catalog : (2, N) array
         DEC and RA values (in radians) for each point source.
     """
-
     ra, dec = sints.get_act_mr3f_union_sources(version=union_sources)
     return np.radians(np.vstack([dec, ra]))        
-

@@ -8,9 +8,9 @@ import argparse
 # Supports MPI parallelization
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-parser.add_argument('--qid', dest='qid',nargs='+',type=str,required=True,help='list of soapack DR5 array "qids"')
-parser.add_argument('--mask-version',dest='mask_version',type=str,default=None,help='if --no-bin-apod, look in mnms:mask_path/mask_version/ for mask (default: %(default)s)')
-parser.add_argument('--mask-name',dest='mask_name',type=str,default=None,help='if --no-bin-apod, attempt to load mnms:mask_path/mask_version/mask_name.fits (default: %(default)s)')
+parser.add_argument('--qid', dest='qid',nargs='+',type=str,required=True,help='list of soapack array "qids"')
+parser.add_argument('--mask-version',dest='mask_version',type=str,default=None,help='look in mnms:mask_path/mask_version/ for mask (default: %(default)s)')
+parser.add_argument('--mask-name',dest='mask_name',type=str,default=None,help='attempt to load mnms:mask_path/mask_version/mask_name.fits (default: %(default)s)')
 parser.add_argument('--downgrade',dest='downgrade', type=int, default=1,help='downgrade all data in pixel space by square of this many pixels per side (default: %(default)s)')
 parser.add_argument('--width-deg',dest='width_deg',type=float,default=4.0,help='width in degrees of central tile size (default: %(default)s)')
 parser.add_argument('--height-deg',dest='height_deg',type=float,default=4.0,help='height in degrees of central tile size (default: %(default)s)')

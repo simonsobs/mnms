@@ -10,11 +10,11 @@ import numpy as np
 # are always (num_arrays, num_splits=1, num_pols, ny, nx
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-parser.add_argument('--qid',dest='qid',nargs='+',type=str,required=True,help='list of soapack DR5 array "qids"')
+parser.add_argument('--qid',dest='qid',nargs='+',type=str,required=True,help='list of soapack array "qids"')
 
 # these arguments serve only to load correct covariance products
-parser.add_argument('--mask-version',dest='mask_version',type=str,default=None,help='if --no-bin-apod, look in dr6sims:mask_path/mask_version/ for mask (default: %(default)s)')
-parser.add_argument('--mask-name', dest='mask_name',type=str,default=None,help='if --no-bin-apod, attempt to load dr6sims:mask_path/mask_version/mask_name.fits (default: %(default)s)')
+parser.add_argument('--mask-version',dest='mask_version',type=str,default=None,help='mnms:mask_path/mask_version/ for mask (default: %(default)s)')
+parser.add_argument('--mask-name', dest='mask_name',type=str,default=None,help='attempt to load mnms:mask_path/mask_version/mask_name.fits (default: %(default)s)')
 parser.add_argument('--downgrade',dest='downgrade',type=int,default=1,help='downgrade all data in pixel space by square of this many pixels per side (default: %(default)s)')
 parser.add_argument('--width-deg',dest='width_deg',type=float,default=4.0,help='width in degrees of central tile size (default: %(default)s)')
 parser.add_argument('--height-deg',dest='height_deg',type=float,default=4.0,help='height in degrees of central tile size (default: %(default)s)')
