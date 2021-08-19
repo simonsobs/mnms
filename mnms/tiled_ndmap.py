@@ -341,8 +341,8 @@ def write_tiled_ndmap(fname, imap, extra_header=None, extra_hdu=None):
     header['NAXIS'] = imap.ndim
     for i,n in enumerate(imap.shape[::-1]):
         header[f'NAXIS{i+1}'] = n
-    header['WIDTH_DEG'] = imap.width_deg
-    header['HEIGHT_DEG'] = imap.height_deg
+    header['HIERARCH WIDTH_DEG'] = imap.width_deg
+    header['HIERARCH HEIGHT_DEG'] = imap.height_deg
     header['ISHAPE_Y'] = imap.ishape[-2]
     header['ISHAPE_X'] = imap.ishape[-1]
     header['TILED'] = imap.tiled

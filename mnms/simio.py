@@ -26,7 +26,7 @@ def get_sim_mask_fn(qid, data_model, use_default_mask=True, mask_version=None, m
             mask_name += '.fits'
         return f'{fbase}{mask_version}/{mask_name}'
 
-def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=None, mask_name=None, \
+def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=True, mask_name=None, \
                      galcut=None, apod_deg=None, calibrated=None, downgrade=None, union_sources=None):
     '''
     '''
