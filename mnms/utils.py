@@ -676,7 +676,7 @@ def concurrent_standard_normal(size=1, nchunks=1, nthread=0, seed=None, dtype=np
     out = out.reshape(-1)[:totalsize]
     return out.reshape(size)
 
-def eigpow(A, e, axes=[-2, -1], copy=False):
+def eigpow(A, e, axes=[-2, -1]):
     """A hack around enlib.array_ops.eigpow which upgrades the data
     precision to at least double precision if necessary prior to
     operation.
@@ -697,16 +697,56 @@ def eigpow(A, e, axes=[-2, -1], copy=False):
     else:
         recast = False
 
-    O = array_ops.eigpow(A, e, axes=axes, copy=copy)
+    array_ops.eigpow(A, e, axes=axes, copy=False)
 
     # cast back to input precision if necessary
     if recast:
-        O = np.asanyarray(O, dtype=dtype)
+        A = np.asanyarray(A, dtype=dtype)
 
     if is_enmap:
-        O =  enmap.ndmap(O, wcs)
+        A = enmap.ndmap(A, wcs)
 
-    return O
+    return A
+
+def chunked_eigpow(A, e, axes=[-2, -1], chunk_axis=0, target_gb=5):
+    """A hack around utils.eigpow which performs the operation
+    one chunk at a time to reduce memory usage."""
+    # store wcs if imap is ndmap
+    if hasattr(A, 'wcs'):
+        is_enmap = True
+        wcs = A.wcs
+    else:
+        is_enmap = False
+
+    # need to get number of chunks, number of elements per chunk
+    inp_gb = A.nbytes / 1e9
+    nchunks = np.ceil(inp_gb/target_gb).astype(int)
+    chunksize = np.ceil(A.shape[chunk_axis]/nchunks).astype(int)
+    print(nchunks, chunksize)
+    # need to move axes to standard positions
+    eaxes = np.empty(len(axes), dtype=int)
+    chunk_axis = chunk_axis%A.ndim
+    for i, ax in enumerate(axes):
+        ax = ax%A.ndim
+        assert ax != chunk_axis, 'Cannot chunk along an active eigpow axis'
+        if ax < chunk_axis:
+            eaxes[i] = ax + 1
+        else:
+            eaxes[i] = ax
+    A = np.moveaxis(A, chunk_axis, 0)
+
+    # call eigpow for each chunk
+    for i in range(nchunks):
+        A[i*chunksize:(i+1)*chunksize] = eigpow(A[i*chunksize:(i+1)*chunksize], e, axes=eaxes)
+
+    # reshape
+    A = np.moveaxis(A, 0, chunk_axis)
+
+    if is_enmap:
+        A = enmap.ndmap(A, wcs)
+
+    return A
+
 
 def hash_qid(qid, ndigits=9):
     return int(hashlib.sha256(qid.encode('utf-8')).hexdigest(), 16) % 10**ndigits

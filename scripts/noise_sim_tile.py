@@ -32,6 +32,8 @@ parser.add_argument('--maps',dest='maps',nargs='+',type=str,default=None,help='s
 parser.add_argument('--maps-start',dest='maps_start',type=int,default=None,help='like --maps, except iterate starting at this map_id (default: %(default)s)')
 parser.add_argument('--maps-end',dest='maps_end',type=int,default=None,help='like --maps, except end iteration with this map_id (default: %(default)s)')
 parser.add_argument('--maps-step',dest='maps_step',type=int,default=1,help='like --maps, except step iteration over map_ids by this number (default: %(default)s)')
+parser.add_argument('--alm', dest='alm', default=False, 
+                    action='store_true', help='Generate simulated alms instead of maps.')
 args = parser.parse_args()
 
 if args.data_model:
@@ -63,4 +65,4 @@ assert np.all(maps >= 0)
 # Iterate over sims
 for i, s in enumerate(splits):
     for j, m in enumerate(maps):
-        model.get_sim(s, m, check_on_disk=False, write=True, verbose=True)
+        model.get_sim(s, m, alm=args.alm, check_on_disk=True, write=True, keep_model=False, verbose=True)

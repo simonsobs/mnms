@@ -1,7 +1,8 @@
 from orphics import maps
 from pixell import enmap, curvedsky
+from enlib import bench
 from mnms import covtools, utils
-from mnms.tiled_ndmap import tiled_ndmap
+from mnms.tiled_ndmap import tiled_info, tiled_ndmap
 
 import numpy as np
 
@@ -171,9 +172,43 @@ def get_iso_curvedsky_noise_sim(covar, ivar=None, flat_triu_axis=0, oshape=None,
 
 def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, 
                                         nthread=0, verbose=False):
-    '''Generate the 2d noise spectra for each of the tiles
-    '''
+    """Generate a tiled noise model 'sqrt-covariance' matrix that captures spatially-varying
+    noise correlation directions across the sky, as well as map-depth anistropies using
+    the mapmaker inverse-variance maps.
 
+    Parameters
+    ----------
+    imap : [type]
+        [description]
+    split_num : [type]
+        [description]
+    ivar : [type], optional
+        [description], by default None
+    mask : [type], optional
+        [description], by default None
+    width_deg : [type], optional
+        [description], by default 4.
+    height_deg : [type], optional
+        [description], by default 4.
+    delta_ell_smooth : int, optional
+        [description], by default 400
+    lmax : [type], optional
+        [description], by default None
+    nthread : int, optional
+        [description], by default 0
+    verbose : bool, optional
+        [description], by default False
+
+    Returns
+    -------
+    [type]
+        [description]
+
+    Raises
+    ------
+    ValueError
+        [description]
+    """
     # check that imap conforms with convention
     assert imap.ndim in range(2, 6), 'Data must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
     imap = utils.atleast_nd(imap, 5) # make data 5d
@@ -205,6 +240,7 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
     sq_f_sky = imap.set_unmasked_tiles(mask, return_sq_f_sky=True)
     imap = imap.to_tiled()
     apod = imap.apod()
+    mask=None
 
     # get component shapes
     num_arrays, num_splits, num_pol = imap.shape[1:4] # shape is (num_tiles, num_arrays, 1, num_pol, ...)
@@ -220,12 +256,24 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
             )
 
     # get all the 2D power spectra for this split; note smap 
-    # has shape (num_tiles, num_arrays, num_pol, ny, nx) after this operation
-    smap = enmap.fft(imap[..., 0, :, :, :]*apod, normalize='phys', nthread=nthread)
-    smap = np.einsum('...mayx,...nbyx->...manbyx', smap, np.conj(smap)).real
+    # has shape (num_tiles, num_arrays, num_pol, ny, nx) after this operation.
+    # NOTE: imap already masked by ell_flatten, so don't reapply (tiled) mask here
+    kmap = enmap.fft(imap[..., 0, :, :, :]*apod, normalize='phys', nthread=nthread)
+    
+    # save for later so we can 'delete' imap (really, just keep the 1st tile)
+    shape = imap.shape
+    imap = imap[0]
+    
+    # allocate output map
+    omap = np.empty(
+        (len(imap.unmasked_tiles), num_arrays, num_pol, num_arrays, num_pol, *shape[-2:]), dtype=imap.dtype
+        )
 
     # cycle through the tiles    
     for i, n in enumerate(imap.unmasked_tiles):
+        # doing outer product for each tile doesn't sacrifice speed, helps reduce memory usage
+        smap = np.einsum('mayx, nbyx -> manbyx', kmap[i], np.conj(kmap[i])).real
+
         # ewcs per tile is necessary for delta_ell_smooth to operate over correct number of Fourier pixels
         _, ewcs = imap.get_tile_geometry(n)
 
@@ -240,7 +288,7 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
             diag = comp1 == comp2
 
             # get this 2D PS and apply correct geometry for this tile
-            power = smap[i, map_index_1, pol_index_1, map_index_2, pol_index_2]
+            power = smap[map_index_1, pol_index_1, map_index_2, pol_index_2]
             power = enmap.ndmap(power, wcs=ewcs)
             
             # smooth the 2D PS
@@ -257,87 +305,97 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
                 raise ValueError('delta_ell_smooth must be >= 0')    
             
             # update output 2D PS map
-            smap[i, map_index_1, pol_index_1, map_index_2, pol_index_2] = power
+            omap[i, map_index_1, pol_index_1, map_index_2, pol_index_2] = power
             if not diag: # symmetry
-                smap[i, map_index_2, pol_index_2, map_index_1, pol_index_1] = power
+                omap[i, map_index_2, pol_index_2, map_index_1, pol_index_1] = power
 
         # correct for f_sky from mask and apod windows
-        smap[i] /= sq_f_sky[i]
+        omap[i] /= sq_f_sky[i]
 
     # take covsqrt of current power, need to reshape so covarying dimensions are spread over only two axes
-    smap = smap.reshape((-1, ncomp, ncomp) + smap.shape[-2:])
-    smap = utils.eigpow(smap, 0.5, axes=(-4,-3), copy=False)
+    omap = omap.reshape((-1, ncomp, ncomp) + omap.shape[-2:])
+    kmap=None
 
-    return imap.sametiles(smap), sqrt_cov_ell
+    with bench.show('eigpow'):
+        omap = utils.chunked_eigpow(omap, 0.5, axes=(-4,-3))
+    print('eigpow done')
+
+    return imap.sametiles(omap), sqrt_cov_ell
 
 def get_tiled_noise_sim(covsqrt, split_num, ivar=None, sqrt_cov_ell=None, num_arrays=None, num_splits=None, 
                         nthread=0, seed=None, verbose=True):
+    with bench.show('Presim'):
+        # check that covsqrt is a tiled tiled_ndmap instance    
+        assert covsqrt.tiled, 'Covsqrt must be tiled'
+        assert covsqrt.ndim == 5, 'Covsqrt must have 5 dims: (num_unmasked_tiles, comp1, comp2, ny, nx)'
+        assert covsqrt.shape[-4] == covsqrt.shape[-3], 'Covsqrt correlated subspace must be square'
+
+        # get ivar, and num_arrays if necessary
+        if ivar is not None:
+            assert np.all(ivar >= 0)
+            assert ivar.ndim in range(2, 6), 'Data must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
+            ivar = utils.atleast_nd(ivar, 5) # make data 5d
+            num_arrays, num_splits = ivar.shape[:-3]
+        else:
+            assert isinstance(num_arrays, int), 'If ivar not passed, must explicitly pass num_arrays as an python int'
+            assert isinstance(num_splits, int), 'If ivar not passed, must explicitly pass num_arrays as an python int'
+
+        # get preshape information
+        num_unmasked_tiles = covsqrt.num_tiles
+        num_comp = covsqrt.shape[-4]
+        num_pol = num_comp // num_arrays
+        if verbose:
+            print(
+                f'Number of Unmasked Tiles: {num_unmasked_tiles}\n' + \
+                f'Number of Arrays: {num_arrays}\n' + \
+                f'Number of Splits: {num_splits}\n' + \
+                f'Number of Pols.: {num_pol}\n' + \
+                f'Tile shape: {covsqrt.shape[-2:]}'
+                )
+
+    with bench.show('Random numbers'):
+        # get random numbers in the right shape. To make random draws independent of mask, we draw numbers into
+        # the full number of tiles, and then slice the unmasked tiles (even though this is a little slower)
+        rshape = (covsqrt.numy*covsqrt.numx, num_comp, *covsqrt.shape[-2:])
+        if verbose:
+            print(f'Seed: {seed}')
+        omap = utils.concurrent_standard_normal(size=rshape, dtype=covsqrt.dtype, complex=True, seed=seed, nchunks=100, nthread=nthread)
+        omap = omap[covsqrt.unmasked_tiles]
+
+    with bench.show('Map mul'):
+        # multiply random draws by the covsqrt to get the sim
+        omap = enmap.map_mul(covsqrt, omap)
+
+    with bench.show('iFFT'):
+        # go back to map space
+        omap = enmap.ifft(omap, normalize='phys', nthread=nthread).real
+        omap = omap.reshape((num_unmasked_tiles, num_arrays, num_pol, *omap.shape[-2:]))
+        omap = covsqrt.sametiles(omap)
     
-    # check that covsqrt is a tiled tiled_ndmap instance    
-    assert covsqrt.tiled, 'Covsqrt must be tiled'
-    assert covsqrt.ndim == 5, 'Covsqrt must have 5 dims: (num_unmasked_tiles, comp1, comp2, ny, nx)'
-    assert covsqrt.shape[-4] == covsqrt.shape[-3], 'Covsqrt correlated subspace must be square'
+    with bench.show('Stitch'):
+        # stitch tiles
+        omap = omap.from_tiled(power=0.5)
 
-    # get ivar, and num_arrays if necessary
-    if ivar is not None:
-        assert np.all(ivar >= 0)
-        assert ivar.ndim in range(2, 6), 'Data must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
-        ivar = utils.atleast_nd(ivar, 5) # make data 5d
-        num_arrays, num_splits = ivar.shape[:-3]
-    else:
-        assert isinstance(num_arrays, int), 'If ivar not passed, must explicitly pass num_arrays as an python int'
-        assert isinstance(num_splits, int), 'If ivar not passed, must explicitly pass num_arrays as an python int'
+    with bench.show('Filter'):
+        # filter maps
+        if sqrt_cov_ell is not None:
+            # extract the particular split from sqrt_cov_ell
+            assert (num_arrays, 1, num_pol) == sqrt_cov_ell.shape[:-1], \
+                'sqrt_cov_ell shape does not match (num_arrays, num_splits=1, num_pol, ...)'
+            sqrt_cov_ell = sqrt_cov_ell[:, 0]
+            
+            # determine lmax from sqrt_cov_ell, and build the lfilter
+            lmax = min(utils.lmax_from_wcs(omap.wcs), sqrt_cov_ell.shape[-1]-1)
+            lfilter = sqrt_cov_ell[..., :lmax+1]
+            
+            # do the filtering
+            for i in range(num_arrays):
+                omap[i] = utils.ell_filter(omap[i], lfilter[i], mode='curvedsky', lmax=lmax)
 
-    # get preshape information
-    num_unmasked_tiles = covsqrt.num_tiles
-    num_comp = covsqrt.shape[-4]
-    num_pol = num_comp // num_arrays
-    if verbose:
-        print(
-            f'Number of Unmasked Tiles: {num_unmasked_tiles}\n' + \
-            f'Number of Arrays: {num_arrays}\n' + \
-            f'Number of Splits: {num_splits}\n' + \
-            f'Number of Pols.: {num_pol}\n' + \
-            f'Tile shape: {covsqrt.shape[-2:]}'
-            )
-
-    # get random numbers in the right shape. To make random draws independent of mask, we draw numbers into
-    # the full number of tiles, and then slice the unmasked tiles (even though this is a little slower)
-    rshape = (covsqrt.numy*covsqrt.numx, num_comp, *covsqrt.shape[-2:])
-    if verbose:
-        print(f'Seed: {seed}')
-    omap = utils.concurrent_standard_normal(size=rshape, dtype=covsqrt.dtype, complex=True, seed=seed, nchunks=100, nthread=nthread)
-    omap = omap[covsqrt.unmasked_tiles]
-
-    # multiply random draws by the covsqrt to get the sim
-    omap = enmap.map_mul(covsqrt, omap)
-
-    # go back to map space
-    omap = enmap.ifft(omap, normalize='phys', nthread=nthread).real
-    omap = omap.reshape((num_unmasked_tiles, num_arrays, num_pol, *omap.shape[-2:]))
-    omap = covsqrt.sametiles(omap)
-    
-    # stitch tiles
-    omap = omap.from_tiled(power=0.5)
-
-    # filter maps
-    if sqrt_cov_ell is not None:
-        # extract the particular split from sqrt_cov_ell
-        assert (num_arrays, 1, num_pol) == sqrt_cov_ell.shape[:-1], \
-            'sqrt_cov_ell shape does not match (num_arrays, num_splits=1, num_pol, ...)'
-        sqrt_cov_ell = sqrt_cov_ell[:, 0]
-        
-        # determine lmax from sqrt_cov_ell, and build the lfilter
-        lmax = min(utils.lmax_from_wcs(omap.wcs), sqrt_cov_ell.shape[-1]-1)
-        lfilter = sqrt_cov_ell[..., :lmax+1]
-        
-        # do the filtering
-        for i in range(num_arrays):
-            omap[i] = utils.ell_filter(omap[i], lfilter[i], mode='curvedsky', lmax=lmax)
-
-    # if ivar is not None, unwhiten the imap data using ivar
-    if ivar is not None:
-        ivar = ivar[:, split_num]
-        np.divide(omap, np.sqrt(ivar), omap, where=ivar!=0)
+    with bench.show('ivar'):
+        # if ivar is not None, unwhiten the imap data using ivar
+        if ivar is not None:
+            ivar = ivar[:, split_num]
+            np.divide(omap, np.sqrt(ivar), omap, where=ivar!=0)
 
     return omap.reshape((num_arrays, 1, num_pol, *omap.shape[-2:])) # add axis for split (1)

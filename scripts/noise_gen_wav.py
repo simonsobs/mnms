@@ -48,4 +48,4 @@ model = nm.WaveletNoiseModel(
     *args.qid, data_model=data_model, downgrade=args.downgrade, mask_version=args.mask_version,
     mask_name=args.mask_name, union_sources=args.union_sources, notes=args.notes, lamb=args.lamb, lmax=args.lmax, 
     smooth_loc=args.smooth_loc)
-model.get_model(check_on_disk=False, verbose=True)
+model.get_model(check_on_disk=True, verbose=True)

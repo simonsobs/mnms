@@ -327,7 +327,7 @@ class NoiseModel(ABC):
         return inpaint.inpaint_noise_catalog(imap, ivar, mask_bool, catalog, inplace=inplace, 
                                              seed=seed)
 
-    def get_model(self, check_on_disk=True, write=True, keep=False, keep_data=False, verbose=False, **kwargs):
+    def get_model(self, check_on_disk=True, write=True, keep_model=False, keep_data=False, verbose=False, **kwargs):
         """Generate (or load) a sqrt-covariance matrix for this NoiseModel instance.
 
         Parameters
@@ -339,7 +339,7 @@ class NoiseModel(ABC):
             for the missing splits instead. By default True.
         write : bool, optional
             Save the generated model to disk, by default True.
-        keep : bool, optional
+        keep_model : bool, optional
             Store the generated (or loaded) model in the instance attributes, by 
             default False.
         keep_data: bool, optional
@@ -352,12 +352,14 @@ class NoiseModel(ABC):
             # build a list of splits that don't have models on-disk
             does_not_exist = []
             for s in range(self._num_splits):
-                res = self._check_model_on_disk(s, keep=keep)
+                res = self._check_model_on_disk(s, keep=keep_model)
                 if not res:
                     does_not_exist.append(s)
             if not does_not_exist:
                 # if all models exist on-disk, exit this function
                 return
+        else:
+            does_not_exist = range(self._num_splits)
 
         # the model needs data, so we need to load it. this model in particular
         # asks for noise maps as input
@@ -368,7 +370,7 @@ class NoiseModel(ABC):
             with bench.show(f'Generating noise model for split {s}'):
                 nm_dict = self._get_model(s, dmap, verbose=verbose)
 
-            if keep:
+            if keep_model:
                 self._keep(s, nm_dict)
 
             if write:
@@ -441,6 +443,10 @@ class NoiseModel(ABC):
         """Store a dictionary of noise model variables in instance attributes under key split_num"""
         self._nm_dict[split_num] = nm_dict
 
+    def _delete(self, split_num):
+        """Delete a dictionary entry of noise model variables from instance attributes under key split_num"""
+        del self._nm_dict[split_num]
+
     @abstractmethod
     def _get_dmap(self, imap):
         """Return the required input difference map for a NoiseModel subclass, from split data imap"""
@@ -456,7 +462,7 @@ class NoiseModel(ABC):
         """Write sqrt_cov_mat, sqrt_cov_ell, and possibly more noise model variables to filename fn"""
         pass
 
-    def get_sim(self, split_num, sim_num, alm=False, check_on_disk=True, write=False, verbose=False):
+    def get_sim(self, split_num, sim_num, alm=False, check_on_disk=True, write=False, keep_model=True, verbose=False):
         """Generate a sim from this NoiseModel.
 
         Parameters
@@ -476,6 +482,10 @@ class NoiseModel(ABC):
             generate the sim on-the-fly instead, by default True.
         write : bool, optional
             Save the generated sim to disk, by default False.
+        keep_model : bool, optional
+            Store the loaded model for this split in instance attributes, by default True.
+            This helps spends memory to avoid spending time loading the model from disk
+            for each call to this method.
         verbose : bool, optional
             Print possibly helpful messages, by default False.
 
@@ -500,7 +510,7 @@ class NoiseModel(ABC):
 
         if check_on_disk:
             res = self._check_sim_on_disk(split_num, sim_num, alm=alm)
-            if res:
+            if res is not None:
                 return res
 
         if split_num not in self._nm_dict:
@@ -508,9 +518,12 @@ class NoiseModel(ABC):
 
         seed = self._get_seed(split_num, sim_num)
 
-        with bench.show(f'Generating noise sim for split {split_num}'):
+        with bench.show(f'Generating noise sim for split {split_num}, map {sim_num}'):
             sim = self._get_sim(split_num, seed, verbose=verbose)
             sim *= self._mask
+
+        if not keep_model:
+            self._delete(split_num)
         
         if write:
             fn = self._get_sim_fn(split_num, sim_num)
@@ -876,11 +889,12 @@ class WaveletNoiseModel(NoiseModel):
             dtype=np.float32, seed=seed
         )
 
-        # want shape (num_arrays, num_splits=1, num_pol, ny, nx)
-        assert sim.ndim == 4, 'Map must have shape (num_arrays, num_pol, ny, nx)'
-        sim = sim.reshape(sim.shape[0], 1, *sim.shape[1:])
-        
         # need to correct for fact that sim is a sim of a difference
         # map, but we want a sim of the noise in a split
         sim *= self._corr_fact[:, split_num]
+        
+        # want shape (num_arrays, num_splits=1, num_pol, ny, nx)
+        assert sim.ndim == 4, 'Map must have shape (num_arrays, num_pol, ny, nx)'
+        sim = sim.reshape(sim.shape[0], 1, *sim.shape[1:])
+
         return sim
