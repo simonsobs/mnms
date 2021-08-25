@@ -4,17 +4,17 @@ import argparse
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--qid', dest='qid', nargs='+', type=str, required=True,
-                    help='list of soapack DR5 array "qids"')
+                    help='list of soapack array "qids"')
 
 parser.add_argument('--lmax', dest='lmax', type=int, required=True, default=5000,
                     help='Bandlimit of covariance matrix.')
 
 parser.add_argument('--mask-version', dest='mask_version', type=str, 
-                    default=None, help='Look in dr6sims:mask_path/mask_version/ '
+                    default=None, help='Look in mnms:mask_path/mask_version/ '
                     'for mask (default: %(default)s)')
 
 parser.add_argument('--mask-name', dest='mask_name', type=str, default=None,
-                    help='Load dr6sims:mask_path/mask_version/mask_name.fits '
+                    help='Load mnms:mask_path/mask_version/mask_name.fits '
                     '(default: %(default)s)')
 
 parser.add_argument('--downgrade', dest='downgrade', type=int, default=1,
@@ -48,4 +48,4 @@ model = nm.WaveletNoiseModel(
     *args.qid, data_model=data_model, downgrade=args.downgrade, mask_version=args.mask_version,
     mask_name=args.mask_name, union_sources=args.union_sources, notes=args.notes, lamb=args.lamb, lmax=args.lmax, 
     smooth_loc=args.smooth_loc)
-model.get_model(check_on_disk=False, verbose=True)
+model.get_model(check_on_disk=True, verbose=True)

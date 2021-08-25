@@ -1,7 +1,8 @@
 from orphics import maps
 from pixell import enmap, curvedsky
+from enlib import bench
 from mnms import covtools, utils
-from mnms.tiled_ndmap import tiled_ndmap
+from mnms.tiled_ndmap import tiled_info, tiled_ndmap
 
 import numpy as np
 
@@ -169,30 +170,78 @@ def get_iso_curvedsky_noise_sim(covar, ivar=None, flat_triu_axis=0, oshape=None,
 
     return omap
 
-def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, 
+def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, 
                                         nthread=0, verbose=False):
-    '''Generate the 2d noise spectra for each of the tiles
-    '''
+    """Generate a tiled noise model 'sqrt-covariance' matrix that captures spatially-varying
+    noise correlation directions across the sky, as well as map-depth anistropies using
+    the mapmaker inverse-variance maps.
 
+    Parameters
+    ----------
+    imap : ndmap, optional
+        Data maps, by default None.
+    split_num : int
+        The 0-based index of the split to model.
+    ivar : array-like, optional
+        Data inverse-variance maps, by default None.
+    mask : array-like, optional
+        Data mask, by default None.
+    width_deg : scalar, optional
+        The characteristic tile width in degrees, by default 4.
+    height_deg : scalar, optional
+        The characteristic tile height in degrees,, by default 4.
+    delta_ell_smooth : int, optional
+        The smoothing scale in Fourier space to mitigate bias in the noise model
+        from a small number of data splits, by default 400.
+    lmax : int, optional
+        The bandlimit of the maps, by default None.
+        If None, will be set to twice the theoretical CAR limit, ie 180/wcs.wcs.cdelt[1].
+    nthread : int, optional
+        The number of threads, by default 0.
+        If 0, use output of get_cpu_count().
+    verbose : bool, optional
+        Print possibly helpful messages, by default False.
+
+    Returns
+    -------
+    (mnms.tiled_ndmap.tiled_ndmap instance, ndarray)
+        1. A tiled ndmap of shape (num_tiles, num_comp, num_comp, ny, nx), containing the 'sqrt-
+        covariance' information in each tiled region of this split (difference) map. Only tiles
+        that are 'unmasked' are measured. The number of correlated components in each tile
+        is equal to the number of array 'qids' * number of Stokes polarizations. Each 'pixel' is
+        the Fourier-space 'sqrt' power in that mode.
+        2. An ndarray of shape (num_arrays, num_splits=1, num_pol, nell) 'sqrt_ell' used to
+        flatten the input map in harmonic space. 
+
+    Raises
+    ------
+    ValueError
+        If delta_ell_smooth is negative.
+    """
     # check that imap conforms with convention
     assert imap.ndim in range(2, 6), 'Data must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
     imap = utils.atleast_nd(imap, 5) # make data 5d
 
     # if ivar is not None, whiten the imap data using ivar
     if ivar is not None:
-        assert np.all(ivar >= 0)
+        if verbose:
+            print('Getting whitened difference maps')
         imap = utils.get_whitened_noise_map(imap, ivar)
 
     # filter map prior to tiling, get the c_ells.
     # we need to filter per-split, since >2-split arrays have widely-varying noise power spectra.
-    # imap is henceforth masked, as part of the filtering
     if mask is None:
         mask = np.array([1])
     mask = mask.astype(imap.dtype, copy=False)
     if lmax is None:
         lmax = utils.lmax_from_wcs(imap.wcs)
+
+    # we want to keep split axis at -4, but slice out our split to reduce cost.
+    # imap now has shape (num_arrays, 1, num_pol, ny, nx).
+    # imap is henceforth masked, as part of the filtering.
     imap, sqrt_cov_ell = utils.ell_flatten(
-        imap, mask=mask, return_sqrt_cov=True, per_split=True, mode='curvedsky', lmax=lmax
+        imap[..., split_num:split_num+1, :, :, :], mask=mask, return_sqrt_cov=True,
+        per_split=True, mode='curvedsky', lmax=lmax
         )
 
     # get the tiled data, apod window
@@ -200,9 +249,10 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
     sq_f_sky = imap.set_unmasked_tiles(mask, return_sq_f_sky=True)
     imap = imap.to_tiled()
     apod = imap.apod()
+    mask=None
 
     # get component shapes
-    num_arrays, num_splits, num_pol = imap.shape[1:4] # shape is (num_tiles, num_arrays, num_splits, num_pol, ...)
+    num_arrays, num_splits, num_pol = imap.shape[1:4] # shape is (num_tiles, num_arrays, 1, num_pol, ...)
     ncomp = num_arrays * num_pol
     nspec = utils.triangular(ncomp)
     if verbose:
@@ -214,12 +264,25 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
             f'Tile shape: {imap.shape[-2:]}'
             )
 
-    # get all the 2D power spectra, averaged over splits
-    smap = enmap.fft(imap*apod, normalize='phys', nthread=nthread)
-    smap = np.einsum('...miayx,...nibyx->...manbyx', smap, np.conj(smap)).real / num_splits
+    # get all the 2D power spectra for this split; note smap 
+    # has shape (num_tiles, num_arrays, num_pol, ny, nx) after this operation.
+    # NOTE: imap already masked by ell_flatten, so don't reapply (tiled) mask here
+    kmap = enmap.fft(imap[..., 0, :, :, :]*apod, normalize='phys', nthread=nthread)
+    
+    # save for later so we can 'delete' imap (really, just keep the 1st tile)
+    shape = imap.shape
+    imap = imap[0]
+    
+    # allocate output map
+    omap = np.empty(
+        (len(imap.unmasked_tiles), num_arrays, num_pol, num_arrays, num_pol, *shape[-2:]), dtype=imap.dtype
+        )
 
     # cycle through the tiles    
     for i, n in enumerate(imap.unmasked_tiles):
+        # doing outer product for each tile doesn't sacrifice speed, helps reduce memory usage
+        smap = np.einsum('mayx, nbyx -> manbyx', kmap[i], np.conj(kmap[i])).real
+
         # ewcs per tile is necessary for delta_ell_smooth to operate over correct number of Fourier pixels
         _, ewcs = imap.get_tile_geometry(n)
 
@@ -234,7 +297,7 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
             diag = comp1 == comp2
 
             # get this 2D PS and apply correct geometry for this tile
-            power = smap[i, map_index_1, pol_index_1, map_index_2, pol_index_2]
+            power = smap[map_index_1, pol_index_1, map_index_2, pol_index_2]
             power = enmap.ndmap(power, wcs=ewcs)
             
             # smooth the 2D PS
@@ -251,22 +314,60 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask=None, width_deg=4., height_deg
                 raise ValueError('delta_ell_smooth must be >= 0')    
             
             # update output 2D PS map
-            smap[i, map_index_1, pol_index_1, map_index_2, pol_index_2] = power
+            omap[i, map_index_1, pol_index_1, map_index_2, pol_index_2] = power
             if not diag: # symmetry
-                smap[i, map_index_2, pol_index_2, map_index_1, pol_index_1] = power
+                omap[i, map_index_2, pol_index_2, map_index_1, pol_index_1] = power
 
         # correct for f_sky from mask and apod windows
-        smap[i] /= sq_f_sky[i]
+        omap[i] /= sq_f_sky[i]
 
     # take covsqrt of current power, need to reshape so covarying dimensions are spread over only two axes
-    smap = smap.reshape((-1, ncomp, ncomp) + smap.shape[-2:])
-    smap = utils.eigpow(smap, 0.5, axes=(-4,-3), copy=False)
+    omap = omap.reshape((-1, ncomp, ncomp) + omap.shape[-2:])
+    kmap=None
+    omap = utils.chunked_eigpow(omap, 0.5, axes=(-4,-3))
 
-    return imap.sametiles(smap), sqrt_cov_ell
+    return imap.sametiles(omap), sqrt_cov_ell
 
-def get_tiled_noise_sim(covsqrt, ivar=None, sqrt_cov_ell=None, num_arrays=None, num_splits=None, 
-                        nthread=0, split_num=None, seed=None, verbose=True):
-    
+def get_tiled_noise_sim(covsqrt, split_num, ivar=None, sqrt_cov_ell=None, num_arrays=None, num_splits=None, 
+                        nthread=0, seed=None, verbose=True):
+    """Get a noise sim from a tiled noise model of a given data split. The sim is *not* masked, 
+    but is only nonzero in regions of unmasked tiles. 
+
+    Parameters
+    ----------
+    covsqrt : mnms.tiled_ndmap.tiled_ndmap
+        A tiled ndmap of shape (num_tiles, num_comp, num_comp, ny, nx), containing the 'sqrt-
+        covariance' information in each tiled region of this split (difference) map. Only tiles
+        that are 'unmasked' are measured. The number of correlated components in each tile
+        is equal to the number of array 'qids' * number of Stokes polarizations. Each 'pixel' is
+        the Fourier-space 'sqrt' power in that mode.
+    split_num : int
+        The 0-based index of the split to model.
+    ivar : array-like, optional
+        Data inverse-variance maps, by default None. Used to infer num_arrays and num_splits
+        if provided.
+    sqrt_cov_ell : ndarray, optional
+        An ndarray of shape (num_arrays, num_splits=1, num_pol, nell) 'sqrt_ell' used to
+        unflatten the simulated map in harmonic space, by default None.
+    num_arrays : int, optional
+        If ivar is None, the number of correlated arrays in num_comp, by default None.
+    num_splits : int, optional
+        If ivar is None, the number of splits that built the `covsqrt` model, by default None.
+    nthread : int, optional
+        The number of threads, by default 0.
+        If 0, use output of get_cpu_count().
+    seed : list, optional
+        List of integers to be passed to np.random seeding utilities.
+    verbose : bool, optional
+        Print possibly helpful messages, by default False.
+
+    Returns
+    -------
+    ndmap
+        A shape (num_arrays, num_splits=1, num_pol, ny, nx) noise sim of the corresponding
+        imap split. It has the correct power for the noise in the data proper, not in the
+        difference map. It is not masked, but is only nonzero in regions of unmasked tiles. 
+    """
     # check that covsqrt is a tiled tiled_ndmap instance    
     assert covsqrt.tiled, 'Covsqrt must be tiled'
     assert covsqrt.ndim == 5, 'Covsqrt must have 5 dims: (num_unmasked_tiles, comp1, comp2, ny, nx)'
@@ -300,11 +401,17 @@ def get_tiled_noise_sim(covsqrt, ivar=None, sqrt_cov_ell=None, num_arrays=None, 
     rshape = (covsqrt.numy*covsqrt.numx, num_comp, *covsqrt.shape[-2:])
     if verbose:
         print(f'Seed: {seed}')
-    omap = utils.concurrent_standard_normal(size=rshape, dtype=covsqrt.dtype, complex=True, seed=seed, nchunks=100, nthread=nthread)
+    omap = utils.concurrent_standard_normal(
+        size=rshape, dtype=covsqrt.dtype, complex=True, seed=seed, 
+        nchunks=100, nthread=nthread
+        )
     omap = omap[covsqrt.unmasked_tiles]
 
     # multiply random draws by the covsqrt to get the sim
-    omap = enmap.map_mul(covsqrt, omap)
+    omap = utils.concurrent_einsum(
+        '...abyx, ...byx -> ...ayx', covsqrt, omap, nchunks=100, nthread=nthread
+        )
+    omap = enmap.samewcs(omap, covsqrt)
 
     # go back to map space
     omap = enmap.ifft(omap, normalize='phys', nthread=nthread).real
@@ -317,9 +424,9 @@ def get_tiled_noise_sim(covsqrt, ivar=None, sqrt_cov_ell=None, num_arrays=None, 
     # filter maps
     if sqrt_cov_ell is not None:
         # extract the particular split from sqrt_cov_ell
-        assert (num_arrays, num_splits, num_pol) == sqrt_cov_ell.shape[:-1], \
-            'sqrt_cov_ell shape does not match (num_arrays, num_splits, num_pol, ...)'
-        sqrt_cov_ell = sqrt_cov_ell[:, split_num]
+        assert (num_arrays, 1, num_pol) == sqrt_cov_ell.shape[:-1], \
+            'sqrt_cov_ell shape does not match (num_arrays, num_splits=1, num_pol, ...)'
+        sqrt_cov_ell = sqrt_cov_ell[:, 0]
         
         # determine lmax from sqrt_cov_ell, and build the lfilter
         lmax = min(utils.lmax_from_wcs(omap.wcs), sqrt_cov_ell.shape[-1]-1)
