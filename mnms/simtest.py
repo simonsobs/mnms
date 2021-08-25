@@ -695,7 +695,7 @@ def get_map_histograms(data, sim, window=1, ledges=None, lmax=6000, mode='fft', 
     return ks_stat_map, ks_p_map
 
 
-def get_Cl_ratio(data_map, sim_map, window=1, ledges=None, lmax=6000, method='curvedsky', ylim=None, plot=True, save_path=None):
+def get_Cl_ratio(data_map, sim_map, window=1, ledges=None, lmax=6000, method='curvedsky', ylim=None, plot=True, show=False, save_path=None):
     """Returns the ratio of Cls for the two maps masked with the given window.
 
     Parameters
@@ -710,6 +710,8 @@ def get_Cl_ratio(data_map, sim_map, window=1, ledges=None, lmax=6000, method='cu
         The maximum ell of the harmonic transform, by default 6000
     plot : bool, optional
         Whether to generate a plot of the ratio vs ell, by default True
+    show : bool, optional
+        Whether to show the plot, by default False
     save_path : path-like, optional
         If provided, saves the plot to the path, by default None
 
@@ -751,10 +753,11 @@ def get_Cl_ratio(data_map, sim_map, window=1, ledges=None, lmax=6000, method='cu
                 ax.set_ylim(*ylim)
             plt.legend()
             plt.title(f'$\ell_{{min}}={lmin}, \ell_{{max}}={lmax}$')
-            fn = f'_lmin{lmin}_lmax{lmax}'
+            fn = f'_lmin{lmin}_lmax{lmax}.png'
             if save_path is not None:
                 plt.savefig(save_path + fn, bbox_inches='tight')
-            plt.show()
+            if show:
+                plt.show()
 
         out.append(np.mean(y/bias))
 

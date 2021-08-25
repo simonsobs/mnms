@@ -14,11 +14,32 @@ import hashlib
 # Utility functions to support tiling classes and functions. Just keeping code organized so I don't get whelmed.
 
 def get_default_data_model():
+    """Returns a soapack.interfaces.DataModel instance depending on the
+    name of the data model specified in the users's soapack config 
+    'mnms' block, under key 'default_data_model'.
+
+    Returns
+    -------
+    soapack.interfaces.DataModel instance
+        An object used for loading raw data from disk.
+    """
     config = sints.dconfig['mnms']
     dm_name = config['default_data_model']
     return getattr(sints, dm_name.upper())()
 
 def get_default_mask_version():
+    """Returns the mask version (string) depending on what is specified
+    in the user's soapack config. If the 'mnms' block has a key
+    'default_mask_version', return the value of that key. If not, return
+    the 'default_mask_version' from the user's default data model block.
+
+    Returns
+    -------
+    str
+        A default mask version string to help find an analysis mask. With
+        no arguments, a NoiseModel constructor will use this mask version
+        to seek the analysis mask in directory mask_path/mask_version.
+    """
     config = sints.dconfig['mnms']
     try:
         mask_version = config['default_mask_version']
@@ -29,6 +50,7 @@ def get_default_mask_version():
     return mask_version
 
 def get_nsplits_by_qid(qid, data_model):
+    """Get the number of splits in the raw data corresponding to this array 'qid'"""
     return int(data_model.adf[data_model.adf['#qid']==qid]['nsplits'])
 
 def slice_geometry_by_pixbox(ishape, iwcs, pixbox):
@@ -218,6 +240,22 @@ def get_logical_mask(cond, op=np.logical_or, keep_prepend_dims=False, axis=0):
     return op.reduce(cond, axis=axis)
 
 def get_coadd_map(imap, ivar):
+    """Return sum(imap[i]*ivar[i]) / sum(ivar[i]), where
+    each sum is over splits.
+
+    Parameters
+    ----------
+    imap : (..., nsplit, 3, ny, nx) ndmap
+        Data maps for N splits.
+    ivar : (..., nsplit, 1, ny, nx) ndmap
+        Inverse variance maps for N splits.
+
+    Returns
+    -------
+    coadd : (..., 1, 3, ny, nx) ndmap
+        Inverse variance weighted coadd over splits, with
+        singleton dimension in split axis.
+    """
     if hasattr(imap, 'wcs'):
         is_enmap = True
         wcs = imap.wcs
@@ -254,7 +292,7 @@ def get_ivar_eff(ivar, use_inf=False):
     
     Parameters
     ----------
-    ivar : (..., nsplit, 1, ny, nx) enmap
+    ivar : (..., nsplit, 1, ny, nx) ndmap
         Inverse variance maps for N splits.
     use_inf : bool, optional
         If set, use np.inf for values that approach infinity, 
@@ -435,6 +473,7 @@ def interp1d_bins(bins, y, return_vals=False, **interp1d_kwargs):
 
 # this is twice the theoretical CAR bandlimit!
 def lmax_from_wcs(wcs):
+    """Returns 180/wcs.cdelt[1]; this is twice the theoretical CAR bandlimit"""
     return int(180/np.abs(wcs.wcs.cdelt[1]))
 
 # forces shape to (num_arrays, num_splits, num_pol, ny, nx) and optionally averages over splits
@@ -591,7 +630,32 @@ def ell_flatten(imap, mask=1, return_sqrt_cov=False, per_split=False, mode='curv
         raise NotImplementedError('Only implemented modes are fft and curvedsky')
 
 # further extended here for ffts
-def ell_filter(imap, lfilter, mode='fft', ainfo=None, lmax=None, nthread=0):
+def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0):
+    """Filter a map by an isotropic function of harmonic ell.
+
+    Parameters
+    ----------
+    imap : ndmap
+        Maps to be filtered, no greater than ndim=3.
+    lfilter : array-like or callable
+        If array-like, no greater than ndim=2. If callable, will
+        be evaluated over range(lmax+1).
+    mode : str, optional
+        The convolution space: 'curvedsky' or 'fft', by default 'curvedsky'.
+    ainfo : sharp.alm_info, optional
+        Info for the alms, by default None.
+    lmax : int, optional
+        Bandlimit of transforms, by default None. If None, will 
+        be the result of lmax_from_wcs(imap.wcs)
+    nthread : int, optional
+        Threads to use in FFTs, by default 0. If 0, will be
+        the result of get_cpu_count()
+
+    Returns
+    -------
+    ndmap
+        Imap filtered by lfilter.
+    """
     if mode == 'fft':
         kmap = enmap.fft(imap, nthread=nthread)
         if callable(lfilter):
@@ -634,13 +698,47 @@ def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
 
 # from pixell/fft.py
 def get_cpu_count():
+    """Number of available threads, either from environment variable 'OMP_NUM_THREADS' or physical CPU cores"""
     try:
         nthread = int(os.environ['OMP_NUM_THREADS'])
     except (KeyError, ValueError):
         nthread = multiprocessing.cpu_count()
     return nthread
 
-def concurrent_standard_normal(size=1, nchunks=1, nthread=0, seed=None, dtype=np.float32, complex=False):
+def concurrent_standard_normal(size=1, nchunks=100, nthread=0, seed=None, dtype=np.float32, complex=False):
+    """Draw standard normal (real or complex) random variates concurrently.
+
+    Parameters
+    ----------
+    size : int or iterable, optional
+        The shape to draw random numbers into, by default 1.
+    nchunks : int, optional
+        The number of concurrent subdraws to make, by default 100. 
+        These draws are concatenated in the output; therefore, the
+        output changes both with the seed and with nchunks.
+    nthread : int, optional
+        Number of concurrent threads, by default 0. If 0, the result
+        of get_cpu_count().
+    seed : int or iterable-of-ints, optional
+        Random seed to pass to np.random.SeedSequence, by default None.
+    dtype : np.dtype, optional
+        Data type of output if real, or of each real and complex,
+        component, by default np.float32. Must be a 4- or 8-byte
+        type.
+    complex : bool, optional
+        If True, return a complex random variate, by default False.
+
+    Returns
+    -------
+    ndarray
+        Real or complex standard normal random variates in shape 'size'
+        with each real and/or complex part having dtype 'dtype'. 
+
+    Raises
+    ------
+    ValueError
+        If the dtype does not have 4 or 8 bytes.
+    """
     # get size per chunk draw
     totalsize = np.prod(size, dtype=int)
     chunksize = np.ceil(totalsize/nchunks).astype(int)
@@ -669,12 +767,145 @@ def concurrent_standard_normal(size=1, nchunks=1, nthread=0, seed=None, dtype=np
         fs = [executor.submit(_fill, out_imag, i, i+1, rngs[i]) for i in range(nchunks)]
         futures.wait(fs)
 
-        # unfortuntely this line takes 80% of the time for a complex draw
-        out = out + 1j*out_imag
+        # if not concurrent, casting to complex takes 80% of the time for a complex draw
+        if np.dtype(dtype).itemsize == 4:
+            idtype = np.complex64
+        elif np.dtype(dtype).itemsize == 8:
+            idtype = np.complex128
+        else:
+            raise ValueError('Input dtype must have 4 or 8 bytes')
+        imag_vec = np.full((nchunks, 1), 1j, dtype=idtype)
+        out_imag = concurrent_op(np.multiply, out_imag, imag_vec, nchunks=nchunks, nthread=nthread)
+        out = concurrent_op(np.add, out, out_imag, nchunks=nchunks, nthread=nthread)
 
     # return
     out = out.reshape(-1)[:totalsize]
     return out.reshape(size)
+
+def concurrent_op(op, a, b, *args, chunk_axis_a=0, chunk_axis_b=0, nchunks=100, nthread=0, **kwargs):
+    """Perform a numpy operation on two arrays concurrently.
+
+    Parameters
+    ----------
+    op : numpy function
+        A numpy function to be performed, e.g. np.add or np.multiply
+    a : ndarray
+        The first array in the operation.
+    b : ndarray
+        The second array in the operation
+    chunk_axis_a : int, optional
+        The axis in a over which the operation may be applied
+        concurrently, by default 0.
+    chunk_axis_b : int, optional
+        The axis in b over which the operation may be applied
+        concurrently, by default 0.
+    nchunks : int, optional
+        The number of chunks to loop over concurrently, by default 100.
+    nthread : int, optional
+        The number of threads, by default 0.
+        If 0, use output of get_cpu_count().
+
+    Returns
+    -------
+    ndarray
+        The result of op(a, b, *args, **kwargs), except with the axis
+        corresponding to the a, b chunk axes located at axis-0.
+
+    Notes
+    -----
+    The chunk axes are what a user might expect to naively 'loop over'. For
+    maximum efficiency, they should be long. They must be of equal size in
+    a and b.
+    """
+    # move axes to standard positions
+    a = np.moveaxis(a, chunk_axis_a, 0)
+    b = np.moveaxis(b, chunk_axis_b, 0)
+    assert a.shape[0] == b.shape[0], f'Size of chunk axis must be equal, got {a.shape[0]} and {b.shape[0]}'
+    
+    # get size per chunk draw
+    totalsize = a.shape[0]
+    chunksize = np.ceil(totalsize/nchunks).astype(int)
+
+    # define working objects
+    # in order to get output shape, dtype, must get shape, dtype of op(a[0], b[0])
+    out_test = op(a[0], b[0], *args, **kwargs)
+    out = np.empty((totalsize, *out_test.shape), dtype=out_test.dtype)
+
+    # perform multithreaded execution
+    if nthread == 0:
+        nthread = get_cpu_count()
+    executor = futures.ThreadPoolExecutor(max_workers=nthread)
+
+    def _fill(start, stop):
+        op(a[start:stop], b[start:stop], *args, out=out[start:stop], **kwargs)
+    
+    fs = [executor.submit(_fill, i*chunksize, (i+1)*chunksize) for i in range(nchunks)]
+    futures.wait(fs)
+
+    # return
+    return out
+
+def concurrent_einsum(subscripts, a, b, *args, chunk_axis_a=0, chunk_axis_b=0, nchunks=100, nthread=0, **kwargs):
+    """A concurrent version of np.einsum, operating on only two buffers
+    at a time.
+
+    Parameters
+    ----------
+    subscripts : str
+        Einstein summation string to pass to np.einsum
+    a : array-like
+        First tensor.
+    b : array-like
+        Second tensor.
+    chunk_axis_a : int, optional
+        The axis of a to loop over concurrently, by default 0.
+    chunk_axis_b : int, optional
+        The axis of b to loop over concurrently, by default 0.
+    nchunks : int, optional
+        The number of chunks to loop over concurrently, by default 100.
+    nthread : int, optional
+        The number of threads, by default 0.
+        If 0, use output of get_cpu_count().
+
+    Returns
+    -------
+    ndarray
+        The result of np.einsum(subscripts, a, b), except with the axis
+        corresponding to the a, b chunk axes located at axis-0.
+
+    Notes
+    -----
+    The chunk axes must not be involved in the Einstein summation of subscripts;
+    rather, they should be axes properly looped over. For maximum efficiency,
+    they should be long. They must be of equal size in a and b.
+    """
+    # move axes to standard positions
+    a = np.moveaxis(a, chunk_axis_a, 0)
+    b = np.moveaxis(b, chunk_axis_b, 0)
+    assert a.shape[0] == b.shape[0], f'Size of chunk axis must be equal, got {a.shape[0]} and {b.shape[0]}'
+
+    # get size per chunk draw
+    totalsize = a.shape[0]
+    chunksize = np.ceil(totalsize/nchunks).astype(int)
+    
+    # define working objects
+    # in order to get output shape, dtype, must get shape, dtype of np.einsum on one element
+    out_test = np.einsum(subscripts, a[0], b[0], *args, **kwargs)
+    out = np.empty((totalsize, *out_test.shape), dtype=out_test.dtype)
+
+    # perform multithreaded execution
+    if nthread == 0:
+        nthread = get_cpu_count()
+    executor = futures.ThreadPoolExecutor(max_workers=nthread)
+
+    def _fill(start, stop):
+        np.einsum(subscripts, a[start:stop], b[start:stop], *args, out=out[start:stop], **kwargs)
+    
+    fs = [executor.submit(_fill, i*chunksize, (i+1)*chunksize) for i in range(nchunks)]
+    futures.wait(fs)
+
+    # return
+    return out
 
 def eigpow(A, e, axes=[-2, -1]):
     """A hack around enlib.array_ops.eigpow which upgrades the data
@@ -722,7 +953,7 @@ def chunked_eigpow(A, e, axes=[-2, -1], chunk_axis=0, target_gb=5):
     inp_gb = A.nbytes / 1e9
     nchunks = np.ceil(inp_gb/target_gb).astype(int)
     chunksize = np.ceil(A.shape[chunk_axis]/nchunks).astype(int)
-    print(nchunks, chunksize)
+
     # need to move axes to standard positions
     eaxes = np.empty(len(axes), dtype=int)
     chunk_axis = chunk_axis%A.ndim
@@ -747,11 +978,35 @@ def chunked_eigpow(A, e, axes=[-2, -1], chunk_axis=0, target_gb=5):
 
     return A
 
-
 def hash_qid(qid, ndigits=9):
+    """Turn a qid string into an ndigit hash, using hashlib.sha256 hashing"""
     return int(hashlib.sha256(qid.encode('utf-8')).hexdigest(), 16) % 10**ndigits
 
 def get_seed(split_num, sim_num, data_model, *qids, n_max_qids=4, ndigits=9):
+    """Get a seed for a sim. The seed is unique for a given split number, sim
+    number, soapack.interfaces.DataModel class, and list of array 'qids'.
+
+    Parameters
+    ----------
+    split_num : int
+        The 0-based index of the split to simulate.
+    sim_num : int
+        The map index, used in setting the random seed. Must be non-negative.
+    data_model : soapack.DataModel
+        DataModel instance to help load raw products,
+    n_max_qids : int, optional
+        The maximum number of allowed 'qids' to be passed at once, by default
+        4. This way, seeds can be safely modified by appending integers outside
+        of this function without overlapping with possible seeds returned by
+        this function.
+    ndigits : int, optional
+        The length of each qid hash, by default 9.
+
+    Returns
+    -------
+    list
+        List of integers to be passed to np.random seeding utilities.
+    """
     # can have at most n_max_qids
     # this is important in case the seed gets modified outside of this function, e.g. when combining noise models in one sim
     assert len(qids) <= n_max_qids
@@ -802,3 +1057,55 @@ def get_catalog(union_sources):
     """
     ra, dec = sints.get_act_mr3f_union_sources(version=union_sources)
     return np.radians(np.vstack([dec, ra]))        
+
+def eplot(x, *args, fname=None, show=False, **kwargs):
+    """Return a list of enplot plots. Optionally, save and display them.
+
+    Parameters
+    ----------
+    x : ndmap
+        Items to plot
+    fname : str or path-like, optional
+        Full path to save the plots, by default None. If None, plots are
+        not saved.
+    show : bool, optional
+        Whether to display plots, by default False
+    **kwargs : dict
+        Optional arguments to pass to enplot.plot
+
+    Returns
+    -------
+    list
+        A list of enplot plot objects.
+    """
+    from pixell import enplot
+    plots = enplot.plot(x, **kwargs)
+    if fname is not None:
+        enplot.write(fname, plots)
+    if show:
+        enplot.show(plots)
+    return plots
+
+def eshow(x, *args, fname=None, return_plots=False, **kwargs):
+    """Show enplot plots of ndmaps. Optionally, save and return them.
+    
+    Parameters
+    ----------
+    x : ndmap
+        Items to plot
+    fname : str or path-like, optional
+        Full path to save the plots, by default None. If None, plots are
+        not saved.
+    return_plots : bool, optional
+        Whether to return plots, by default False
+    **kwargs : dict
+        Optional arguments to pass to enplot.plot
+
+    Returns
+    -------
+    list or None
+        A list of enplot plot objects, only if return_plots is True.
+    """
+    res = eplot(x, *args, fname=fname, show=True, **kwargs)
+    if return_plots:
+        return res
