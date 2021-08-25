@@ -125,5 +125,7 @@ print(imap.shape)
 
 * All map products assume the following axis assignment convention: (array, split, polarizaiton, y, x). Because simulations are per-split, the -4 axis always has dimension 1. 
 
+* Sims are premultiplied by the original analysis mask used to generate the noise models. 
+
 ## Scientific Documentation
 A very brief summary of the two implemented noise models (2D tiled Fourier, 1D wavelets) can be found [here](https://docs.google.com/presentation/d/1VlqeiXAlzX3Ysn8vUebQWVg6hGEme34UQ2tfeqwE8cM/edit#slide=id.ge63fea64de_0_135).
