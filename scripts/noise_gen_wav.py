@@ -6,7 +6,7 @@ parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFo
 parser.add_argument('--qid', dest='qid', nargs='+', type=str, required=True,
                     help='list of soapack array "qids"')
 
-parser.add_argument('--lmax', dest='lmax', type=int, required=True, default=5000,
+parser.add_argument('--lmax', dest='lmax', type=int, required=True, default=5400,
                     help='Bandlimit of covariance matrix.')
 
 parser.add_argument('--mask-version', dest='mask_version', type=str, 
