@@ -130,8 +130,7 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
     noise the generated noise needs to be filtered by sqrt(cov_ell) and 
     masked using the pixel mask.
     '''
-    mask = grow_mask(mask, lmax)
-    imap *= mask
+    grown_mask = grow_mask(mask, lmax)
 
     if lmax_from_wcs(imap.wcs) < lmax:
         raise ValueError(f'Pixelization input map (cdelt : {imap.wcs.wcs.cdelt} '
@@ -150,14 +149,18 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
     else:
         features, minfo_features = None, None
 
+    # need separate alms for a grown mask, and the original mask
     ainfo = sharp.alm_info(lmax)
     alm = np.empty(imap.shape[:-2] + (ainfo.nelem,),
                    dtype=type_utils.to_complex(imap.dtype))
+    grown_alm = np.empty(imap.shape[:-2] + (ainfo.nelem,),
+                   dtype=type_utils.to_complex(imap.dtype))
 
     for cidx in range(imap.shape[0]):
-        curvedsky.map2alm(imap[cidx], alm[cidx], ainfo)
+        curvedsky.map2alm(imap[cidx]*mask, alm[cidx], ainfo)
+        curvedsky.map2alm(imap[cidx]*grown_mask, grown_alm[cidx], ainfo)
 
-    # Determine diagonal pseudo spectra for filtering.
+    # Determine diagonal pseudo spectra from normal alm for filtering.
     ncomp, npol = alm.shape[:2]
     n_ell = np.zeros((ncomp, npol, npol, ainfo.lmax + 1))
     sqrt_cov_ell = np.zeros_like(n_ell)
@@ -166,10 +169,10 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
         n_ell[cidx] = ainfo.alm2cl(alm[cidx,:,None,:], alm[cidx,None,:,:])
         n_ell[cidx] *= np.eye(3)[:,:,np.newaxis]
 
-        # Filter by sqrt of inverse diagonal spectrum.
+        # Filter grown alm by sqrt of inverse diagonal spectrum from normal alm.
         sqrt_icov_ell = operators.EllMatVecAlm(ainfo, n_ell[cidx], power=-0.5,
                                                inplace=True)
-        sqrt_icov_ell(alm[cidx])
+        sqrt_icov_ell(grown_alm[cidx])
 
         # Determine and apply inverse N_ell filter.
         sqrt_cov_ell_op = operators.EllMatVecAlm(ainfo, n_ell[cidx], power=0.5)
@@ -180,7 +183,7 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
     lmax_w = lmax
     lmax_j = max(lmax - 100, lmin)
     w_ell, _ = wlm_utils.get_sd_kernels(lamb, lmax_w, lmin=lmin, lmax_j=lmax_j)
-    cov_wav = noise_utils.estimate_cov_wav(alm, ainfo, w_ell, [0, 2], diag=True, 
+    cov_wav = noise_utils.estimate_cov_wav(grown_alm, ainfo, w_ell, [0, 2], diag=True, 
                                 features=features, minfo_features=minfo_features)
     sqrt_cov_wav = mat_utils.wavmatpow(cov_wav, 0.5, return_diag=True, axes=[0,1])
 
