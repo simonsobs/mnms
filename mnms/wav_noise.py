@@ -7,7 +7,7 @@ import healpy as hp
 
 def rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax, w_ell,
                                dtype=np.complex64, seed=None):
-    '''
+    """
     Draw alm from square root of wavelet block diagonal covariance matrix.
 
     Parameters
@@ -31,7 +31,7 @@ def rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax, w_ell,
         Simulated noise alms. 
     ainfo : sharp.alm_info object
         Metainfo for alms.
-    '''
+    """
 
     ainfo = sharp.alm_info(lmax)
 
@@ -57,7 +57,7 @@ def rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax, w_ell,
 
 def rand_enmap_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, mask, lmax, w_ell,
                                  dtype=np.float32, seed=None):
-    '''
+    """
     Draw random map(s) from square root of wavelet block diagonal
     covariance matrix.
 
@@ -82,7 +82,7 @@ def rand_enmap_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, mask, lmax, w_ell,
     -------
     omap : (ncomp, npol, ny, nx) enmap
         Simulated noise map(s). 
-    '''
+    """
 
     alm, ainfo = rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax,
                         w_ell, dtype=type_utils.to_complex(dtype), seed=seed)
@@ -96,7 +96,7 @@ def rand_enmap_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, mask, lmax, w_ell,
 
 def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
                                      smooth_loc=False):
-    '''
+    """
     Estimate wavelet-based covariance matrix given noise enmap.
 
     Parameters
@@ -129,7 +129,7 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
     are effectively filtered by sqrt(icov_ell). To generate the final
     noise the generated noise needs to be filtered by sqrt(cov_ell) and 
     masked using the pixel mask.
-    '''
+    """
     grown_mask = grow_mask(mask, lmax)
 
     if lmax_from_wcs(imap.wcs) < lmax:
@@ -190,7 +190,7 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
     return sqrt_cov_wav, sqrt_cov_ell, w_ell
 
 def grow_mask(mask, lmax, radius=np.radians(0.5), fwhm=np.radians(0.5)):
-    '''
+    """
     Expand boolean mask by radius and smooth result.
 
     Parameters
@@ -208,7 +208,7 @@ def grow_mask(mask, lmax, radius=np.radians(0.5), fwhm=np.radians(0.5)):
     -------
     mask_out : (ny, nx) enmap
         Expanded and apodized mask.
-    '''
+    """
     
     if mask.ndim == 2:
         mask = mask[np.newaxis,:]
@@ -231,7 +231,7 @@ def grow_mask(mask, lmax, radius=np.radians(0.5), fwhm=np.radians(0.5)):
     return mask_out
 
 def lmax_from_wcs(wcs):
-    '''
+    """
     Return lmax that pixelization of enmap can support. This
     assumes CAR maps.
 
@@ -244,7 +244,7 @@ def lmax_from_wcs(wcs):
     -------
     lmax : int
         Max multipole.    
-    '''
+    """
     
     return int(180 / np.abs(wcs.wcs.cdelt[1]) / 2)
 
