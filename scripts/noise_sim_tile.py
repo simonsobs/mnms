@@ -16,6 +16,8 @@ parser.add_argument('--qid',dest='qid',nargs='+',type=str,required=True,help='li
 parser.add_argument('--mask-version',dest='mask_version',type=str,default=None,help='mnms:mask_path/mask_version/ for mask (default: %(default)s)')
 parser.add_argument('--mask-name', dest='mask_name',type=str,default=None,help='attempt to load mnms:mask_path/mask_version/mask_name.fits (default: %(default)s)')
 parser.add_argument('--downgrade',dest='downgrade',type=int,default=1,help='downgrade all data in pixel space by square of this many pixels per side (default: %(default)s)')
+parser.add_argument('--lmax', dest='lmax', type=int, default=None,
+                    help='Bandlimit of covariance matrix.')
 parser.add_argument('--width-deg',dest='width_deg',type=float,default=4.0,help='width in degrees of central tile size (default: %(default)s)')
 parser.add_argument('--height-deg',dest='height_deg',type=float,default=4.0,help='height in degrees of central tile size (default: %(default)s)')
 parser.add_argument('--delta-ell-smooth',dest='delta_ell_smooth',type=int,default=400,help='smooth 2D tiled power spectra by a square of this size in Fourier space (default: %(default)s)')
@@ -42,9 +44,9 @@ else:
     data_model = None
 
 model = nm.TiledNoiseModel(
-    *args.qid, data_model=data_model, downgrade=args.downgrade, mask_version=args.mask_version,
-        mask_name=args.mask_name, union_sources=args.union_sources, notes=args.notes, width_deg=args.width_deg, height_deg=args.height_deg,
-        delta_ell_smooth=args.delta_ell_smooth)
+    *args.qid, data_model=data_model, downgrade=args.downgrade, lmax=args.lmax, mask_version=args.mask_version,
+    mask_name=args.mask_name, union_sources=args.union_sources, notes=args.notes, width_deg=args.width_deg, height_deg=args.height_deg,
+    delta_ell_smooth=args.delta_ell_smooth)
 
 # get split nums
 if args.auto_split:

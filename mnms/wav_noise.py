@@ -1,6 +1,7 @@
 import numpy as np
 
-from pixell import enmap, curvedsky, sharp, utils
+from pixell import enmap, curvedsky, sharp
+from mnms import utils 
 from optweight import noise_utils, type_utils, alm_c_utils, operators, wlm_utils
 from optweight import mat_utils, wavtrans, map_utils
 import healpy as hp
@@ -132,7 +133,7 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
     """
     grown_mask = grow_mask(mask, lmax)
 
-    if lmax_from_wcs(imap.wcs) < lmax:
+    if utils.lmax_from_wcs(imap.wcs) < lmax:
         raise ValueError(f'Pixelization input map (cdelt : {imap.wcs.wcs.cdelt} '
                          f'cannot support SH transforms of requested lmax : '
                          f'{lmax}. Lower lmax or downgrade map less.')
@@ -181,7 +182,9 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
     # Get wavelet kernels and estimate wavelet covariance.
     lmin = 10
     lmax_w = lmax
-    lmax_j = max(lmax - 100, lmin)
+    # If lmax <= 5400, lmax_j will usually be lmax-100; else, capped at 5300
+    # so that white noise floor described by single (omega) wavelet
+    lmax_j = min(max(lmax - 100, lmin), 5300)
     w_ell, _ = wlm_utils.get_sd_kernels(lamb, lmax_w, lmin=lmin, lmax_j=lmax_j)
     cov_wav = noise_utils.estimate_cov_wav(grown_alm, ainfo, w_ell, [0, 2], diag=True, 
                                 features=features, minfo_features=minfo_features)

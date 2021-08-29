@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 class NoiseModel(ABC):
 
     def __init__(self, *qids, data_model=None, mask=None, ivar=None, imap=None, calibrated=True, downgrade=1,
-                 mask_version=None, mask_name=None, union_sources=None, notes=None, **kwargs):
+                 lmax=None, mask_version=None, mask_name=None, union_sources=None, notes=None, **kwargs):
         """Base class for all NoiseModel subclasses. Supports loading raw data necessary for all 
         subclasses, such as masks and ivars. Also defines some class methods usable in subclasses.
 
@@ -37,6 +37,9 @@ class NoiseModel(ABC):
             Whether to load calibrated raw data, by default True.
         downgrade : int, optional
             The factor to downgrade map pixels by, by default 1.
+        lmax : int, optional
+            The bandlimit of the maps, by default None.
+            If None, will be set to twice the theoretical CAR limit, ie 180/wcs.wcs.cdelt[1].
         mask_version : str, optional
            The mask version folder name, by default None.
            If None, will first look in config `mnms` block, then block of default data model.
@@ -90,6 +93,11 @@ class NoiseModel(ABC):
 
         # initialize unloaded noise model dictionary, holds noise model variables for each split
         self._nm_dict = {}
+
+        # get lmax
+        if lmax is None:
+            lmax = utils.lmax_from_wcs(self._mask.wcs)
+        self._lmax = lmax
 
         # sanity checks
         assert self._num_splits == self._ivar.shape[-4], \
@@ -569,8 +577,8 @@ class NoiseModel(ABC):
 class TiledNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, mask=None, ivar=None, imap=None, calibrated=True,
-                 downgrade=1, mask_version=None, mask_name=None, union_sources=None, notes=None,
-                 width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, **kwargs):
+                downgrade=1, lmax=None, mask_version=None, mask_name=None, union_sources=None,
+                notes=None, width_deg=4., height_deg=4., delta_ell_smooth=400, **kwargs):
         """A TiledNoiseModel object supports drawing simulations which capture spatially-varying
         noise correlation directions in map-domain data. They also capture the total noise power
         spectrum, spatially-varying map depth, and array-array correlations.
@@ -596,6 +604,9 @@ class TiledNoiseModel(NoiseModel):
             Whether to load calibrated raw data, by default True.
         downgrade : int, optional
             The factor to downgrade map pixels by, by default 1.
+        lmax : int, optional
+            The bandlimit of the maps, by default None.
+            If None, will be set to twice the theoretical CAR limit, ie 180/wcs.wcs.cdelt[1].
         mask_version : str, optional
            The mask version folder name, by default None.
            If None, will first look in config `mnms` block, then block of default data model.
@@ -614,9 +625,6 @@ class TiledNoiseModel(NoiseModel):
         delta_ell_smooth : int, optional
             The smoothing scale in Fourier space to mitigate bias in the noise model
             from a small number of data splits, by default 400.
-        lmax : int, optional
-            The bandlimit of the maps, by default None.
-            If None, will be set to twice the theoretical CAR limit, ie 180/wcs.wcs.cdelt[1].
         kwargs : dict, optional
             Optional keyword arguments to pass to simio.get_sim_mask_fn (currently just
             `galcut` and `apod_deg`), by default None.
@@ -642,7 +650,7 @@ class TiledNoiseModel(NoiseModel):
         """
         super().__init__(
             *qids, data_model=data_model, mask=mask, ivar=ivar, imap=imap,
-            calibrated=calibrated, downgrade=downgrade, mask_version=mask_version,
+            calibrated=calibrated, downgrade=downgrade, lmax=lmax, mask_version=mask_version,
             mask_name=mask_name, notes=notes, union_sources=union_sources, **kwargs
         )
 
@@ -650,9 +658,6 @@ class TiledNoiseModel(NoiseModel):
         self._width_deg = width_deg
         self._height_deg = height_deg
         self._delta_ell_smooth = delta_ell_smooth
-        if lmax is None:
-            lmax = utils.lmax_from_wcs(self._mask.wcs)
-        self._lmax = lmax
 
     def _get_model_fn(self, split_num):
         """Get a noise model filename for split split_num; return as <str>"""
@@ -739,8 +744,8 @@ class TiledNoiseModel(NoiseModel):
 class WaveletNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, mask=None, ivar=None, imap=None, calibrated=True,
-                downgrade=1, mask_version=None, mask_name=None, union_sources=None, notes=None,
-                lamb=1.3, lmax=None, smooth_loc=False, **kwargs):
+                downgrade=1, lmax=None, mask_version=None, mask_name=None, union_sources=None,
+                notes=None, lamb=1.3, smooth_loc=False, **kwargs):
         """A WaveletNoiseModel object supports drawing simulations which capture scale-dependent, 
         spatially-varying map depth. They also capture the total noise power spectrum, and 
         array-array correlations.
@@ -766,6 +771,9 @@ class WaveletNoiseModel(NoiseModel):
             Whether to load calibrated raw data, by default True.
         downgrade : int, optional
             The factor to downgrade map pixels by, by default 1.
+        lmax : int, optional
+            The bandlimit of the maps, by default None.
+            If None, will be set to twice the theoretical CAR limit, ie 180/wcs.wcs.cdelt[1].
         mask_version : str, optional
            The mask version folder name, by default None.
            If None, will first look in config `mnms` block, then block of default data model.
@@ -779,9 +787,6 @@ class WaveletNoiseModel(NoiseModel):
             otherwise identical instances, by default None.
         lamb : float, optional
             Parameter specifying width of wavelets kernels in log(ell), by default 1.3
-        lmax : int, optional
-            The bandlimit of the maps, by default None.
-            If None, will be set to exactly the theoretical CAR limit, ie 90/wcs.wcs.cdelt[1].
         smooth_loc : bool, optional
             If passed, use smoothing kernel that varies over the map, smaller along edge of 
             mask, by default False.
@@ -810,15 +815,12 @@ class WaveletNoiseModel(NoiseModel):
         """
         super().__init__(
             *qids, data_model=data_model, mask=mask, ivar=ivar, imap=imap,
-            calibrated=calibrated, downgrade=downgrade, mask_version=mask_version,
+            calibrated=calibrated, downgrade=downgrade, lmax=lmax, mask_version=mask_version,
             mask_name=mask_name, notes=notes, union_sources=union_sources, **kwargs
         )
 
         # save model-specific info
         self._lamb = lamb
-        if lmax is None:
-            lmax = wav_noise.lmax_from_wcs(self._mask.wcs)
-        self._lmax = lmax
         self._smooth_loc = smooth_loc
 
         # save correction factors for later
