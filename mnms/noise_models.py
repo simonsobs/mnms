@@ -665,22 +665,10 @@ class TiledNoiseModel(NoiseModel):
     def _read_model(self, fn):
         """Read a noise model with filename fn; return a dictionary of noise model variables"""
         # read from disk
-        sqrt_cov_mat, extra_header, extra_hdu = tiled_ndmap.read_tiled_ndmap(
-            fn, extra_header=['FLAT_TRIU_AXIS'], extra_hdu=['SQRT_COV_ELL']
+        sqrt_cov_mat, extra_hdu = tiled_ndmap.read_tiled_ndmap(
+            fn, extra_hdu=['SQRT_COV_ELL']
         )
-        flat_triu_axis = extra_header['FLAT_TRIU_AXIS']
         sqrt_cov_ell = extra_hdu['SQRT_COV_ELL']
-
-        # unflatten upper triangle, so need to stash object attributes
-        wcs = sqrt_cov_mat.wcs
-        tiled_info = sqrt_cov_mat.tiled_info()
-        sqrt_cov_mat = utils.from_flat_triu(
-            sqrt_cov_mat, axis1=flat_triu_axis, axis2=flat_triu_axis+1, flat_triu_axis=flat_triu_axis
-        )
-
-        # rebuild tiled_ndmap object
-        sqrt_cov_mat = enmap.ndmap(sqrt_cov_mat, wcs)
-        sqrt_cov_mat = tiled_ndmap.tiled_ndmap(sqrt_cov_mat, **tiled_info)
     
         return {
             'sqrt_cov_mat': sqrt_cov_mat,
@@ -706,12 +694,8 @@ class TiledNoiseModel(NoiseModel):
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None):
         """Write sqrt_cov_mat, sqrt_cov_ell, and possibly more noise model variables to filename fn"""
-        sqrt_cov_mat = utils.to_flat_triu(
-            sqrt_cov_mat, axis1=1
-        )
         tiled_ndmap.write_tiled_ndmap(
-            fn, sqrt_cov_mat, extra_header={'HIERARCH FLAT_TRIU_AXIS': 1},
-            extra_hdu={'SQRT_COV_ELL': sqrt_cov_ell}
+            fn, sqrt_cov_mat, extra_hdu={'SQRT_COV_ELL': sqrt_cov_ell}
         )
 
     def _get_sim_fn(self, split_num, sim_num):
