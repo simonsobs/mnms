@@ -17,7 +17,7 @@ def test_concurrent_multiply():
     conc = utils.concurrent_op(op, a, b)
     assert np.all(true == conc)
 
-def test_concurrent_standard_normal():
+def test_concurrent_normal():
     nchunks = 100
     seed = 103_094
     
@@ -32,7 +32,7 @@ def test_concurrent_standard_normal():
     for i in range(nchunks):
         rngs[i].standard_normal(out=out_i[i:i+1])
     true = out_r + 1j*out_i
-    conc = utils.concurrent_standard_normal(size=(100, 1000), seed=seed, dtype=np.float64, complex=True)
+    conc = utils.concurrent_normal(size=(100, 1000), seed=seed, dtype=np.float64, complex=True)
     assert np.all(true == conc)
 
 def test_concurrent_einsum():

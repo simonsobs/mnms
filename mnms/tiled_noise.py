@@ -171,7 +171,7 @@ def get_iso_curvedsky_noise_sim(covar, ivar=None, flat_triu_axis=0, oshape=None,
     return omap
 
 def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, 
-                                        nthread=0, verbose=False):
+                            rfft=True, nthread=0, verbose=False):
     """Generate a tiled noise model 'sqrt-covariance' matrix that captures spatially-varying
     noise correlation directions across the sky, as well as map-depth anistropies using
     the mapmaker inverse-variance maps.
@@ -267,8 +267,11 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
     # get all the 2D power spectra for this split; note smap 
     # has shape (num_tiles, num_arrays, num_pol, ny, nx) after this operation.
     # NOTE: imap already masked by ell_flatten, so don't reapply (tiled) mask here
-    kmap = utils.rfft(imap[..., 0, :, :, :]*apod, normalize='phys', nthread=nthread)
-    
+    if rfft:
+        kmap = utils.rfft(imap[..., 0, :, :, :]*apod, normalize='phys', nthread=nthread)
+    else:
+        kmap = enmap.fft(imap[..., 0, :, :, :]*apod, normalize='phys', nthread=nthread)
+
     # we can 'delete' imap (really, just keep the 1st tile)
     imap = imap[0]
     
@@ -298,9 +301,15 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
             
             # smooth the 2D PS
             if delta_ell_smooth > 0:
-                power = covtools.smooth_ps_grid_uniform(
-                    power, delta_ell_smooth, diag=diag, fill=True, fill_lmax_est_width=300
-                    )
+                if rfft:
+                    power = covtools.smooth_ps_grid_uniform(
+                        power, delta_ell_smooth, diag=diag, shape=imap.shape[-2:], rfft=True, 
+                        fill=True, fill_lmax_est_width=300
+                        )
+                else:
+                    power = covtools.smooth_ps_grid_uniform(
+                        power, delta_ell_smooth, diag=diag, fill=True, fill_lmax_est_width=300
+                        )
             
             # skip smoothing if delta_ell_smooth=0 is passed as arg
             elif delta_ell_smooth == 0:
@@ -324,8 +333,8 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
 
     return imap.sametiles(smap), sqrt_cov_ell
 
-def get_tiled_noise_sim(covsqrt, split_num, ivar=None, sqrt_cov_ell=None, num_arrays=None, num_splits=None, 
-                        nthread=0, seed=None, verbose=True):
+def get_tiled_noise_sim(covsqrt, split_num, ivar=None, sqrt_cov_ell=None, rfft=True, num_arrays=None,
+                        num_splits=None, nthread=0, seed=None, verbose=True):
     """Get a noise sim from a tiled noise model of a given data split. The sim is *not* masked, 
     but is only nonzero in regions of unmasked tiles. 
 
@@ -397,9 +406,16 @@ def get_tiled_noise_sim(covsqrt, split_num, ivar=None, sqrt_cov_ell=None, num_ar
     rshape = (covsqrt.numy*covsqrt.numx, num_comp, *covsqrt.shape[-2:])
     if verbose:
         print(f'Seed: {seed}')
-    omap = utils.concurrent_standard_normal(
-        size=rshape, dtype=covsqrt.dtype, complex=True, seed=seed, 
-        nchunks=100, nthread=nthread
+
+    if rfft:
+        # this is because both the real and imaginary parts are unit standard normal
+        mult = 1/np.sqrt(2)
+    else:
+        mult = 1
+
+    omap = utils.concurrent_normal(
+        size=rshape, loc=0, scale=mult, dtype=covsqrt.dtype, 
+        complex=True, seed=seed, nchunks=100, nthread=nthread
         )
     omap = omap[covsqrt.unmasked_tiles]
 
@@ -412,7 +428,10 @@ def get_tiled_noise_sim(covsqrt, split_num, ivar=None, sqrt_cov_ell=None, num_ar
     # go back to map space. we assume covsqrt is an rfft produced by utils.rfft,
     # in which case the 'halved' axis is the last (x) axis. therefore, we must
     # tell utils.irfft what the original size of this axis was
-    omap = utils.irfft(omap, normalize='phys', nthread=nthread, n=covsqrt.pix_width + 2*covsqrt.pix_pad_x)
+    if rfft:
+        omap = utils.irfft(omap, normalize='phys', nthread=nthread, n=covsqrt.pix_width + 2*covsqrt.pix_pad_x)
+    else:
+        omap = enmap.ifft(omap, normalize='phys', nthread=nthread).real
     omap = omap.reshape((num_unmasked_tiles, num_arrays, num_pol, *omap.shape[-2:]))
     omap = covsqrt.sametiles(omap)
     

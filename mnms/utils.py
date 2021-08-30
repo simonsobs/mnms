@@ -705,13 +705,18 @@ def get_cpu_count():
         nthread = multiprocessing.cpu_count()
     return nthread
 
-def concurrent_standard_normal(size=1, nchunks=100, nthread=0, seed=None, dtype=np.float32, complex=False):
+def concurrent_normal(size=1, loc=0., scale=1., nchunks=100, nthread=0,
+                        seed=None, dtype=np.float32, complex=False):
     """Draw standard normal (real or complex) random variates concurrently.
 
     Parameters
     ----------
     size : int or iterable, optional
         The shape to draw random numbers into, by default 1.
+    loc : int or float, optional
+        The location (mean) of the distribution, by default 0.
+    scale : int or float, optional
+        The scale (standard deviation) of the distribution, by default 1.
     nchunks : int, optional
         The number of concurrent subdraws to make, by default 100. 
         These draws are concatenated in the output; therefore, the
@@ -774,9 +779,18 @@ def concurrent_standard_normal(size=1, nchunks=100, nthread=0, seed=None, dtype=
             idtype = np.complex128
         else:
             raise ValueError('Input dtype must have 4 or 8 bytes')
+
+        # need imag_vec to have same chunk_axis size as the actual draws
         imag_vec = np.full((nchunks, 1), 1j, dtype=idtype)
         out_imag = concurrent_op(np.multiply, out_imag, imag_vec, nchunks=nchunks, nthread=nthread)
         out = concurrent_op(np.add, out, out_imag, nchunks=nchunks, nthread=nthread)
+
+    # need scale_vec, loc_vec to have same chunk_axis size as the actual draws
+    scale_vec = np.full((nchunks, 1), scale, dtype=dtype)
+    out = concurrent_op(np.multiply, out, scale_vec, nchunks=nchunks, nthread=nthread)
+
+    loc_vec = np.full((nchunks, 1), loc, dtype=dtype)
+    out = concurrent_op(np.add, out, loc_vec, nchunks=nchunks, nthread=nthread)
 
     # return
     out = out.reshape(-1)[:totalsize]
@@ -789,10 +803,10 @@ def concurrent_op(op, a, b, *args, chunk_axis_a=0, chunk_axis_b=0, nchunks=100, 
     ----------
     op : numpy function
         A numpy function to be performed, e.g. np.add or np.multiply
-    a : ndarray
+    a :  ndarray
         The first array in the operation.
     b : ndarray
-        The second array in the operation
+        The second array in the operation.
     chunk_axis_a : int, optional
         The axis in a over which the operation may be applied
         concurrently, by default 0.
@@ -817,6 +831,9 @@ def concurrent_op(op, a, b, *args, chunk_axis_a=0, chunk_axis_b=0, nchunks=100, 
     maximum efficiency, they should be long. They must be of equal size in
     a and b.
     """
+    if isinstance(a, (int, float)):
+        a = np.broadcast_to(a, )
+
     # move axes to standard positions
     a = np.moveaxis(a, chunk_axis_a, 0)
     b = np.moveaxis(b, chunk_axis_b, 0)
