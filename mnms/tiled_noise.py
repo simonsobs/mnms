@@ -267,15 +267,14 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
     # get all the 2D power spectra for this split; note smap 
     # has shape (num_tiles, num_arrays, num_pol, ny, nx) after this operation.
     # NOTE: imap already masked by ell_flatten, so don't reapply (tiled) mask here
-    kmap = enmap.fft(imap[..., 0, :, :, :]*apod, normalize='phys', nthread=nthread)
+    kmap = utils.rfft(imap[..., 0, :, :, :]*apod, normalize='phys', nthread=nthread)
     
-    # save for later so we can 'delete' imap (really, just keep the 1st tile)
-    shape = imap.shape
+    # we can 'delete' imap (really, just keep the 1st tile)
     imap = imap[0]
     
-    # allocate output map
+    # allocate output map, which has 'real' fft tile shape
     omap = np.empty(
-        (len(imap.unmasked_tiles), num_arrays, num_pol, num_arrays, num_pol, *shape[-2:]), dtype=imap.dtype
+        (len(imap.unmasked_tiles), num_arrays, num_pol, num_arrays, num_pol, *kmap.shape[-2:]), dtype=imap.dtype
         )
 
     # cycle through the tiles    
@@ -413,8 +412,10 @@ def get_tiled_noise_sim(covsqrt, split_num, ivar=None, sqrt_cov_ell=None, num_ar
         )
     omap = enmap.samewcs(omap, covsqrt)
 
-    # go back to map space
-    omap = enmap.ifft(omap, normalize='phys', nthread=nthread).real
+    # go back to map space. we assume covsqrt is an rfft produced by utils.rfft,
+    # in which case the 'halved' axis is the last (x) axis. therefore, we must
+    # tell utils.irfft what the original size of this axis was
+    omap = utils.irfft(omap, normalize='phys', nthread=nthread, n=covsqrt.pix_width + 2*covsqrt.pix_pad_x)
     omap = omap.reshape((num_unmasked_tiles, num_arrays, num_pol, *omap.shape[-2:]))
     omap = covsqrt.sametiles(omap)
     

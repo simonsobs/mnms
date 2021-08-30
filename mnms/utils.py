@@ -1,4 +1,4 @@
-from pixell import enmap, curvedsky
+from pixell import enmap, curvedsky, fft as enfft
 from enlib import array_ops
 from soapack import interfaces as sints
 
@@ -977,6 +977,35 @@ def chunked_eigpow(A, e, axes=[-2, -1], chunk_axis=0, target_gb=5):
         A = enmap.ndmap(A, wcs)
 
     return A
+
+def rfft(emap, omap=None, nthread=0, normalize=True, adjoint_ifft=False):
+	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap.
+	If normalize is "phy", "phys" or "physical", then an additional normalization
+	is applied such that the binned square of the fourier transform can
+	be directly compared to theory (apart from mask corrections)
+	, i.e., pixel area factors are corrected for.
+	"""
+	res  = enmap.samewcs(enfft.rfft(emap,omap,axes=[-2,-1],nthread=nthread), emap)
+	norm = 1
+	if normalize:
+		norm /= np.prod(emap.shape[-2:])**0.5
+	if normalize in ["phy","phys","physical"]:
+		if adjoint_ifft: norm /= emap.pixsize()**0.5
+		else:            norm *= emap.pixsize()**0.5
+	if norm != 1: res *= norm
+	return res
+
+def irfft(emap, omap=None, n=None, nthread=0, normalize=True, adjoint_fft=False):
+	"""Performs the 2d iFFT of the complex enmap given, and returns a pixel-space enmap."""
+	res  = enmap.samewcs(enfft.irfft(emap,omap,n=n,axes=[-2,-1],nthread=nthread, normalize=False), emap)
+	norm = 1
+	if normalize:
+		norm /= np.prod(res.shape[-2:])**0.5
+	if normalize in ["phy","phys","physical"]:
+		if adjoint_fft: norm *= emap.pixsize()**0.5
+		else:           norm /= emap.pixsize()**0.5
+	if norm != 1: res *= norm
+	return res
 
 def hash_qid(qid, ndigits=9):
     """Turn a qid string into an ndigit hash, using hashlib.sha256 hashing"""
