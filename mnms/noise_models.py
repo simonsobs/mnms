@@ -443,10 +443,6 @@ class NoiseModel(ABC):
         """Store a dictionary of noise model variables in instance attributes under key split_num"""
         self._nm_dict[split_num] = nm_dict
 
-    def _delete(self, split_num):
-        """Delete a dictionary entry of noise model variables from instance attributes under key split_num"""
-        del self._nm_dict[split_num]
-
     @abstractmethod
     def _get_dmap(self, imap):
         """Return the required input difference map for a NoiseModel subclass, from split data imap"""
@@ -523,7 +519,7 @@ class NoiseModel(ABC):
             sim *= self._mask
 
         if not keep_model:
-            self._delete(split_num)
+            self.delete_model(split_num)
         
         if write:
             fn = self._get_sim_fn(split_num, sim_num)
@@ -560,6 +556,10 @@ class NoiseModel(ABC):
     def _get_sim(self, split_num, seed, verbose=False):
         """Return an unmasked enmap.ndmap sim of split split_num, with seed <sequence of ints>"""
         return enmap.ndmap
+
+    def delete_model(self, split_num):
+        """Delete a dictionary entry of noise model variables from instance attributes under key split_num"""
+        del self._nm_dict[split_num]
 
     @property
     def num_splits(self):
