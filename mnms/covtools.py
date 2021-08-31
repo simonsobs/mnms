@@ -44,7 +44,7 @@ def fill_boundary(ps, shape=None, rfft=False, fill_lmax=None, fill_lmax_est_widt
     """Performs in-place filling of ps outer edge.
     """
     if shape is None:
-        shape = ps.shape()
+        shape = ps.shape
     modlmap = enmap.modlmap(shape, ps.wcs)
     if rfft:
         modlmap = modlmap[..., :shape[-1]//2 + 1]

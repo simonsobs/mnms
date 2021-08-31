@@ -267,10 +267,7 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
     # get all the 2D power spectra for this split; note smap 
     # has shape (num_tiles, num_arrays, num_pol, ny, nx) after this operation.
     # NOTE: imap already masked by ell_flatten, so don't reapply (tiled) mask here
-    if rfft:
-        kmap = utils.rfft(imap[..., 0, :, :, :]*apod, normalize='phys', nthread=nthread)
-    else:
-        kmap = enmap.fft(imap[..., 0, :, :, :]*apod, normalize='phys', nthread=nthread)
+    kmap = enmap.fft(imap[..., 0, :, :, :]*apod, normalize='phys', nthread=nthread)
 
     # we can 'delete' imap (really, just keep the 1st tile)
     imap = imap[0]
@@ -301,15 +298,9 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
             
             # smooth the 2D PS
             if delta_ell_smooth > 0:
-                if rfft:
-                    power = covtools.smooth_ps_grid_uniform(
-                        power, delta_ell_smooth, diag=diag, shape=imap.shape[-2:], rfft=True, 
-                        fill=True, fill_lmax_est_width=300
-                        )
-                else:
-                    power = covtools.smooth_ps_grid_uniform(
-                        power, delta_ell_smooth, diag=diag, fill=True, fill_lmax_est_width=300
-                        )
+                power = covtools.smooth_ps_grid_uniform(
+                    power, delta_ell_smooth, diag=diag, fill=True, fill_lmax_est_width=300
+                    )
             
             # skip smoothing if delta_ell_smooth=0 is passed as arg
             elif delta_ell_smooth == 0:
@@ -329,6 +320,10 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
     # take covsqrt of current power, need to reshape so covarying dimensions are spread over only two axes
     smap = smap.reshape((-1, ncomp, ncomp, *smap.shape[-2:]))
     kmap=None
+
+    # if rfft, eliminate right half of kx pixels before taking eigpow
+    if rfft:
+        smap = smap[..., :smap.shape[-1]//2 + 1]
     smap = utils.chunked_eigpow(smap, 0.5, axes=(-4,-3))
 
     return imap.sametiles(smap), sqrt_cov_ell
