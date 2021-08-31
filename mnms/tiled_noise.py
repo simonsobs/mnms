@@ -227,6 +227,7 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
         if verbose:
             print('Getting whitened difference maps')
         imap = utils.get_whitened_noise_map(imap, ivar)
+        ivar = None
 
     # filter map prior to tiling, get the c_ells.
     # we need to filter per-split, since >2-split arrays have widely-varying noise power spectra.
@@ -271,14 +272,19 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
 
     # we can 'delete' imap (really, just keep the 1st tile)
     imap = imap[0]
-    
-    # get power spectrum, which has 'real' fft tile shape
-    smap = utils.concurrent_einsum(
-        '...mayx, ...nbyx -> ...manbyx', kmap, np.conj(kmap), nthread=nthread
-        ).real
+
+    # allocate output map, which has 'real' fft tile shape if rfft
+    if rfft:
+        nkx = imap.shape[-1]//2 + 1
+    else:
+        nkx = imap.shape[-1]
+    omap = np.empty((len(imap.unmasked_tiles), ncomp, ncomp, imap.shape[-2], nkx), imap.dtype)
 
     # cycle through the tiles    
     for i, n in enumerate(imap.unmasked_tiles):
+        # get power spectrum for this tile
+        smap = np.einsum('mayx, nbyx -> manbyx', kmap[i], np.conj(kmap[i])).real
+
         # ewcs per tile is necessary for delta_ell_smooth to operate over correct number of Fourier pixels
         _, ewcs = imap.get_tile_geometry(n)
 
@@ -293,7 +299,7 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
             diag = comp1 == comp2
 
             # get this 2D PS and apply correct geometry for this tile
-            power = smap[i, map_index_1, pol_index_1, map_index_2, pol_index_2]
+            power = smap[map_index_1, pol_index_1, map_index_2, pol_index_2]
             power = enmap.ndmap(power, wcs=ewcs)
             
             # smooth the 2D PS
@@ -310,23 +316,19 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
                 raise ValueError('delta_ell_smooth must be >= 0')    
             
             # update output 2D PS map
-            smap[i, map_index_1, pol_index_1, map_index_2, pol_index_2] = power
+            omap[i, comp1, comp2] = power[..., :nkx]
             if not diag: # symmetry
-                smap[i, map_index_2, pol_index_2, map_index_1, pol_index_1] = power
+                omap[i, comp2, comp1] = power[..., :nkx]
 
         # correct for f_sky from mask and apod windows
-        smap[i] /= sq_f_sky[i]
+        omap[i] /= sq_f_sky[i]
 
-    # take covsqrt of current power, need to reshape so covarying dimensions are spread over only two axes
-    smap = smap.reshape((-1, ncomp, ncomp, *smap.shape[-2:]))
+    # take covsqrt of current power (and can safely delete kmap, smap)
     kmap=None
+    smap=None
+    omap = utils.chunked_eigpow(omap, 0.5, axes=(-4,-3))
 
-    # if rfft, eliminate right half of kx pixels before taking eigpow
-    if rfft:
-        smap = smap[..., :smap.shape[-1]//2 + 1]
-    smap = utils.chunked_eigpow(smap, 0.5, axes=(-4,-3))
-
-    return imap.sametiles(smap), sqrt_cov_ell
+    return imap.sametiles(omap), sqrt_cov_ell
 
 def get_tiled_noise_sim(covsqrt, split_num, ivar=None, sqrt_cov_ell=None, rfft=True, num_arrays=None,
                         num_splits=None, nthread=0, seed=None, verbose=True):

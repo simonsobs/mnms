@@ -7,9 +7,6 @@ import numpy as np
 # from numba import jit, njit
 from math import ceil
 
-from tqdm import tqdm
-import time
-
 import warnings
 
 # constants that could be promoted to arguments some day (too much metadata to track)
@@ -399,7 +396,6 @@ def read_tiled_ndmap(fname, extra_header=None, extra_hdu=None):
                 hdustr = inv_header[key]
                 i = int(hdustr.strip()[-1])
                 extra_hdu_dict[key] = hdus[i].data
-
 
     # leave context of hdus
     omap = tiled_ndmap(imap, width_deg=width_deg, height_deg=height_deg, ishape=(ishape_y, ishape_x), tiled=tiled,

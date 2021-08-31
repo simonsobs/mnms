@@ -1,6 +1,7 @@
 from mnms import simio, tiled_ndmap, utils, soapack_utils as s_utils, tiled_noise, wav_noise, inpaint
-from pixell import enmap, wcsutils
+from pixell import enmap, wcsutils, curvedsky
 import healpy as hp
+from astropy.io import fits
 from enlib import bench
 from optweight import wavtrans
 
@@ -396,7 +397,7 @@ class NoiseModel(ABC):
         generate : bool, optional
             If the model does not exist on-disk and 'generate' is True, then return
             False. If the model does not exist on-disk and 'generate' is False, then
-            raise a FileNotFoundError, by default True.
+            raise a FileNotFoundError. By default True.
 
         Returns
         -------
@@ -426,7 +427,6 @@ class NoiseModel(ABC):
         fn = self._get_model_fn(split_num)
         nm_dict = self._read_model(fn)
         if keep:
-            print(f'Loading model for split {split_num} from disk')
             self._keep(split_num, nm_dict)
 
     @abstractmethod
@@ -441,10 +441,13 @@ class NoiseModel(ABC):
     
     def _keep(self, split_num, nm_dict):
         """Store a dictionary of noise model variables in instance attributes under key split_num"""
+        print(f'Loading model for split {split_num} into memory')
         self._nm_dict[split_num] = nm_dict
 
+    # for memory management
     def _delete(self, split_num):
         """Delete a dictionary entry of noise model variables from instance attributes under key split_num"""
+        print(f'Removing model for split {split_num} from memory')
         del self._nm_dict[split_num]
 
     @abstractmethod
@@ -521,6 +524,8 @@ class NoiseModel(ABC):
         with bench.show(f'Generating noise sim for split {split_num}, map {sim_num}'):
             sim = self._get_sim(split_num, seed, verbose=verbose)
             sim *= self._mask
+            if alm:
+                sim = 
 
         if not keep_model:
             self._delete(split_num)
@@ -538,7 +543,19 @@ class NoiseModel(ABC):
         fn = self._get_sim_fn(split_num, sim_num)
         try:
             if alm:
-                return hp.read_alm(fn)
+                # get number of headers
+                with fits.open(fn) as hdul:
+                    num_hdu = len(hdul)
+
+                # load alms and restore preshape
+                out = np.array(
+                    [hp.read_alm(fn, hdu=i) for i in range(1, num_hdu)]
+                    )
+                # we know num_arrays, num_splits=1, and num_pol could be 1, 2, or 3
+                out = out.reshape(
+                    self._num_arrays, 1, -1, out.shape[-1]
+                )
+                return out
             else:
                 return enmap.read_map(fn)
         except FileNotFoundError:
