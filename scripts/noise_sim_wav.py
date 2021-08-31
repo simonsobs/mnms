@@ -7,9 +7,6 @@ parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFo
 parser.add_argument('--qid', dest='qid', nargs='+', type=str, required=True,
                     help='list of soapack array "qids"')
 
-parser.add_argument('--lmax', dest='lmax', type=int, required=True, default=5400,
-                    help='Bandlimit of covariance matrix.')
-
 parser.add_argument('--mask-version', dest='mask_version', type=str, 
                     default=None, help='Look in mnms:mask_path/mask_version/ '
                     'for mask (default: %(default)s)')
@@ -21,6 +18,9 @@ parser.add_argument('--mask-name', dest='mask_name', type=str, default=None,
 parser.add_argument('--downgrade', dest='downgrade', type=int, default=1,
                     help='downgrade all data in pixel space by square of this many '
                     'pixels per side (default: %(default)s)')
+
+parser.add_argument('--lmax', dest='lmax', type=int, default=None,
+                    help='Bandlimit of covariance matrix.')
 
 parser.add_argument('--lambda', dest='lamb', type=float, required=False, default=1.3,
                     help='Parameter specifying width of wavelets kernels in log(ell).')
@@ -74,9 +74,9 @@ else:
     data_model = None
     
 model = nm.WaveletNoiseModel(
-        *args.qid, data_model=data_model, downgrade=args.downgrade, mask_version=args.mask_version,
-        mask_name=args.mask_name, union_sources=args.union_sources, notes=args.notes, lamb=args.lamb, lmax=args.lmax,
-        smooth_loc=args.smooth_loc)
+    *args.qid, data_model=data_model, downgrade=args.downgrade, lmax=args.lmax, mask_version=args.mask_version,
+    mask_name=args.mask_name, union_sources=args.union_sources, notes=args.notes, lamb=args.lamb, 
+    smooth_loc=args.smooth_loc)
 
 # get split nums
 if args.auto_split:

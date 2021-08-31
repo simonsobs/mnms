@@ -1,8 +1,7 @@
 from orphics import maps
 from pixell import enmap, curvedsky
-from enlib import bench
 from mnms import covtools, utils
-from mnms.tiled_ndmap import tiled_info, tiled_ndmap
+from mnms.tiled_ndmap import tiled_ndmap
 
 import numpy as np
 
@@ -216,10 +215,12 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
     Raises
     ------
     ValueError
+        If the pixelization is too course to support the requested lmax.
         If delta_ell_smooth is negative.
     """
     # check that imap conforms with convention
-    assert imap.ndim in range(2, 6), 'Data must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
+    assert imap.ndim in range(2, 6), \
+        'Data must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
     imap = utils.atleast_nd(imap, 5) # make data 5d
 
     # if ivar is not None, whiten the imap data using ivar
@@ -236,6 +237,13 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
     mask = mask.astype(imap.dtype, copy=False)
     if lmax is None:
         lmax = utils.lmax_from_wcs(imap.wcs)
+    else:
+        if utils.lmax_from_wcs(imap.wcs) < lmax:
+            raise ValueError(
+                f'Pixelization input map (cdelt : {imap.wcs.wcs.cdelt} '
+                f'cannot support SH transforms of requested lmax : '
+                f'{lmax}. Lower lmax or downgrade map less.'
+                )
 
     # we want to keep split axis at -4, but slice out our split to reduce cost.
     # imap now has shape (num_arrays, 1, num_pol, ny, nx).
