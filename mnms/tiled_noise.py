@@ -434,9 +434,13 @@ def get_tiled_noise_sim(covsqrt, split_num, ivar=None, sqrt_cov_ell=None, rfft=T
     # in which case the 'halved' axis is the last (x) axis. therefore, we must
     # tell utils.irfft what the original size of this axis was
     if rfft:
-        omap = utils.irfft(omap, normalize='phys', nthread=nthread, n=covsqrt.pix_width + 2*covsqrt.pix_pad_x)
+        omap = utils.irfft(
+            omap, normalize='phys', nthread=nthread, n=covsqrt.pix_width + 2*covsqrt.pix_pad_x
+            )
     else:
-        omap = enmap.ifft(omap, normalize='phys', nthread=nthread).real
+        omap = enmap.ifft(
+            omap, normalize='phys', nthread=nthread
+            ).real
     omap = omap.reshape((num_unmasked_tiles, num_arrays, num_pol, *omap.shape[-2:]))
     omap = covsqrt.sametiles(omap)
     

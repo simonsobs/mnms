@@ -255,7 +255,13 @@ class NoiseModel(ABC):
                 return f'Loading imap for {qid}'
 
     def _get_data(self):
-        """Load data maps according to instance attributes, only performed during `get_model` call"""
+        """Load the raw data splits according to instance attributes.
+
+        Returns
+        -------
+        imaps : (nmaps, nsplits, npol, ny, nx) enmap
+            Data maps, possibly downgraded.
+        """
         # first check for mask compatibility and get map geometry
         shape, wcs = self._check_geometry()
 
@@ -506,17 +512,7 @@ class NoiseModel(ABC):
             A sim of this noise model with the specified sim num, with shape
             (num_arrays, num_splits, num_pol, ny, nx), even if some of these
             axes have dimension 1. As implemented, num_splits is always 1. 
-
-        Raises
-        ------
-        NotImplementedError
-            Generating alms instead of a map is not implemented, so `alm` must 
-            be left False.
         """
-        if alm:
-            raise NotImplementedError(
-                'Generating sims as alms not yet implemented')
-
         assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
 
         if check_on_disk:
@@ -533,7 +529,13 @@ class NoiseModel(ABC):
             sim = self._get_sim(split_num, seed, verbose=verbose)
             sim *= self._mask
             if alm:
-                sim = 
+                out = np.empty(
+                    (*sim.shape[:-2], hp.Alm.getsize(self._lmax)),
+                    dtype=np.result_type(self._data_model.dtype, 1j)
+                    )
+                for preidx in np.ndindex(sim.shape[:-3]):
+                    out[preidx] = curvedsky.map2alm(sim[preidx], lmax=self._lmax)
+                sim = out
 
         if not keep_model:
             self._delete(split_num)
@@ -541,7 +543,7 @@ class NoiseModel(ABC):
         if write:
             fn = self._get_sim_fn(split_num, sim_num)
             if alm:
-                hp.write_alm(fn, sim, overwrite=True)
+                utils.write_alm(fn, sim, dtype=self._data_model.dtype)
             else:
                 enmap.write_map(fn, sim)
         return sim
@@ -551,19 +553,8 @@ class NoiseModel(ABC):
         fn = self._get_sim_fn(split_num, sim_num)
         try:
             if alm:
-                # get number of headers
-                with fits.open(fn) as hdul:
-                    num_hdu = len(hdul)
-
-                # load alms and restore preshape
-                out = np.array(
-                    [hp.read_alm(fn, hdu=i) for i in range(1, num_hdu)]
-                    )
-                # we know num_arrays, num_splits=1, and num_pol could be 1, 2, or 3
-                out = out.reshape(
-                    self._num_arrays, 1, -1, out.shape[-1]
-                )
-                return out
+                # we know the preshape is (num_arrays, num_splits=1)
+                return utils.read_alm(fn, preshape=(self._num_arrays, 1))
             else:
                 return enmap.read_map(fn)
         except FileNotFoundError:

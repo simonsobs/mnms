@@ -5,6 +5,8 @@ from soapack import interfaces as sints
 import numpy as np
 from scipy.interpolate import interp1d
 import numba
+import healpy as hp
+from astropy.io import fits
 
 from concurrent import futures
 import multiprocessing
@@ -738,11 +740,6 @@ def concurrent_normal(size=1, loc=0., scale=1., nchunks=100, nthread=0,
     ndarray
         Real or complex standard normal random variates in shape 'size'
         with each real and/or complex part having dtype 'dtype'. 
-
-    Raises
-    ------
-    ValueError
-        If the dtype does not have 4 or 8 bytes.
     """
     # get size per chunk draw
     totalsize = np.prod(size, dtype=int)
@@ -772,16 +769,9 @@ def concurrent_normal(size=1, loc=0., scale=1., nchunks=100, nthread=0,
         fs = [executor.submit(_fill, out_imag, i, i+1, rngs[i]) for i in range(nchunks)]
         futures.wait(fs)
 
-        # if not concurrent, casting to complex takes 80% of the time for a complex draw
-        if np.dtype(dtype).itemsize == 4:
-            idtype = np.complex64
-        elif np.dtype(dtype).itemsize == 8:
-            idtype = np.complex128
-        else:
-            raise ValueError('Input dtype must have 4 or 8 bytes')
-
+        # if not concurrent, casting to complex takes 80% of the time for a complex draw.
         # need imag_vec to have same chunk_axis size as the actual draws
-        imag_vec = np.full((nchunks, 1), 1j, dtype=idtype)
+        imag_vec = np.full((nchunks, 1), 1j, dtype=np.result_type(dtype, 1j))
         out_imag = concurrent_op(np.multiply, out_imag, imag_vec, nchunks=nchunks, nthread=nthread)
         out = concurrent_op(np.add, out, out_imag, nchunks=nchunks, nthread=nthread)
 
@@ -996,33 +986,139 @@ def chunked_eigpow(A, e, axes=[-2, -1], chunk_axis=0, target_gb=5):
     return A
 
 def rfft(emap, omap=None, nthread=0, normalize=True, adjoint_ifft=False):
-	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap.
-	If normalize is "phy", "phys" or "physical", then an additional normalization
-	is applied such that the binned square of the fourier transform can
-	be directly compared to theory (apart from mask corrections)
-	, i.e., pixel area factors are corrected for.
-	"""
-	res  = enmap.samewcs(enfft.rfft(emap,omap,axes=[-2,-1],nthread=nthread), emap)
-	norm = 1
-	if normalize:
-		norm /= np.prod(emap.shape[-2:])**0.5
-	if normalize in ["phy","phys","physical"]:
-		if adjoint_ifft: norm /= emap.pixsize()**0.5
-		else:            norm *= emap.pixsize()**0.5
-	if norm != 1: res *= norm
-	return res
+    """Perform a 'real'-FFT: an FFT over a real-valued function, such
+    that only half the usual frequency modes are required to recover
+    the full information.
+
+    Parameters
+    ----------
+    emap : (..., ny, nx) ndmap
+        Map to transform.
+    omap : ndmap, optional
+        Output buffer into which result is written, by default None.
+    nthread : int, optional
+        The number of threads, by default 0.
+        If 0, use output of get_cpu_count().
+    normalize : bool, optional
+        The FFT normalization, by default True. If True, normalize 
+        using pixel number. If in ['phy', 'phys', 'physical'],
+        normalize by sky area.
+    adjoint_ifft : bool, optional
+        Whether to perform the adjoint FFT, by default False.
+
+    Returns
+    -------
+    (..., ny, nx//2+1) ndmap
+        Half of the full FFT, sufficient to recover a real-valued
+        function.
+    """
+    res  = enmap.samewcs(
+        enfft.rfft(emap, omap, axes=[-2, -1], nthread=nthread), emap
+        )
+    norm = 1
+    if normalize:
+        norm /= np.prod(emap.shape[-2:])**0.5
+    if normalize in ["phy","phys","physical"]:
+        if adjoint_ifft: norm /= emap.pixsize()**0.5
+        else:            norm *= emap.pixsize()**0.5
+    if norm != 1: res *= norm
+    return res
 
 def irfft(emap, omap=None, n=None, nthread=0, normalize=True, adjoint_fft=False):
-	"""Performs the 2d iFFT of the complex enmap given, and returns a pixel-space enmap."""
-	res  = enmap.samewcs(enfft.irfft(emap,omap,n=n,axes=[-2,-1],nthread=nthread, normalize=False), emap)
-	norm = 1
-	if normalize:
-		norm /= np.prod(res.shape[-2:])**0.5
-	if normalize in ["phy","phys","physical"]:
-		if adjoint_fft: norm *= emap.pixsize()**0.5
-		else:           norm /= emap.pixsize()**0.5
-	if norm != 1: res *= norm
-	return res
+    """Perform a 'real'-iFFT: an iFFT to recover a real-valued function, 
+    over only half the usual frequency modes.
+
+    Parameters
+    ----------
+    emap : (..., nky, nkx) ndmap
+        FFT to inverse transform.
+    omap : ndmap, optional
+        Output buffer into which result is written, by default None.
+    n : int, optional
+        Number of pixels in real-space x-direction, by default None.
+        If none, assumed to be 2(nkx-1), ie that real-space nx was
+        even.
+    nthread : int, optional
+        The number of threads, by default 0.
+        If 0, use output of get_cpu_count().
+    normalize : bool, optional
+        The FFT normalization, by default True. If True, normalize 
+        using pixel number. If in ['phy', 'phys', 'physical'],
+        normalize by sky area.
+    adjoint_ifft : bool, optional
+        Whether to perform the adjoint iFFT, by default False.
+
+    Returns
+    -------
+    (..., ny, nx) ndmap
+        A real-valued real-space map.
+    """
+    res  = enmap.samewcs(
+        enfft.irfft(emap, omap, n=n, axes=[-2, -1], nthread=nthread, normalize=False), emap
+        )
+    norm = 1
+    if normalize:
+        norm /= np.prod(res.shape[-2:])**0.5
+    if normalize in ["phy","phys","physical"]:
+        if adjoint_fft: norm *= emap.pixsize()**0.5
+        else:           norm /= emap.pixsize()**0.5
+    if norm != 1: res *= norm
+    return res
+
+def write_alm(fn, alm, dtype=None):
+    """Write alms to disk.
+
+    Parameters
+    ----------
+    fn : str
+        Full filename to open; must be .fits.
+    alm : (..., n_alm) array
+        alms to be written.
+    dtype : numpy.dtype, optional
+        The dtype of the real and imaginary subpart of the buffer
+        to be written, by default None. If None, then the value
+        of alm.real.dtype.
+    """
+    if str(fn)[-5:] != '.fits':
+        fn = str(fn) + '.fits'
+
+    hp.write_alm(
+        fn, alm.reshape(-1, alm.shape[-1]), out_dtype=dtype
+        )
+
+def read_alm(fn, preshape=None):
+    """Read alms from disk, and return with prescribed 'pre-pol'
+    shape.
+
+    Parameters
+    ----------
+    fn : str
+        Full filename to open; must be .fits.
+    preshape : iterable, optional
+        The desired pre-polarization shape of the alm buffer, eg
+        (num_arrays, num_splits), by default None. If None, array
+        will be read as-is from disk.
+
+    Returns
+    -------
+    (*preshape, num_pol, n_alm) array
+        The correctly-shaped alms, with dtype as saved on disk.
+    """
+    if str(fn)[-5:] != '.fits':
+        fn = str(fn) + '.fits'
+
+    if not preshape:
+        preshape = ()
+
+    # get number of headers
+    with fits.open(fn) as hdul:
+        num_hdu = len(hdul)
+
+    # load alms and restore preshape
+    out = np.array(
+        [hp.read_alm(fn, hdu=i) for i in range(1, num_hdu)]
+        )
+    return out.reshape(*preshape, -1, out.shape[-1])
 
 def hash_qid(qid, ndigits=9):
     """Turn a qid string into an ndigit hash, using hashlib.sha256 hashing"""
