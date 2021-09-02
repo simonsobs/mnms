@@ -613,20 +613,70 @@ def ell_flatten(imap, mask=1, return_sqrt_cov=False, per_split=False, mode='curv
         raise NotImplementedError('Only implemented modes are fft and curvedsky')
 
 def map2alm(imap, alm=None, ainfo=None, lmax=None, **kwargs):
-    out, _ = curvedsky.prepare_alm(
-        alm=alm, ainfo=ainfo, lmax=lmax, pre=imap.shape[:-2], dtype=imap.dtype
-        )
+    """A wrapper around pixell.curvedsky.map2alm that performs proper
+    looping over array 'pre-dimensions'. Always performs a spin[0,2]
+    transform if imap.ndim >= 3; therefore, 'pre-dimensions' are those
+    at axes <= -4. 
+
+    Parameters
+    ----------
+    imap : ndmap
+        Map to transform.
+    alm : arr, optional
+        Array to write result into, by default None. If None, will be
+        built based off other kwargs.
+    ainfo : sharp.alm_info, optional
+        An alm_info object, by default None.
+    lmax : int, optional
+        Transform bandlimit, by default None.
+
+    Returns
+    -------
+    ndarray
+        The alms of the transformed map.
+    """
+    if alm is None:
+        alm, _ = curvedsky.prepare_alm(
+            alm=alm, ainfo=ainfo, lmax=lmax, pre=imap.shape[:-2], dtype=imap.dtype
+            )
     for preidx in np.ndindex(imap.shape[:-3]):
         # map2alm, alm2map doesn't work well for other dims beyond pol component
         assert imap[preidx].ndim in [2, 3]
         curvedsky.map2alm(
-            imap[preidx], out[preidx], alm=alm, ainfo=ainfo, lmax=lmax, **kwargs
+            imap[preidx], alm=alm[preidx], ainfo=ainfo, lmax=lmax, **kwargs
             )
-    return out
+    return alm
 
 def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, **kwargs):
+    """A wrapper around pixell.curvedsky.alm2map that performs proper
+    looping over array 'pre-dimensions'. Always performs a spin[0,2]
+    transform if imap.ndim >= 3; therefore, 'pre-dimensions' are those
+    at axes <= -4. 
+
+    Parameters
+    ----------
+    alm : [type]
+        [description]
+    omap : [type], optional
+        [description], by default None
+    shape : [type], optional
+        [description], by default None
+    wcs : [type], optional
+        [description], by default None
+    dtype : [type], optional
+        [description], by default None
+    ainfo : [type], optional
+        [description], by default None
+
+    Returns
+    -------
+    [type]
+        [description]
+    """
     if omap is None:
-        omap = enmap.empty((alm.shape[:-1], *shape[-2:]), wcs=wcs, dtype=dtype)
+        if dtype is None:
+            dtype = alm.real.dtype
+        omap = enmap.empty((*alm.shape[:-1], *shape[-2:]), wcs=wcs, dtype=dtype)
     for preidx in np.ndindex(alm.shape[:-2]):
         # map2alm, alm2map doesn't work well for other dims beyond pol component
         assert omap[preidx].ndim in [2, 3]

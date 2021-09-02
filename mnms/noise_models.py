@@ -113,7 +113,7 @@ class NoiseModel(ABC):
         self._lmax = lmax
 
         # sanity checks
-        if self._ivar:
+        if self._ivar is not None:
             assert self._num_splits == self._ivar.shape[-4], \
                 'Num_splits inferred from ivar shape != num_splits from data model table'
 
@@ -562,7 +562,7 @@ class NoiseModel(ABC):
 
     def _check_sim_on_disk(self, split_num, sim_num, alm=False):
         """Check if sim with split_num, sim_num exists on-disk; if so return it, else return None."""
-        fn = self._get_sim_fn(split_num, sim_num)
+        fn = self._get_sim_fn(split_num, sim_num, alm=alm)
         try:
             if alm:
                 # we know the preshape is (num_arrays, num_splits=1)
