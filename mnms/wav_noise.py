@@ -87,13 +87,7 @@ def rand_enmap_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, mask, lmax, w_ell,
 
     alm, ainfo = rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax,
                         w_ell, dtype=type_utils.to_complex(dtype), seed=seed)
-    omap = enmap.empty(alm.shape[:-1] + mask.shape[-2:], wcs=mask.wcs, dtype=dtype)
-    ncomp = omap.shape[0]
-
-    for cidx in range(ncomp):
-        omap[cidx] = curvedsky.alm2map(alm[cidx], omap[cidx], ainfo=ainfo)
-
-    return omap
+    return utils.alm2map(alm, shape=mask.shape, wcs=mask.wcs, dtype=dtype, ainfo=ainfo)
 
 def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
                                      smooth_loc=False):
@@ -152,14 +146,8 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
 
     # need separate alms for a grown mask, and the original mask
     ainfo = sharp.alm_info(lmax)
-    alm = np.empty(imap.shape[:-2] + (ainfo.nelem,),
-                   dtype=type_utils.to_complex(imap.dtype))
-    grown_alm = np.empty(imap.shape[:-2] + (ainfo.nelem,),
-                   dtype=type_utils.to_complex(imap.dtype))
-
-    for cidx in range(imap.shape[0]):
-        curvedsky.map2alm(imap[cidx]*mask, alm[cidx], ainfo)
-        curvedsky.map2alm(imap[cidx]*grown_mask, grown_alm[cidx], ainfo)
+    alm = utils.map2alm(imap*mask, ainfo=ainfo)
+    grown_alm = utils.map2alm(imap*grown_mask, ainfo=ainfo)
 
     # Determine diagonal pseudo spectra from normal alm for filtering.
     ncomp, npol = alm.shape[:2]

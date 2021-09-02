@@ -12,8 +12,9 @@ from abc import ABC, abstractmethod
 
 class NoiseModel(ABC):
 
-    def __init__(self, *qids, data_model=None, mask=None, ivar=None, imap=None, calibrated=True, downgrade=1,
-                 lmax=None, mask_version=None, mask_name=None, union_sources=None, notes=None, **kwargs):
+    def __init__(self, *qids, data_model=None, preload=True, mask=None, ivar=None, imap=None,
+                calibrated=True, downgrade=1, lmax=None, mask_version=None, mask_name=None,
+                union_sources=None, notes=None, **kwargs):
         """Base class for all NoiseModel subclasses. Supports loading raw data necessary for all 
         subclasses, such as masks and ivars. Also defines some class methods usable in subclasses.
 
@@ -24,12 +25,18 @@ class NoiseModel(ABC):
         data_model : soapack.DataModel, optional
             DataModel instance to help load raw products, by default None.
             If None, will load the `default_data_model` from the `mnms` config.
+        preload: bool, optional
+            If mask and/or ivar are respectively None, load them, by default True. Setting
+            to False can expedite access to helper methods of this class without waiting
+            for data to load.
         mask : enmap.ndmap, optional
             Data mask, by default None.
-            If None, will load a mask according to the `mask_version` and `mask_name` kwargs.
+            If None and preload, will load a mask according to the `mask_version` and
+            `mask_name` kwargs.
         ivar : array-like, optional
             Data inverse-variance maps, by default None.
-            If None, will be loaded via DataModel according to `downgrade` and `calibrated` kwargs.
+            If None and preload, will be loaded via DataModel according to `downgrade`
+            and `calibrated` kwargs.
         imap : array-like, optional
             Data maps, by default None.
             If None, will be loaded in call to NoiseModel.get_model(...), and may be retained in 
@@ -57,7 +64,8 @@ class NoiseModel(ABC):
             `galcut` and `apod_deg`), by default None.
         """
 
-        # if mask and ivar are provided, there is no way of checking whether calibrated, what downgrade, etc
+        # if mask and ivar are provided, there is no way of checking
+        # whether calibrated, what downgrade, etc; they are assumed to be 'correct'
 
         # store basic set of instance properties
         self._qids = qids
@@ -82,12 +90,16 @@ class NoiseModel(ABC):
         # Get ivars and mask -- every noise model needs these for every operation.
         if mask is not None:
             self._mask = mask
-        else:
+        elif preload:
             self._mask = self._get_mask()
+        else:
+            self._mask = None
         if ivar is not None:
             self._ivar = ivar
-        else:
+        elif preload:
             self._ivar = self._get_ivar()
+        else:
+            self._ivar = None
 
         # Possibly store input data
         self._imap = imap
@@ -101,8 +113,9 @@ class NoiseModel(ABC):
         self._lmax = lmax
 
         # sanity checks
-        assert self._num_splits == self._ivar.shape[-4], \
-            'Num_splits inferred from ivar shape != num_splits from data model table'
+        if self._ivar:
+            assert self._num_splits == self._ivar.shape[-4], \
+                'Num_splits inferred from ivar shape != num_splits from data model table'
 
     def _get_mask(self):
         """Load the data mask from disk according to instance attributes.
@@ -210,7 +223,7 @@ class NoiseModel(ABC):
             likely is 1. If ivar is False, num_pol likely is 3.
         """
         # read geometry from the map to be loaded. we really just need the first component,
-        # a.k.a "npol"
+        # a.k.a "npol", which varies depending on if ivar is True or False
         shape, _ = s_utils.read_map_geometry(self._data_model, self._qids[0], 0, ivar=ivar)
         shape = (shape[0], *self._mask.shape)
         shape = (self._num_arrays, self._num_splits, *shape)
@@ -350,7 +363,7 @@ class NoiseModel(ABC):
         check_on_disk : bool, optional
             If True, first check if an identical model (including by `notes`) exists
             on-disk for each split. If it does, do nothing or store it in the object
-            attributes, depending on the `keep` kwarg. If it does not, generate the model
+            attributes, depending on the `keep_model` kwarg. If it does not, generate the model
             for the missing splits instead. By default True.
         write : bool, optional
             Save the generated model to disk, by default True.
@@ -367,7 +380,7 @@ class NoiseModel(ABC):
             # build a list of splits that don't have models on-disk
             does_not_exist = []
             for s in range(self._num_splits):
-                res = self._check_model_on_disk(s, keep=keep_model)
+                res = self._check_model_on_disk(s, keep_model=keep_model)
                 if not res:
                     does_not_exist.append(s)
             if not does_not_exist:
@@ -386,7 +399,7 @@ class NoiseModel(ABC):
                 nm_dict = self._get_model(s, dmap, verbose=verbose)
 
             if keep_model:
-                self._keep(s, nm_dict)
+                self._keep_model(s, nm_dict)
 
             if write:
                 fn = self._get_model_fn(s)
@@ -395,9 +408,9 @@ class NoiseModel(ABC):
         if keep_data:
             self._imap = imap
 
-    def _check_model_on_disk(self, split_num, keep=False, generate=True):
+    def _check_model_on_disk(self, split_num, keep_model=False, generate=True):
         """Check if this NoiseModel's model for a given split exists on disk. 
-        If it does, return True. Depending on the 'keep' kwarg, possibly store
+        If it does, return True. Depending on the 'keep_model' kwarg, possibly store
         the model in memory. Depending on the 'generate' kwarg, return either 
         False or raise a FileNotFoundError if it does not exist on-disk.
 
@@ -405,7 +418,7 @@ class NoiseModel(ABC):
         ----------
         split_num : int
             The 0-based index of the split model to look for.
-        keep : bool, optional
+        keep_model : bool, optional
             Store the generated (or loaded) model in the instance attributes if it
             exists on-disk, by default False.
         generate : bool, optional
@@ -425,7 +438,7 @@ class NoiseModel(ABC):
             If 'generate' is False and the model does not exist on-disk.
         """
         try:
-            self._get_model_from_disk(split_num, keep=keep)
+            self._get_model_from_disk(split_num, keep_model=keep_model)
             return True
         except (FileNotFoundError, OSError):
             fn = self._get_model_fn(split_num)
@@ -436,12 +449,12 @@ class NoiseModel(ABC):
                 print(f'Model for split {split_num} not found on-disk, please generate it first')
                 raise FileNotFoundError(fn)
 
-    def _get_model_from_disk(self, split_num, keep=True):
-        """Load a sqrt-covariance matrix from disk. If keep, store it in instance attributes."""
+    def _get_model_from_disk(self, split_num, keep_model=True):
+        """Load a sqrt-covariance matrix from disk. If keep_model, store it in instance attributes."""
         fn = self._get_model_fn(split_num)
         nm_dict = self._read_model(fn)
-        if keep:
-            self._keep(split_num, nm_dict)
+        if keep_model:
+            self._keep_model(split_num, nm_dict)
 
     @abstractmethod
     def _get_model_fn(self, split_num):
@@ -453,16 +466,21 @@ class NoiseModel(ABC):
         """Read a noise model with filename fn; return a dictionary of noise model variables"""
         return {}
     
-    def _keep(self, split_num, nm_dict):
+    def _keep_model(self, split_num, nm_dict):
         """Store a dictionary of noise model variables in instance attributes under key split_num"""
         print(f'Loading model for split {split_num} into memory')
         self._nm_dict[split_num] = nm_dict
 
     # for memory management
-    def _delete(self, split_num):
+    def _delete_model(self, split_num):
         """Delete a dictionary entry of noise model variables from instance attributes under key split_num"""
         print(f'Removing model for split {split_num} from memory')
         del self._nm_dict[split_num]
+
+    # for memory management
+    def _delete_data(self):
+        """Remove data stored in memory under instance attribute self._imap"""
+        self._imap = None
 
     @abstractmethod
     def _get_dmap(self, imap):
@@ -521,7 +539,7 @@ class NoiseModel(ABC):
                 return res
 
         if split_num not in self._nm_dict:
-            self._check_model_on_disk(split_num, keep=True, generate=False)
+            self._check_model_on_disk(split_num, keep_model=True, generate=False)
 
         seed = self._get_seed(split_num, sim_num)
 
@@ -529,19 +547,13 @@ class NoiseModel(ABC):
             sim = self._get_sim(split_num, seed, verbose=verbose)
             sim *= self._mask
             if alm:
-                out = np.empty(
-                    (*sim.shape[:-2], hp.Alm.getsize(self._lmax)),
-                    dtype=np.result_type(self._data_model.dtype, 1j)
-                    )
-                for preidx in np.ndindex(sim.shape[:-3]):
-                    out[preidx] = curvedsky.map2alm(sim[preidx], lmax=self._lmax)
-                sim = out
+                sim = utils.map2alm(sim, lmax=self._lmax)
 
         if not keep_model:
-            self._delete(split_num)
+            self._delete_model(split_num)
         
         if write:
-            fn = self._get_sim_fn(split_num, sim_num)
+            fn = self._get_sim_fn(split_num, sim_num, alm=alm)
             if alm:
                 utils.write_alm(fn, sim, dtype=self._data_model.dtype)
             else:
@@ -562,8 +574,8 @@ class NoiseModel(ABC):
             return None
 
     @abstractmethod
-    def _get_sim_fn(self, split_num, sim_num):
-        """Get a sim filename for split split_num, sim sim_num; return as <str>"""
+    def _get_sim_fn(self, split_num, sim_num, alm=False):
+        """Get a sim filename for split split_num, sim sim_num, and bool alm; return as <str>"""
         pass
 
     def _get_seed(self, split_num, sim_num):
@@ -711,10 +723,10 @@ class TiledNoiseModel(NoiseModel):
             fn, sqrt_cov_mat, extra_hdu={'SQRT_COV_ELL': sqrt_cov_ell}
         )
 
-    def _get_sim_fn(self, split_num, sim_num):
+    def _get_sim_fn(self, split_num, sim_num, alm=False):
         """Get a sim filename for split split_num, sim sim_num; return as <str>"""
         return simio.get_tiled_sim_fn(
-            self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, split_num, sim_num, notes=self._notes,
+            self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, split_num, sim_num, alm=alm, notes=self._notes,
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
             calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
         )

@@ -542,7 +542,6 @@ def ell_flatten(imap, mask=1, return_sqrt_cov=False, per_split=False, mode='curv
         kmap = enmap.fft(imap*mask, normalize='phys', nthread=nthread)
         w2 = np.mean(mask**2)
         smap = (kmap * np.conj(kmap)).real / w2
-
         if not per_split:
             smap = smap.mean(axis=-4, keepdims=True).real
 
@@ -579,57 +578,62 @@ def ell_flatten(imap, mask=1, return_sqrt_cov=False, per_split=False, mode='curv
         if lmax is None:
             lmax = lmax_from_wcs(imap.wcs)
 
-        # initialize objects to fill up sqrt_cls
-        alms = []
-        cls = []
-
         # since filtering maps by their own power only need diagonal
-        for i in range(num_arrays):
-            for j in range(num_splits):
-                assert imap[i, j].ndim in [2, 3]
-                alms.append(curvedsky.map2alm(imap[i, j]*mask, ainfo=ainfo, lmax=lmax))
-                cls.append(curvedsky.alm2cl(alms[-1], ainfo=ainfo))
-
-        alms = np.array(alms).reshape(num_arrays, num_splits, num_pol, -1)
-        cls = np.array(cls, dtype=imap.dtype).reshape(num_arrays, num_splits, num_pol, -1)
-
+        alm = map2alm(imap*mask, ainfo=ainfo, lmax=lmax)
+        cl = curvedsky.alm2cl(alm, ainfo=ainfo)
         if not per_split:
-            cls = cls.mean(axis=-3, keepdims=True)
+            cl = cl.mean(axis=-3, keepdims=True)
 
-        # apply correction and take sqrt
+        # apply correction and take sqrt.
+        # the filter is 1/sqrt
         pmap = enmap.pixsizemap(mask.shape, mask.wcs)
         w2 = np.sum((mask**2)*pmap) / np.pi / 4.
-        sqrt_cls = (cls / w2)**0.5
+        sqrt_cl = (cl / w2)**0.5
+        lfilter = np.zeros_like(sqrt_cl)
+        np.divide(1, sqrt_cl, where=sqrt_cl!=0, out=lfilter)
+        lfilter = np.broadcast_to(lfilter, (*imap.shape[:-2], lfilter.shape[-1]))
 
-        # then, filter the alms
-        lfilters = np.zeros_like(sqrt_cls)
-        np.divide(1, sqrt_cls, where=sqrt_cls!=0, out=lfilters)
-        for i in range(num_arrays):
-            for j in range(num_splits):
-
-                # there is only one "filter split" if not per_split
-                jfilt = j
-                if not per_split:
-                    jfilt = 0
-
-                for k in range(num_pol):
-                    assert alms[i, j, k].ndim in [1, 2]
-                    alms[i, j, k] = curvedsky.almxfl(alms[i, j, k], lfilter=lfilters[i, jfilt, k], ainfo=ainfo)
+        # almxfl cannot blindly broadcast filters and alms
+        for preidx in np.ndindex(imap.shape[:-2]):
+            assert alm[preidx].ndim == 1
+            assert lfilter[preidx].ndim == 1
+            alm[preidx] = curvedsky.almxfl(
+                alm[preidx], lfilter=lfilter[preidx], ainfo=ainfo
+                )
 
         # finally go back to map space
-        omap = enmap.empty(imap.shape, imap.wcs, dtype=imap.dtype)
-        for i in range(num_arrays):
-            for j in range(num_splits):
-                assert alms[i, j].ndim in [1, 2]
-                omap[i, j] = curvedsky.alm2map(alms[i, j], omap[i, j], ainfo=ainfo)
+        omap = alm2map(alm, shape=imap.shape, wcs=imap.wcs, dtype=imap.dtype, ainfo=ainfo)
 
         if return_sqrt_cov:
-            return omap, sqrt_cls
+            return omap, sqrt_cl
         else:
             return omap
 
     else:
         raise NotImplementedError('Only implemented modes are fft and curvedsky')
+
+def map2alm(imap, alm=None, ainfo=None, lmax=None, **kwargs):
+    out, _ = curvedsky.prepare_alm(
+        alm=alm, ainfo=ainfo, lmax=lmax, pre=imap.shape[:-2], dtype=imap.dtype
+        )
+    for preidx in np.ndindex(imap.shape[:-3]):
+        # map2alm, alm2map doesn't work well for other dims beyond pol component
+        assert imap[preidx].ndim in [2, 3]
+        curvedsky.map2alm(
+            imap[preidx], out[preidx], alm=alm, ainfo=ainfo, lmax=lmax, **kwargs
+            )
+    return out
+
+def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, **kwargs):
+    if omap is None:
+        omap = enmap.empty((alm.shape[:-1], *shape[-2:]), wcs=wcs, dtype=dtype)
+    for preidx in np.ndindex(alm.shape[:-2]):
+        # map2alm, alm2map doesn't work well for other dims beyond pol component
+        assert omap[preidx].ndim in [2, 3]
+        omap[preidx] = curvedsky.alm2map(
+            alm[preidx], omap[preidx], ainfo=ainfo, **kwargs
+            )
+    return omap
 
 # further extended here for ffts
 def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0):
@@ -638,10 +642,11 @@ def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0
     Parameters
     ----------
     imap : ndmap
-        Maps to be filtered, no greater than ndim=3.
+        Maps to be filtered.
     lfilter : array-like or callable
-        If array-like, no greater than ndim=2. If callable, will
-        be evaluated over range(lmax+1).
+        If callable, will be evaluated over range(lmax+1) if 'curvedsky'
+        and imap.modlmap() if 'fft'. If array-like or after being called, 
+        lfilter.shape[:-1] must broadcast with imap.shape[:-2].
     mode : str, optional
         The convolution space: 'curvedsky' or 'fft', by default 'curvedsky'.
     ainfo : sharp.alm_info, optional
@@ -664,24 +669,24 @@ def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0
             lfilter = lfilter(imap.modlmap().astype(imap.dtype)) # modlmap is np.float64 always...
         return enmap.ifft(kmap * lfilter, nthread=nthread).real
     elif mode == 'curvedsky':
-        # map2alm, alm2map doesn't work well for other dims beyond pol component
-        assert imap.ndim in [2, 3] 
-        imap = atleast_nd(imap, 3)
-
         # get the lfilter, which might be different per pol component
         if lmax is None:
             lmax = lmax_from_wcs(imap.wcs)
         if callable(lfilter):
             lfilter = lfilter(np.arange(lmax+1), dtype=imap.dtype)
-        assert lfilter.ndim in [1, 2]
-        lfilter = atleast_nd(lfilter, 2)
+        lfilter = np.broadcast_to(lfilter, (*imap.shape[:-2], lfilter.shape[-1]))
 
         # perform the filter
-        alm = curvedsky.map2alm(imap, ainfo=ainfo, lmax=lmax)
-        for i in range(len(alm)):
-            alm[i] = curvedsky.almxfl(alm[i], lfilter=lfilter[i], ainfo=ainfo)
+        alm = map2alm(imap, ainfo=ainfo, lmax=lmax)
+        # almxfl cannot blindly broadcast filters and alms
+        for preidx in np.ndindex(imap.shape[:-2]):
+            assert alm[preidx].ndim == 1
+            assert lfilter[preidx].ndim == 1
+            alm[preidx] = curvedsky.almxfl(
+                alm[preidx], lfilter=lfilter[preidx], ainfo=ainfo
+                )
         omap = enmap.empty(imap.shape, imap.wcs, dtype=imap.dtype)
-        return curvedsky.alm2map(alm, omap, ainfo=ainfo)
+        return alm2map(alm, omap, ainfo=ainfo)
 
 def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
     lmin = center - width/2

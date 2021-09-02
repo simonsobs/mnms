@@ -79,7 +79,7 @@ def get_tiled_model_fn(qid, split_num, width_deg, height_deg, delta_ell_smooth, 
     fn += f'w{width_deg}_h{height_deg}_lsmooth{delta_ell_smooth}_lmax{lmax}{notes}_set{split_num}.fits'
     return fn
 
-def get_tiled_sim_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, split_num, sim_num, notes=None, **kwargs):
+def get_tiled_sim_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, split_num, sim_num, alm=False, notes=None, **kwargs):
     # cast to floating point for consistency
     width_deg = float(width_deg)
     height_deg = float(height_deg)
@@ -94,10 +94,11 @@ def get_tiled_sim_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, split_n
     else:
         notes = f'_{notes}'
 
-    fn += f'w{width_deg}_h{height_deg}_lsmooth{delta_ell_smooth}_lmax{lmax}{notes}_'
+    fn += f'w{width_deg}_h{height_deg}_lsmooth{delta_ell_smooth}_lmax{lmax}{notes}_set{split_num}_'
 
-    # prepare or set (split) and map num tags
-    fn += f'set{split_num}_map{str(sim_num).zfill(4)}.fits'
+    # prepare map num tags
+    mapalm = 'alm' if alm else 'map'
+    fn += f'{mapalm}{str(sim_num).zfill(4)}.fits'
     return fn
 
 def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, notes=None, **kwargs):
@@ -193,7 +194,7 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, sim_num, alm=False, n
     
     fn += f'lamb{lamb}_lmax{lmax}{smooth_loc}{notes}_set{split_num}_'
 
-    # prepare or set (split) and map num tags
+    # prepare map num tags
     mapalm = 'alm' if alm else 'map'
     fn += f'{mapalm}{str(sim_num).zfill(4)}.fits'
     return fn
