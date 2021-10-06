@@ -758,6 +758,8 @@ def get_Cl_ratio(data_map, sim_map, window=1, ledges=None, lmax=6000, method='cu
                 plt.savefig(save_path + fn, bbox_inches='tight')
             if show:
                 plt.show()
+            else:
+                plt.close()
 
         out.append(np.mean(y/bias))
 

@@ -1,6 +1,7 @@
-from pixell import enmap, curvedsky, fft as enfft
-from enlib import array_ops
+from pixell import enmap, curvedsky, fft as enfft, sharp
+from enlib import array_ops, bench
 from soapack import interfaces as sints
+from optweight import alm_c_utils
 
 import numpy as np
 from scipy.interpolate import interp1d
@@ -591,14 +592,17 @@ def ell_flatten(imap, mask=1, return_sqrt_cov=False, per_split=False, mode='curv
         sqrt_cl = (cl / w2)**0.5
         lfilter = np.zeros_like(sqrt_cl)
         np.divide(1, sqrt_cl, where=sqrt_cl!=0, out=lfilter)
+
+        # alm_c_utils.lmul cannot blindly broadcast filters and alms
         lfilter = np.broadcast_to(lfilter, (*imap.shape[:-2], lfilter.shape[-1]))
 
-        # almxfl cannot blindly broadcast filters and alms
+        if ainfo is None:
+            ainfo = sharp.alm_info(lmax)
         for preidx in np.ndindex(imap.shape[:-2]):
             assert alm[preidx].ndim == 1
             assert lfilter[preidx].ndim == 1
-            alm[preidx] = curvedsky.almxfl(
-                alm[preidx], lfilter=lfilter[preidx], ainfo=ainfo
+            alm[preidx] = alm_c_utils.lmul(
+                alm[preidx], lfilter[preidx], ainfo
                 )
 
         # finally go back to map space
@@ -655,23 +659,27 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, **kwar
 
     Parameters
     ----------
-    alm : [type]
-        [description]
-    omap : [type], optional
-        [description], by default None
-    shape : [type], optional
-        [description], by default None
-    wcs : [type], optional
-        [description], by default None
-    dtype : [type], optional
-        [description], by default None
-    ainfo : [type], optional
-        [description], by default None
+    alm : arr
+        The alms to transform.
+    omap : ndmap, optional
+        The output map into which the alms are transformed, by default None. If
+        None, will be allocated according to shape, wcs, and dtype kwargs.
+    shape : iterable, optional
+        The sky-shape of the output map, by default None. Only the last two
+        axes are used. Only used if omap is None.
+    wcs : astropy.wcs.WCS, optional
+        The wcs information of the output map, by default None. Only used
+        if omap is None.
+    dtype : np.dtype, optional
+        The data type of the output map, by default None. Only used if omap
+        is None. If omap is None and dtype is None, will be set to alm.real.dtype.
+    ainfo : sharp.alm_info, optional
+        An alm_info object, by default None.
 
     Returns
     -------
-    [type]
-        [description]
+    ndmap
+        The (inverse)-transformed map.
     """
     if omap is None:
         if dtype is None:
@@ -723,18 +731,23 @@ def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0
         if lmax is None:
             lmax = lmax_from_wcs(imap.wcs)
         if callable(lfilter):
-            lfilter = lfilter(np.arange(lmax+1), dtype=imap.dtype)
+            lfilter = lfilter(np.arange(lmax+1)).astype(imap.dtype)
+        
+        # alm_c_utils.lmul cannot blindly broadcast filters and alms
         lfilter = np.broadcast_to(lfilter, (*imap.shape[:-2], lfilter.shape[-1]))
 
         # perform the filter
         alm = map2alm(imap, ainfo=ainfo, lmax=lmax)
-        # almxfl cannot blindly broadcast filters and alms
+
+        if ainfo is None:
+            ainfo = sharp.alm_info(lmax)
         for preidx in np.ndindex(imap.shape[:-2]):
             assert alm[preidx].ndim == 1
             assert lfilter[preidx].ndim == 1
-            alm[preidx] = curvedsky.almxfl(
-                alm[preidx], lfilter=lfilter[preidx], ainfo=ainfo
+            alm[preidx] = alm_c_utils.lmul(
+                alm[preidx], lfilter[preidx], ainfo
                 )
+
         omap = enmap.empty(imap.shape, imap.wcs, dtype=imap.dtype)
         return alm2map(alm, omap, ainfo=ainfo)
 

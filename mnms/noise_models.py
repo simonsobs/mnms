@@ -1,7 +1,5 @@
 from mnms import simio, tiled_ndmap, utils, soapack_utils as s_utils, tiled_noise, wav_noise, inpaint
-from pixell import enmap, wcsutils, curvedsky
-import healpy as hp
-from astropy.io import fits
+from pixell import enmap, wcsutils
 from enlib import bench
 from optweight import wavtrans
 
@@ -904,3 +902,25 @@ class WaveletNoiseModel(NoiseModel):
         sim = sim.reshape(sim.shape[0], 1, *sim.shape[1:])
 
         return sim
+
+
+class WavFiltTile(NoiseModel):
+
+    def __init__(self):
+        pass
+
+    def _get_model(self):
+        pass
+        # 1. get wavelet noise model including sqrt_cov_ell and wavelet maps
+        # 2. use sqrt_cov_ell to flatten noise maps
+        # 3. do map->alm->wav on noise maps, flatten using wavelet maps
+        # 4. do wav->alm->map to recover full-res flattened noise map
+        # 5. make tiled noise model
+
+    def _get_sim(self):
+        pass
+        # 1. draw tiled noise sim, stitch into flat map
+        # 2. do map->alm->wav, unflatten using wavelet maps
+        # 3. do wav->alm->map to recover full-res unflattened noise map
+        # 4. use sqrt_cov_ell to unflatten
+        # 5. use corr_fact to get sim
