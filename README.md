@@ -8,9 +8,10 @@ This codebase is under active-development -- we can't guarantee future commits w
 Users wishing to filter data or generate noise simulations should have the following dependencies in their environment:
 * from `simonsobs`: `pixell`, `soapack`
 * from individuals: [`enlib`](https://github.com/amaurea/enlib), [`optweight`](https://github.com/AdriJD/optweight), [`orphics`](https://github.com/msyriac/orphics) 
-* less-common distributions: `astropy`, `numba`
-* common distributions: `numpy`, `scipy`
-* optional but good idea to have: `mpi4py`,  `matplotlib`, `tqdm`
+* less-common distributions: `numba`
+* optional but good idea to have: `mpi4py`, `tqdm`
+
+Most other dependencies (e.g. `numpy` etc.) are required by packages listed here, especially by `pixell`.
 
 A note on [`enlib`](https://github.com/amaurea/enlib): users need access to the top-level python modules and the compiled library "array ops." The first is achieved just by adding  the repo to your `PYTHONPATH`. The second must be compiled via `make array_ops` executed from within the top-level directory. Please see the enlib docs for more info on how to do this on your system. We have had success using an up-to-date intel `c` compiler with intel `mkl` loaded in your environment, if available.
 
