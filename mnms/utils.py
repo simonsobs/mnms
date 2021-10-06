@@ -8,13 +8,30 @@ from scipy.interpolate import interp1d
 import numba
 import healpy as hp
 from astropy.io import fits
+import yaml
 
+import pkgutil
 from concurrent import futures
 import multiprocessing
 import os
 import hashlib
 
 # Utility functions to support tiling classes and functions. Just keeping code organized so I don't get whelmed.
+
+# copied from soapack.interfaces
+def config_from_yaml_file(filename):
+    """Returns a dictionary from a yaml file given by absolute filename.
+    """
+    with open(filename) as f:
+        config = yaml.safe_load(f)
+    return config
+
+def config_from_yaml_resource(resource):
+    """Returns a dictionary from a yaml file given by the resource name (relative to tacos package).
+    """
+    f = pkgutil.get_data('mnms', resource).decode()
+    config = yaml.safe_load(f)
+    return config
 
 def get_default_data_model():
     """Returns a soapack.interfaces.DataModel instance depending on the
