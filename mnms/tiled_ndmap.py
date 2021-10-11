@@ -1,5 +1,4 @@
 from pixell import enmap, wcsutils
-from orphics import maps
 from mnms import utils
 import astropy.io.fits as pyfits
 
@@ -264,7 +263,7 @@ class tiled_ndmap(enmap.ndmap):
         # to speed things up, don't want to construct new tiled_ndmap for each imap[i], so cast to array
         # then crop and and crossfade before stitching
         imap = np.asarray(self)
-        imap = maps.crop_center(imap, self.pix_height + 2*self.pix_cross_y, self.pix_width + 2*self.pix_cross_x)
+        imap = utils.crop_center(imap, self.pix_height + 2*self.pix_cross_y, self.pix_width + 2*self.pix_cross_x)
         imap *= self._crossfade()**power
 
         # place all the unmasked tiles, 0 for the rest

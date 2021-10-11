@@ -1,7 +1,6 @@
 from mnms import utils, soapack_utils as s_utils, simio
 from soapack import interfaces as sints
 from pixell import enmap
-from orphics import maps
 
 import numpy as np
 import argparse
@@ -61,7 +60,7 @@ if omask_name[-5:] != '.fits':
     omask_name += '.fits'
 oapod_deg = args.oapod_deg
 
-mask = maps.cosine_apodize(mask_bool, oapod_deg)
+mask = utils.cosine_apodize(mask_bool, oapod_deg)
 ofn = '/'.join([simio.config['mask_path'], omask_version, omask_name])
 enmap.write_map(ofn, mask)
 

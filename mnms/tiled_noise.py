@@ -1,9 +1,9 @@
-from orphics import maps
 from pixell import enmap, curvedsky
 from mnms import covtools, utils
 from mnms.tiled_ndmap import tiled_ndmap
 
 import numpy as np
+from scipy.interpolate import interp1d
 
 # harcoded constants
 LARGE_SCALE_TILE_NUM = 103_094
@@ -82,7 +82,7 @@ def get_iso_curvedsky_noise_covar(imap, ivar=None, mask=None, N=5, lmax=1000):
         if N > 0:
             power = utils.rolling_average(power, N)
             bins = np.arange(len(power))
-            power = maps.interp(bins, power)(ls)
+            power = interp1d(bins, power, bounds_error=False, fill_value=0.)(ls)
         power[:2] = 0
 
         # assign

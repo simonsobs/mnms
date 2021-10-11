@@ -1336,3 +1336,17 @@ def eshow(x, *args, fname=None, return_plots=False, **kwargs):
     res = eplot(x, *args, fname=fname, show=True, **kwargs)
     if return_plots:
         return res
+
+# ~copied from orphics.maps, want to avoid dependency on orphics
+def crop_center(img, cropy, cropx=None):
+    cropx = cropy if cropx is None else cropx
+    y, x = img.shape[-2:]
+    startx = x//2 - (cropx//2)
+    starty = y//2 - (cropy//2)
+    selection = np.s_[...,starty:starty+cropy,startx:startx+cropx]
+    return img[selection]
+
+# ~copied from orphics.maps, want to avoid dependency on orphics
+def cosine_apodize(bmask, width_deg):
+    r = width_deg * np.pi / 180.
+    return 0.5*(1 - np.cos(bmask.distance_transform(rmax=r) * (np.pi/r)))
