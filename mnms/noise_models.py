@@ -7,6 +7,20 @@ import numpy as np
 
 from abc import ABC, abstractmethod
 
+# expose only concrete noise models, helpful for namespace management in client
+# package development. NOTE: this design pattern inspired by the super-helpful
+# registry trick here: https://numpy.org/doc/stable/user/basics.dispatch.html
+
+REGISTERED_NOISE_MODELS = {}
+
+def register(registry=REGISTERED_NOISE_MODELS):
+    """Add a concrete NoiseModel implementation to the specified registry (dictionary)."""
+    def decorator(noise_model_class):
+        registry[noise_model_class.__name__] = noise_model_class
+        return noise_model_class
+    return decorator
+
+# NoiseModel API and concrete NoiseModel classes. 
 
 class NoiseModel(ABC):
 
@@ -592,6 +606,7 @@ class NoiseModel(ABC):
         return self._num_splits
 
 
+@register()
 class TiledNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, mask=None, ivar=None, imap=None, calibrated=True,
@@ -743,6 +758,7 @@ class TiledNoiseModel(NoiseModel):
         return sim
 
 
+@register()
 class WaveletNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, mask=None, ivar=None, imap=None, calibrated=True,
