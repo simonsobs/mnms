@@ -497,7 +497,7 @@ def lmax_from_wcs(wcs):
     return int(180/np.abs(wcs.wcs.cdelt[1]))
 
 # forces shape to (num_arrays, num_splits, num_pol, ny, nx) and optionally averages over splits
-def ell_flatten(imap, mask=1, return_sqrt_cov=False, per_split=False, mode='curvedsky',
+def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=False, per_split=False, mode='curvedsky',
                 lmax=None, ainfo=None, ledges=None, weights=None, nthread=0):
     """Flattens a map 'by its own power spectrum', i.e., such that the resulting map
     has a power spectrum of unity.
@@ -509,6 +509,8 @@ def ell_flatten(imap, mask=1, return_sqrt_cov=False, per_split=False, mode='curv
     mask : enmap.ndmap, optional
         A spatial window to apply to the map, by default 1. Note that, if applied,
         the resulting 'flat' map will also masked.
+    mask_est : enmap.ndmap, optional
+        Mask used to estimate filter used to whiten the data.
     return_sqrt_cov : bool, optional
         If True, return the 'sqrt_covariance' which is the filter that flattens
         the map, by default False.
@@ -557,8 +559,8 @@ def ell_flatten(imap, mask=1, return_sqrt_cov=False, per_split=False, mode='curv
     if mode == 'fft':
         # get the power -- since filtering maps by their own power, only need diagonal.
         # also apply mask correction
-        kmap = enmap.fft(imap*mask, normalize='phys', nthread=nthread)
-        w2 = np.mean(mask**2)
+        kmap = enmap.fft(imap*mask_est, normalize='phys', nthread=nthread)
+        w2 = np.mean(mask_est**2)
         smap = (kmap * np.conj(kmap)).real / w2
         if not per_split:
             smap = smap.mean(axis=-4, keepdims=True).real
@@ -567,7 +569,8 @@ def ell_flatten(imap, mask=1, return_sqrt_cov=False, per_split=False, mode='curv
         modlmap = smap.modlmap().astype(imap.dtype) # modlmap is np.float64 always...
         smap = radial_bin(smap, modlmap, ledges, weights=weights) ** 0.5
         sqrt_cls = []
-
+        lfuncs = []
+        
         for i in range(num_arrays):
             for j in range(num_splits):
 
@@ -577,14 +580,28 @@ def ell_flatten(imap, mask=1, return_sqrt_cov=False, per_split=False, mode='curv
                     jfilt = 0
 
                 for k in range(num_pol):
-                    # interpolate to the center of the bins and apply filter
+                    # interpolate to the center of the bins.
                     lfunc, y = interp1d_bins(ledges, smap[i, jfilt, k], return_vals=True, kind='cubic', bounds_error=False)
                     sqrt_cls.append(y)
-                    lfilter = 1/lfunc(modlmap)
+                    lfuncs.append(lfunc)
+
+        # Re-do the FFT for the map masked with the bigger mask.
+        kmap[:] = enmap.fft(imap*mask_observed, normalize='phys', nthread=nthread)
+
+        # Apply the filter to the maps.
+        for i in range(num_arrays):
+            for j in range(num_splits):
+
+                jfilt = j if not per_split else 0
+
+                for k in range(num_pol):
+
+                    flat_idx = np.ravel_multi_index((i, j, k), (num_arrays, num_splits, num_pol))                
+                    lfilter = 1/lfuncs[flat_idx](modlmap)
                     assert np.all(np.isfinite(lfilter)), f'{i,jfilt,k}'
                     assert np.all(lfilter > 0)
-                    kmap[i, j, k] *= lfilter
-
+                    kmap[i,j,k] *= lfilter
+                
         sqrt_cls = np.array(sqrt_cls).reshape(num_arrays, num_splits, num_pol, -1)
 
         if return_sqrt_cov:
@@ -597,15 +614,15 @@ def ell_flatten(imap, mask=1, return_sqrt_cov=False, per_split=False, mode='curv
             lmax = lmax_from_wcs(imap.wcs)
 
         # since filtering maps by their own power only need diagonal
-        alm = map2alm(imap*mask, ainfo=ainfo, lmax=lmax)
+        alm = map2alm(imap*mask_est, ainfo=ainfo, lmax=lmax)
         cl = curvedsky.alm2cl(alm, ainfo=ainfo)
         if not per_split:
             cl = cl.mean(axis=-3, keepdims=True)
 
         # apply correction and take sqrt.
         # the filter is 1/sqrt
-        pmap = enmap.pixsizemap(mask.shape, mask.wcs)
-        w2 = np.sum((mask**2)*pmap) / np.pi / 4.
+        pmap = enmap.pixsizemap(mask_est.shape, mask_est.wcs)
+        w2 = np.sum((mask_est**2)*pmap) / np.pi / 4.
         sqrt_cl = (cl / w2)**0.5
         lfilter = np.zeros_like(sqrt_cl)
         np.divide(1, sqrt_cl, where=sqrt_cl!=0, out=lfilter)
@@ -613,6 +630,8 @@ def ell_flatten(imap, mask=1, return_sqrt_cov=False, per_split=False, mode='curv
         # alm_c_utils.lmul cannot blindly broadcast filters and alms
         lfilter = np.broadcast_to(lfilter, (*imap.shape[:-2], lfilter.shape[-1]))
 
+        # Re-do the SHT for the map masked with the bigger mask.
+        alm = map2alm(imap*mask_observed, alm=alm, ainfo=ainfo)
         if ainfo is None:
             ainfo = sharp.alm_info(lmax)
         for preidx in np.ndindex(imap.shape[:-2]):
@@ -1268,6 +1287,32 @@ def get_mask_bool(mask, threshold=1e-3):
     if mask.dtype != bool:
         mask_bool[mask < threshold] = False
     return mask_bool
+
+def get_bool_mask_from_ivar(ivar):
+    """
+    Return mask determined by pixels that are nonzero in all ivar maps.
+    
+    Parameters
+    ----------
+    ivar : (..., nsplit, 1, ny, nx) ndmap
+        Inverse variance maps for N splits.
+    
+    Returns
+    -------
+    mask : (ny, nx) bool enmap
+        Mask, True in observed pixels.
+    """
+
+    # Make 4d by prepending splits along -4 axis.
+    ivar = atleast_nd(ivar, 4) 
+
+    mask = np.ones(ivar.shape[-2:], dtype=bool)
+
+    # Loop over leading dims
+    for idx in np.ndindex(*ivar.shape[:-2]):
+        mask *= ivar[idx].astype(bool)
+
+    return enmap.enmap(mask, wcs=ivar.wcs, copy=False)
 
 def get_catalog(union_sources):
     """Load and process source catalog.

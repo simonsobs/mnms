@@ -38,7 +38,7 @@ def rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax, w_ell,
 
     preshape = sqrt_cov_wav.preshape
     ncomp = preshape[0]
-    alm_draw = np.empty(preshape[1:3] + (ainfo.nelem,), dtype=dtype)
+    alm_draw = np.zeros(preshape[1:3] + (ainfo.nelem,), dtype=dtype)
 
     sqrt_cov_wav_op = operators.WavMatVecWav(sqrt_cov_wav, power=1, inplace=True,
                                              op='ijkm, jkm -> ikm')
@@ -89,7 +89,7 @@ def rand_enmap_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, mask, lmax, w_ell,
                         w_ell, dtype=type_utils.to_complex(dtype), seed=seed)
     return utils.alm2map(alm, shape=mask.shape, wcs=mask.wcs, dtype=dtype, ainfo=ainfo)
 
-def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
+def estimate_sqrt_cov_wav_from_enmap(imap, mask_observed, lmax, mask_est, lamb=1.3,
                                      smooth_loc=False):
     """
     Estimate wavelet-based covariance matrix given noise enmap.
@@ -98,10 +98,12 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
     ----------
     imap : (ncomp, npol, ny, nx) enmap
         Input noise maps.
-    mask : (npol, ny, nx) or (ny, ny) enmap
+    mask_observed : (ny, nx) enmap
         Sky mask.
     lmax : int
         Bandlimit for output noise covariance.
+    mask_est : (ny, nx) enmap
+        Mask used to estimate filter used to whiten the data.
     lamb : float, optional
         Lambda parameter specifying width of wavelet kernels in 
         log(ell). Should be larger than 1.
@@ -125,7 +127,6 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
     noise the generated noise needs to be filtered by sqrt(cov_ell) and 
     masked using the pixel mask.
     """
-    grown_mask = grow_mask(mask, lmax)
 
     if utils.lmax_from_wcs(imap.wcs) < lmax:
         raise ValueError(f'Pixelization input map (cdelt : {imap.wcs.wcs.cdelt} '
@@ -133,21 +134,20 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
                          f'{lmax}. Lower lmax or downgrade map less.')
 
     if smooth_loc:
-        mask = mask.copy()
-        mask[mask<1e-4] = 0
-        features = enmap.grow_mask(~mask.astype(bool), np.radians(6))
-        features &= enmap.grow_mask(mask.astype(bool), np.radians(10))
-        features = features.astype(mask.dtype)
+        mask_observed = mask_observed.copy()
+        mask_observed[mask_observed<1e-4] = 0
+        features = enmap.grow_mask(~mask_observed.astype(bool), np.radians(6))
+        features &= enmap.grow_mask(mask_observed.astype(bool), np.radians(10))
+        features = features.astype(mask_observed.dtype)
         features = enmap.smooth_gauss(features, np.radians(1))
         features, minfo_features = map_utils.enmap2gauss(
                     features, 2 * lmax, mode='nearest', order=1)
     else:
         features, minfo_features = None, None
 
-    # need separate alms for a grown mask, and the original mask
+    # need separate alms for the smaller mask and the total observed mask.
     ainfo = sharp.alm_info(lmax)
-    alm = utils.map2alm(imap*mask, ainfo=ainfo)
-    grown_alm = utils.map2alm(imap*grown_mask, ainfo=ainfo)
+    alm = utils.map2alm(imap * mask_est, ainfo=ainfo)
 
     # Determine diagonal pseudo spectra from normal alm for filtering.
     ncomp, npol = alm.shape[:2]
@@ -158,10 +158,14 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
         n_ell[cidx] = ainfo.alm2cl(alm[cidx,:,None,:], alm[cidx,None,:,:])
         n_ell[cidx] *= np.eye(3)[:,:,np.newaxis]
 
-        # Filter grown alm by sqrt of inverse diagonal spectrum from normal alm.
+    # Re-use buffer from first alm for second alm.
+    alm_obs = utils.map2alm(imap * mask_observed, alm=alm, ainfo=ainfo)
+
+    for cidx in range(ncomp):
+        # Filter grown alm by sqrt of inverse diagonal spectrum from first alm.
         sqrt_icov_ell = operators.EllMatVecAlm(ainfo, n_ell[cidx], power=-0.5,
                                                inplace=True)
-        sqrt_icov_ell(grown_alm[cidx])
+        sqrt_icov_ell(alm_obs[cidx])
 
         # Determine and apply inverse N_ell filter.
         sqrt_cov_ell_op = operators.EllMatVecAlm(ainfo, n_ell[cidx], power=0.5)
@@ -174,7 +178,7 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask, lmax, lamb=1.3,
     # so that white noise floor described by single (omega) wavelet
     lmax_j = min(max(lmax - 100, lmin), 5300)
     w_ell, _ = wlm_utils.get_sd_kernels(lamb, lmax_w, lmin=lmin, lmax_j=lmax_j)
-    cov_wav = noise_utils.estimate_cov_wav(grown_alm, ainfo, w_ell, [0, 2], diag=True, 
+    cov_wav = noise_utils.estimate_cov_wav(alm_obs, ainfo, w_ell, [0, 2], diag=True, 
                                 features=features, minfo_features=minfo_features)
     sqrt_cov_wav = mat_utils.wavmatpow(cov_wav, 0.5, return_diag=True, axes=[0,1])
 
@@ -210,7 +214,7 @@ def grow_mask(mask, lmax, radius=np.radians(0.5), fwhm=np.radians(0.5)):
     mask_out = mask_out.astype(np.float32)
 
     ainfo = sharp.alm_info(lmax)
-    alm = np.empty((mask.shape[0], ainfo.nelem),
+    alm = np.zeros((mask.shape[0], ainfo.nelem),
                    dtype=type_utils.to_complex(mask_out.dtype))
 
     alm = curvedsky.map2alm(mask_out, alm, ainfo)

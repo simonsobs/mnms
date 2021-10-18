@@ -42,7 +42,8 @@ class NoiseModel(ABC):
             to False can expedite access to helper methods of this class without waiting
             for data to load.
         mask : enmap.ndmap, optional
-            Data mask, by default None.
+            Mask denoting data that will be used to determine the harmonic filter used
+            to whiten the data before estimating its variance, by default None.
             If None and preload, will load a mask according to the `mask_version` and
             `mask_name` kwargs.
         ivar : array-like, optional
@@ -106,12 +107,15 @@ class NoiseModel(ABC):
             self._mask = self._get_mask()
         else:
             self._mask = None
+
         if ivar is not None:
             self._ivar = ivar
         elif preload:
             self._ivar = self._get_ivar()
         else:
             self._ivar = None
+            
+        self._mask_observed = utils.get_bool_mask_from_ivar(self._ivar)
 
         # Possibly store input data
         self._imap = imap
@@ -169,6 +173,7 @@ class NoiseModel(ABC):
         ivars : (nmaps, nsplits, npol, ny, nx) enmap
             Inverse-variance maps, possibly downgraded.
         """
+
         # first check for mask compatibility and get map geometry
         shape, wcs = self._check_geometry()
 
@@ -187,6 +192,7 @@ class NoiseModel(ABC):
                 # we want to do this split-by-split in case we can save
                 # memory by downgrading one split at a time
                 for j in range(self._num_splits):
+
                     ivar = s_utils.read_map(self._data_model, qid, j, ivar=True)
                     ivar = enmap.extract(ivar, shape, wcs)
                     
@@ -311,15 +317,17 @@ class NoiseModel(ABC):
                         ivar_up /= self._downgrade ** 2
                         if i == 0:
                             mask_bool = utils.get_mask_bool(
-                                enmap.upgrade(self._mask, self._downgrade))
+                                enmap.upgrade(self._mask_observed, self._downgrade))
+
                     else:
                         ivar_up = self._ivar[i]
                         if i == 0:
-                            mask_bool = utils.get_mask_bool(self._mask)
+                            mask_bool = self._mask_observed
 
                 # we want to do this split-by-split in case we can save
                 # memory by downgrading one split at a time
                 for j in range(self._num_splits):
+
                     imap = s_utils.read_map(self._data_model, qid, j, ivar=False)
                     imap = enmap.extract(imap, shape, wcs)
 
@@ -543,6 +551,7 @@ class NoiseModel(ABC):
             (num_arrays, num_splits, num_pol, ny, nx), even if some of these
             axes have dimension 1. As implemented, num_splits is always 1. 
         """
+
         assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
 
         if check_on_disk:
@@ -556,8 +565,9 @@ class NoiseModel(ABC):
         seed = self._get_seed(split_num, sim_num)
 
         with bench.show(f'Generating noise sim for split {split_num}, map {sim_num}'):
+
             sim = self._get_sim(split_num, seed, verbose=verbose)
-            sim *= self._mask
+            sim *= self._mask_observed 
             if alm:
                 sim = utils.map2alm(sim, lmax=self._lmax)
 
@@ -624,8 +634,10 @@ class TiledNoiseModel(NoiseModel):
             DataModel instance to help load raw products, by default None.
             If None, will load the `default_data_model` from the `mnms` config.
         mask : enmap.ndmap, optional
-            Data mask, by default None.
-            If None, will load a mask according to the `mask_version` and `mask_name` kwargs.
+            Mask denoting data that will be used to determine the harmonic filter used
+            to whiten the data before estimating its variance, by default None.
+            If None and preload, will load a mask according to the `mask_version` and
+            `mask_name` kwargs.
         ivar : array-like, optional
             Data inverse-variance maps, by default None.
             If None, will be loaded via DataModel according to `downgrade` and `calibrated` kwargs.
@@ -721,9 +733,9 @@ class TiledNoiseModel(NoiseModel):
     def _get_model(self, split_num, dmap, verbose=False):
         """Return a dictionary of noise model variables for this NoiseModel subclass, for split split_num and from difference maps dmap"""
         sqrt_cov_mat, sqrt_cov_ell = tiled_noise.get_tiled_noise_covsqrt(
-            dmap, split_num, mask=self._mask, width_deg=self._width_deg,
-            height_deg=self._height_deg, delta_ell_smooth=self._delta_ell_smooth,
-            lmax=self._lmax, nthread=0, verbose=verbose
+            dmap, split_num, mask_observed=self._mask_observed, mask_est=self._mask, 
+            width_deg=self._width_deg, height_deg=self._height_deg,
+            delta_ell_smooth=self._delta_ell_smooth, lmax=self._lmax, nthread=0, verbose=verbose
         )
         return {
             'sqrt_cov_mat': sqrt_cov_mat,
@@ -776,8 +788,10 @@ class WaveletNoiseModel(NoiseModel):
             DataModel instance to help load raw products, by default None.
             If None, will load the `default_data_model` from the `mnms` config.
         mask : enmap.ndmap, optional
-            Data mask, by default None.
-            If None, will load a mask according to the `mask_version` and `mask_name` kwargs.
+            Mask denoting data that will be used to determine the harmonic filter used
+            to whiten the data before estimating its variance, by default None.
+            If None and preload, will load a mask according to the `mask_version` and
+            `mask_name` kwargs.
         ivar : array-like, optional
             Data inverse-variance maps, by default None.
             If None, will be loaded via DataModel according to `downgrade` and `calibrated` kwargs.
@@ -852,8 +866,9 @@ class WaveletNoiseModel(NoiseModel):
         """Get a noise model filename for split split_num; return as <str>"""
         return simio.get_wav_model_fn(
             self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, notes=self._notes,
-            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
-            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
+            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask,
+            mask_name=self._mask_name, calibrated=self._calibrated, downgrade=self._downgrade,
+            union_sources=self._union_sources, **self._kwargs
         )
 
     def _read_model(self, fn):
@@ -872,10 +887,16 @@ class WaveletNoiseModel(NoiseModel):
         return utils.get_noise_map(imap, self._ivar)
 
     def _get_model(self, split_num, dmap, verbose=False):
-        """Return a dictionary of noise model variables for this NoiseModel subclass, for split split_num and from difference maps dmap"""
+        """
+        Return a dictionary of noise model variables for this NoiseModel subclass,
+        for split split_num and from difference maps dmap
+        """
+
         sqrt_cov_mat, sqrt_cov_ell, w_ell = wav_noise.estimate_sqrt_cov_wav_from_enmap(
-            dmap[:, split_num], self._mask, self._lmax, lamb=self._lamb, smooth_loc=self._smooth_loc
+            dmap[:, split_num], self._mask_observed, self._lmax, self._mask, lamb=self._lamb,
+            smooth_loc=self._smooth_loc
         )
+
         return {
             'sqrt_cov_mat': sqrt_cov_mat,
             'sqrt_cov_ell': sqrt_cov_ell,
@@ -892,9 +913,10 @@ class WaveletNoiseModel(NoiseModel):
     def _get_sim_fn(self, split_num, sim_num, alm=False):
         """Get a sim filename for split split_num, sim sim_num; return as <str>"""
         return simio.get_wav_sim_fn(
-            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, sim_num, alm=alm, notes=self._notes,
-            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
-            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
+            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, sim_num, alm=alm,
+            notes=self._notes, data_model=self._data_model, mask_version=self._mask_version,
+            bin_apod=self._use_default_mask, mask_name=self._mask_name, calibrated=self._calibrated,
+            downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
         )
 
     def _get_sim(self, split_num, seed, verbose=False):

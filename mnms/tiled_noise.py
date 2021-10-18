@@ -169,8 +169,8 @@ def get_iso_curvedsky_noise_sim(covar, ivar=None, flat_triu_axis=0, oshape=None,
 
     return omap
 
-def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4., height_deg=4., delta_ell_smooth=400, lmax=None, 
-                            rfft=True, nthread=0, verbose=False):
+def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask_observed=None, mask_est=None, width_deg=4.,
+                            height_deg=4., delta_ell_smooth=400, lmax=None, rfft=True, nthread=0, verbose=False):
     """Generate a tiled noise model 'sqrt-covariance' matrix that captures spatially-varying
     noise correlation directions across the sky, as well as map-depth anistropies using
     the mapmaker inverse-variance maps.
@@ -183,8 +183,10 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
         The 0-based index of the split to model.
     ivar : array-like, optional
         Data inverse-variance maps, by default None.
-    mask : array-like, optional
+    mask_observed : array-like, optional
         Data mask, by default None.
+    mask_est : array-like, optional
+        Mask used to estimate filter used to whiten the data, by default None.
     width_deg : scalar, optional
         The characteristic tile width in degrees, by default 4.
     height_deg : scalar, optional
@@ -232,9 +234,11 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
 
     # filter map prior to tiling, get the c_ells.
     # we need to filter per-split, since >2-split arrays have widely-varying noise power spectra.
-    if mask is None:
-        mask = np.array([1])
-    mask = mask.astype(imap.dtype, copy=False)
+    if mask_observed is None:
+        mask_observed = np.array([1])
+    mask_observed = mask_observed.astype(imap.dtype, copy=False)
+    if mask_est is None:
+        mask_est = mask_observed
     if lmax is None:
         lmax = utils.lmax_from_wcs(imap.wcs)
     else:
@@ -248,17 +252,19 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask=None, width_deg=4.,
     # we want to keep split axis at -4, but slice out our split to reduce cost.
     # imap now has shape (num_arrays, 1, num_pol, ny, nx).
     # imap is henceforth masked, as part of the filtering.
+
     imap, sqrt_cov_ell = utils.ell_flatten(
-        imap[..., split_num:split_num+1, :, :, :], mask=mask, return_sqrt_cov=True,
-        per_split=True, mode='curvedsky', lmax=lmax
+        imap[..., split_num:split_num+1, :, :, :], mask_observed=mask_observed, mask_est=mask_est,
+        return_sqrt_cov=True, per_split=True, mode='curvedsky', lmax=lmax
         )
 
     # get the tiled data, apod window
     imap = tiled_ndmap(imap, width_deg=width_deg, height_deg=height_deg)
-    sq_f_sky = imap.set_unmasked_tiles(mask, return_sq_f_sky=True)
+    sq_f_sky = imap.set_unmasked_tiles(mask_observed, return_sq_f_sky=True)
     imap = imap.to_tiled()
     apod = imap.apod()
-    mask=None
+    mask_observed=None
+    mask_est=None
 
     # get component shapes
     num_arrays, num_splits, num_pol = imap.shape[1:4] # shape is (num_tiles, num_arrays, 1, num_pol, ...)
