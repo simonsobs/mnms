@@ -855,13 +855,6 @@ class WaveletNoiseModel(NoiseModel):
         self._lamb = lamb
         self._smooth_loc = smooth_loc
 
-        # save correction factors for later
-        with bench.show('Getting correction factors'):
-            corr_fact = utils.get_corr_fact(self._ivar)
-            corr_fact = enmap.extract(
-                corr_fact, self._mask.shape, self._mask.wcs)
-            self._corr_fact = corr_fact
-
     def _get_model_fn(self, split_num):
         """Get a noise model filename for split split_num; return as <str>"""
         return simio.get_wav_model_fn(
@@ -883,15 +876,21 @@ class WaveletNoiseModel(NoiseModel):
 
     def _get_dmap(self, imap):
         """Return the required input difference map for a NoiseModel subclass, from split data imap"""
-        # model needs ordinary noise maps as input
-        return utils.get_noise_map(imap, self._ivar)
+
+        dmap = utils.get_noise_map(imap, self._ivar)
+
+        # Correction factor turns split difference d_i to split noise n_i 
+        # (which is the quantity we want to simulate in the end).
+        dmap *= utils.get_corr_fact(self._ivar)        
+
+        return dmap
 
     def _get_model(self, split_num, dmap, verbose=False):
         """
         Return a dictionary of noise model variables for this NoiseModel subclass,
         for split split_num and from difference maps dmap
         """
-
+        
         sqrt_cov_mat, sqrt_cov_ell, w_ell = wav_noise.estimate_sqrt_cov_wav_from_enmap(
             dmap[:, split_num], self._mask_observed, self._lmax, self._mask, lamb=self._lamb,
             smooth_loc=self._smooth_loc
@@ -931,10 +930,6 @@ class WaveletNoiseModel(NoiseModel):
             dtype=np.float32, seed=seed
         )
 
-        # need to correct for fact that sim is a sim of a difference
-        # map, but we want a sim of the noise in a split
-        sim *= self._corr_fact[:, split_num]
-        
         # want shape (num_arrays, num_splits=1, num_pol, ny, nx)
         assert sim.ndim == 4, 'Map must have shape (num_arrays, num_pol, ny, nx)'
         sim = sim.reshape(sim.shape[0], 1, *sim.shape[1:])
