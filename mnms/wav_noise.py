@@ -145,7 +145,7 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_observed, lmax, mask_est, lamb=1
     else:
         features, minfo_features = None, None
 
-    # need separate alms for the smaller mask and the total observed mask.
+    # Need separate alms for the smaller mask and the total observed mask.
     ainfo = sharp.alm_info(lmax)
     alm = utils.map2alm(imap * mask_est, ainfo=ainfo)
 
@@ -175,11 +175,16 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_observed, lmax, mask_est, lamb=1
     lmin = 10
     lmax_w = lmax
     # If lmax <= 5400, lmax_j will usually be lmax-100; else, capped at 5300
-    # so that white noise floor described by single (omega) wavelet
+    # so that white noise floor is described by a single (omega) wavelet
     lmax_j = min(max(lmax - 100, lmin), 5300)
     w_ell, _ = wlm_utils.get_sd_kernels(lamb, lmax_w, lmin=lmin, lmax_j=lmax_j)
+
+    wav_template = wavtrans.Wav.from_enmap(imap.shape, imap.wcs, w_ell, 1, 
+                                           preshape=imap.shape[:-2],
+                                           dtype=type_utils.to_real(alm.dtype))
     cov_wav = noise_utils.estimate_cov_wav(alm_obs, ainfo, w_ell, [0, 2], diag=True, 
-                                features=features, minfo_features=minfo_features)
+                                           features=features, minfo_features=minfo_features,
+                                           wav_template=wav_template)
     sqrt_cov_wav = mat_utils.wavmatpow(cov_wav, 0.5, return_diag=True, axes=[0,1])
 
     return sqrt_cov_wav, sqrt_cov_ell, w_ell
