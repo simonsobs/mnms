@@ -517,7 +517,8 @@ class NoiseModel(ABC):
         """Write sqrt_cov_mat, sqrt_cov_ell, and possibly more noise model variables to filename fn"""
         pass
 
-    def get_sim(self, split_num, sim_num, alm=False, check_on_disk=True, write=False, keep_model=True, verbose=False):
+    def get_sim(self, split_num, sim_num, alm=False, check_on_disk=True, write=False,
+                keep_model=True, do_mask_observed=True, verbose=False):
         """Generate a sim from this NoiseModel.
 
         Parameters
@@ -541,6 +542,9 @@ class NoiseModel(ABC):
             Store the loaded model for this split in instance attributes, by default True.
             This helps spends memory to avoid spending time loading the model from disk
             for each call to this method.
+        do_mask_observed : bool, optional
+            Apply the mask determined by the observed patch to the sim. If not applied, the sim
+            will bleed into unobserved pixels, but is band-limited to provided lmax.
         verbose : bool, optional
             Print possibly helpful messages, by default False.
 
@@ -555,7 +559,7 @@ class NoiseModel(ABC):
         assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
 
         if check_on_disk:
-            res = self._check_sim_on_disk(split_num, sim_num, alm=alm)
+            res = self._check_sim_on_disk(split_num, sim_num, alm=alm, mask_obs=do_mask_observed)
             if res is not None:
                 return res
 
@@ -567,7 +571,8 @@ class NoiseModel(ABC):
         with bench.show(f'Generating noise sim for split {split_num}, map {sim_num}'):
 
             sim = self._get_sim(split_num, seed, verbose=verbose)
-            sim *= self._mask_observed 
+            if do_mask_observed:
+                sim *= self._mask_observed 
             if alm:
                 sim = utils.map2alm(sim, lmax=self._lmax)
 
@@ -575,16 +580,16 @@ class NoiseModel(ABC):
             self._delete_model(split_num)
         
         if write:
-            fn = self._get_sim_fn(split_num, sim_num, alm=alm)
+            fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_observed)
             if alm:
                 utils.write_alm(fn, sim, dtype=self._data_model.dtype)
             else:
                 enmap.write_map(fn, sim)
         return sim
 
-    def _check_sim_on_disk(self, split_num, sim_num, alm=False):
+    def _check_sim_on_disk(self, split_num, sim_num, alm=False, mask_obs=True):
         """Check if sim with split_num, sim_num exists on-disk; if so return it, else return None."""
-        fn = self._get_sim_fn(split_num, sim_num, alm=alm)
+        fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=mask_obs)
         try:
             if alm:
                 # we know the preshape is (num_arrays, num_splits=1)
@@ -596,8 +601,8 @@ class NoiseModel(ABC):
             return None
 
     @abstractmethod
-    def _get_sim_fn(self, split_num, sim_num, alm=False):
-        """Get a sim filename for split split_num, sim sim_num, and bool alm; return as <str>"""
+    def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
+        """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
         pass
 
     def _get_seed(self, split_num, sim_num):
@@ -748,12 +753,12 @@ class TiledNoiseModel(NoiseModel):
             fn, sqrt_cov_mat, extra_hdu={'SQRT_COV_ELL': sqrt_cov_ell}
         )
 
-    def _get_sim_fn(self, split_num, sim_num, alm=False):
+    def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num; return as <str>"""
         return simio.get_tiled_sim_fn(
             self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, split_num, sim_num, alm=alm, notes=self._notes,
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
-            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
+            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, mask_obs=mask_obs, **self._kwargs
         )
 
     def _get_sim(self, split_num, seed, verbose=False):
@@ -909,13 +914,13 @@ class WaveletNoiseModel(NoiseModel):
             extra={'sqrt_cov_ell': sqrt_cov_ell, 'w_ell': w_ell}
         )
 
-    def _get_sim_fn(self, split_num, sim_num, alm=False):
+    def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num; return as <str>"""
         return simio.get_wav_sim_fn(
             self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, sim_num, alm=alm,
             notes=self._notes, data_model=self._data_model, mask_version=self._mask_version,
             bin_apod=self._use_default_mask, mask_name=self._mask_name, calibrated=self._calibrated,
-            downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
+            downgrade=self._downgrade, union_sources=self._union_sources, mask_obs=mask_obs, **self._kwargs
         )
 
     def _get_sim(self, split_num, seed, verbose=False):

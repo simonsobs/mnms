@@ -26,7 +26,7 @@ def get_sim_mask_fn(qid, data_model, use_default_mask=True, mask_version=None, m
             mask_name += '.fits'
         return f'{fbase}{mask_version}/{mask_name}'
 
-def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=True, mask_name=None, \
+def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=True, mask_name=None,
                      galcut=None, apod_deg=None, calibrated=None, downgrade=None, union_sources=None):
     '''
     '''
@@ -79,7 +79,8 @@ def get_tiled_model_fn(qid, split_num, width_deg, height_deg, delta_ell_smooth, 
     fn += f'w{width_deg}_h{height_deg}_lsmooth{delta_ell_smooth}_lmax{lmax}{notes}_set{split_num}.fits'
     return fn
 
-def get_tiled_sim_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, split_num, sim_num, alm=False, notes=None, **kwargs):
+def get_tiled_sim_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, split_num, sim_num, alm=False, 
+                     mask_obs=True, notes=None, **kwargs):
     # cast to floating point for consistency
     width_deg = float(width_deg)
     height_deg = float(height_deg)
@@ -88,13 +89,18 @@ def get_tiled_sim_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, split_n
     fn = config['maps_path']
     fn += _get_sim_fn_root(qid, **kwargs)
 
+    if mask_obs:
+        mask_obs_str = ''
+    else:
+        mask_obs_str = 'unmasked_'
+
     # allow for possibility of no notes
     if notes is None:
         notes = ''
     else:
         notes = f'_{notes}'
 
-    fn += f'w{width_deg}_h{height_deg}_lsmooth{delta_ell_smooth}_lmax{lmax}{notes}_set{split_num}_'
+    fn += f'w{width_deg}_h{height_deg}_lsmooth{delta_ell_smooth}_{mask_obs_str}lmax{lmax}{notes}_set{split_num}_'
 
     # prepare map num tags
     mapalm = 'alm' if alm else 'map'
@@ -146,7 +152,8 @@ def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, notes=None, **kwarg
     fn += f'lamb{lamb}_lmax{lmax}{smooth_loc}{notes}_set{split_num}.hdf5'
     return fn
     
-def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, sim_num, alm=False, notes=None, **kwargs):
+def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, sim_num, alm=False, mask_obs=True, 
+                   notes=None, **kwargs):
     """
     Determine filename for simulated noise map.
 
@@ -167,6 +174,8 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, sim_num, alm=False, n
         Simulation number.
     alm : bool
         Whether filename ends in "map" (False) or "alm" (True)
+    mask_obs : bool
+        Is the sim masked by the mask_observed.
 
     Returns
     -------
@@ -180,6 +189,11 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, sim_num, alm=False, n
     fn = config['maps_path']
     fn += _get_sim_fn_root(qid, **kwargs)
 
+    if mask_obs:
+        mask_obs_str = ''
+    else:
+        mask_obs_str = 'unmasked_'
+
     # allow for possibility of no smooth_loc
     if not smooth_loc:
         smooth_loc = ''
@@ -192,7 +206,7 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, sim_num, alm=False, n
     else:
         notes = f'_{notes}'
     
-    fn += f'lamb{lamb}_lmax{lmax}{smooth_loc}{notes}_set{split_num}_'
+    fn += f'lamb{lamb}_{mask_obs_str}lmax{lmax}{smooth_loc}{notes}_set{split_num}_'
 
     # prepare map num tags
     mapalm = 'alm' if alm else 'map'
