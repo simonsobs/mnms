@@ -38,13 +38,12 @@ def rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax, w_ell,
 
     preshape = sqrt_cov_wav.preshape
     ncomp = preshape[0]
-    alm_draw = np.zeros(preshape[1:3] + (ainfo.nelem,), dtype=dtype)
+    alm_draw = np.zeros(preshape[:2] + (ainfo.nelem,), dtype=dtype)
 
     sqrt_cov_wav_op = operators.WavMatVecWav(sqrt_cov_wav, power=1, inplace=True,
-                                             op='ijkm, jkm -> ikm')
-
+                                             op='aibjp, bjp -> aip')
     wav_uni = noise_utils.unit_var_wav(
-        sqrt_cov_wav.get_minfos_diag(), preshape[1:3], sqrt_cov_wav.dtype, seed=seed)
+        sqrt_cov_wav.get_minfos_diag(), preshape[:2], sqrt_cov_wav.dtype, seed=seed)
 
     rand_wav = sqrt_cov_wav_op(wav_uni)
     wavtrans.wav2alm(rand_wav, alm_draw, ainfo, [0, 2], w_ell)
@@ -181,11 +180,11 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_observed, lmax, mask_est, lamb=1
 
     wav_template = wavtrans.Wav.from_enmap(imap.shape, imap.wcs, w_ell, 1, 
                                            preshape=imap.shape[:-2],
-                                           dtype=type_utils.to_real(alm.dtype))
-    cov_wav = noise_utils.estimate_cov_wav(alm_obs, ainfo, w_ell, [0, 2], diag=True, 
+                                           dtype=type_utils.to_real(alm_obs.dtype))
+    cov_wav = noise_utils.estimate_cov_wav(alm_obs, ainfo, w_ell, [0, 2], diag=False,
                                            features=features, minfo_features=minfo_features,
                                            wav_template=wav_template)
-    sqrt_cov_wav = mat_utils.wavmatpow(cov_wav, 0.5, return_diag=True, axes=[0,1])
+    sqrt_cov_wav = mat_utils.wavmatpow(cov_wav, 0.5, return_diag=True, axes=[[0,1], [2,3]])
 
     return sqrt_cov_wav, sqrt_cov_ell, w_ell
 

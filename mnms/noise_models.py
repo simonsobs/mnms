@@ -905,7 +905,7 @@ class WaveletNoiseModel(NoiseModel):
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, w_ell=None):
         """Write sqrt_cov_mat, sqrt_cov_ell, and possibly more noise model variables to filename fn"""
         wavtrans.write_wav(
-            fn, sqrt_cov_mat, symm_axes=[0, 1],
+            fn, sqrt_cov_mat, symm_axes=[[0, 1], [2, 3]],
             extra={'sqrt_cov_ell': sqrt_cov_ell, 'w_ell': w_ell}
         )
 
