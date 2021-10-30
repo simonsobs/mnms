@@ -1187,7 +1187,7 @@ def write_alm(fn, alm, dtype=None):
         fn = str(fn) + '.fits'
 
     hp.write_alm(
-        fn, alm.reshape(-1, alm.shape[-1]), out_dtype=dtype
+        fn, alm.reshape(-1, alm.shape[-1]), out_dtype=dtype, overwrite=True
         )
 
 def read_alm(fn, preshape=None):

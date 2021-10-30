@@ -570,11 +570,11 @@ class NoiseModel(ABC):
 
         with bench.show(f'Generating noise sim for split {split_num}, map {sim_num}'):
 
-            sim = self._get_sim(split_num, seed, verbose=verbose)
-            if do_mask_observed:
-                sim *= self._mask_observed 
+            mask = self._mask_observed if do_mask_observed else None
             if alm:
-                sim = utils.map2alm(sim, lmax=self._lmax)
+                sim = self._get_sim_alm(split_num, seed, verbose=verbose, mask=mask)
+            else:
+                sim = self._get_sim(split_num, seed, verbose=verbose, mask=mask)
 
         if not keep_model:
             self._delete_model(split_num)
@@ -612,9 +612,14 @@ class NoiseModel(ABC):
             )
 
     @abstractmethod
-    def _get_sim(self, split_num, seed, verbose=False):
-        """Return an unmasked enmap.ndmap sim of split split_num, with seed <sequence of ints>"""
+    def _get_sim(self, split_num, seed, mask=None, verbose=False):
+        """Return a masked enmap.ndmap sim of split split_num, with seed <sequence of ints>"""
         return enmap.ndmap
+
+    @abstractmethod
+    def _get_sim_alm(self, split_num, seed, mask=None, verbose=False):
+        """Return a masked alm sim of split split_num, with seed <sequence of ints>"""
+        pass
 
     @property
     def num_splits(self):
@@ -761,8 +766,8 @@ class TiledNoiseModel(NoiseModel):
             calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, mask_obs=mask_obs, **self._kwargs
         )
 
-    def _get_sim(self, split_num, seed, verbose=False):
-        """Return an unmasked enmap.ndmap sim of split split_num, with seed <sequence of ints>"""
+    def _get_sim(self, split_num, seed, mask=None, verbose=False):
+        """Return a masked enmap.ndmap sim of split split_num, with seed <sequence of ints>"""
         # get noise model variables 
         sqrt_cov_mat = self._nm_dict[split_num]['sqrt_cov_mat']
         sqrt_cov_ell = self._nm_dict[split_num]['sqrt_cov_ell']
@@ -772,8 +777,15 @@ class TiledNoiseModel(NoiseModel):
             sqrt_cov_ell=sqrt_cov_ell, num_arrays=self._num_arrays,
             num_splits=self._num_splits, nthread=0, seed=seed, verbose=verbose
         )
+        if mask is not None:
+            sim *= mask
         return sim
 
+    def _get_sim_alm(self, split_num, seed, mask=None, verbose=False):    
+        """Return a masked alm sim of split split_num, with seed <sequence of ints>"""
+
+        sim = self._get_sim(self, split_num, seed, mask=mask, verbose=verbose)
+        return utils.map2alm(sim, lmax=self._lmax)
 
 @register()
 class WaveletNoiseModel(NoiseModel):
@@ -923,24 +935,41 @@ class WaveletNoiseModel(NoiseModel):
             downgrade=self._downgrade, union_sources=self._union_sources, mask_obs=mask_obs, **self._kwargs
         )
 
-    def _get_sim(self, split_num, seed, verbose=False):
-        """Return an unmasked enmap.ndmap sim of split split_num, with seed <sequence of ints>"""
-        # get noise model variables 
+    def _get_sim(self, split_num, seed, mask=None, verbose=False):
+        """Return a masked enmap.ndmap sim of split split_num, with seed <sequence of ints>"""
+
+        alm, ainfo = self._get_sim_alm(split_num, seed, mask=None, return_ainfo=True, verbose=verbose)
+        sim = utils.alm2map(alm, shape=self._mask.shape, wcs=self._mask.wcs,
+                            dtype=np.float32, ainfo=ainfo)
+        if mask is not None:
+            sim *= mask
+        return sim
+
+    def _get_sim_alm(self, split_num, seed, mask=None, return_ainfo=False, verbose=False):
+        """Return a masked alm sim of split split_num, with seed <sequence of ints>"""
+
+        # Get noise model variables. 
         sqrt_cov_mat = self._nm_dict[split_num]['sqrt_cov_mat']
         sqrt_cov_ell = self._nm_dict[split_num]['sqrt_cov_ell']
         w_ell = self._nm_dict[split_num]['w_ell']
 
-        sim = wav_noise.rand_enmap_from_sqrt_cov_wav(
-            sqrt_cov_mat, sqrt_cov_ell, self._mask, self._lmax, w_ell,
-            dtype=np.float32, seed=seed
-        )
+        alm, ainfo = wav_noise.rand_alm_from_sqrt_cov_wav(
+            sqrt_cov_mat, sqrt_cov_ell, self._lmax,
+            w_ell, dtype=np.complex64, seed=seed)
 
-        # want shape (num_arrays, num_splits=1, num_pol, ny, nx)
-        assert sim.ndim == 4, 'Map must have shape (num_arrays, num_pol, ny, nx)'
-        sim = sim.reshape(sim.shape[0], 1, *sim.shape[1:])
+        # We always want shape (num_arrays, num_splits=1, num_pol, nelem).
+        assert alm.ndim == 3, 'Alm must have shape (num_arrays, num_pol, nelem)'
+        alm = alm.reshape(alm.shape[0], 1, *alm.shape[1:])
 
-        return sim
-
+        if mask is not None:
+            sim = utils.alm2map(alm, shape=self._mask.shape, wcs=self._mask.wcs,
+                                dtype=np.float32, ainfo=ainfo)
+            sim *= mask
+            utils.map2alm(sim, alm=alm, ainfo=ainfo)
+        if return_ainfo:
+            return alm, ainfo
+        else:
+            return alm            
 
 class WavFiltTile(NoiseModel):
 
