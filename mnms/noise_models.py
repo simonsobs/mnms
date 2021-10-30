@@ -492,12 +492,6 @@ class NoiseModel(ABC):
         self._nm_dict[split_num] = nm_dict
 
     # for memory management
-    def _delete_model(self, split_num):
-        """Delete a dictionary entry of noise model variables from instance attributes under key split_num"""
-        print(f'Removing model for split {split_num} from memory')
-        del self._nm_dict[split_num]
-
-    # for memory management
     def _delete_data(self):
         """Remove data stored in memory under instance attribute self._imap"""
         self._imap = None
@@ -577,7 +571,7 @@ class NoiseModel(ABC):
                 sim = self._get_sim(split_num, seed, verbose=verbose, mask=mask)
 
         if not keep_model:
-            self._delete_model(split_num)
+            self.delete_model(split_num)
         
         if write:
             fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_observed)
@@ -620,6 +614,10 @@ class NoiseModel(ABC):
     def _get_sim_alm(self, split_num, seed, mask=None, verbose=False):
         """Return a masked alm sim of split split_num, with seed <sequence of ints>"""
         pass
+
+    def delete_model(self, split_num):
+        """Delete a dictionary entry of noise model variables from instance attributes under key split_num"""
+        del self._nm_dict[split_num]
 
     @property
     def num_splits(self):
