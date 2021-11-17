@@ -528,13 +528,13 @@ class NoiseModel(ABC):
             Generate simulated alms instead of a simulated map, by default False
         check_on_disk : bool, optional
             If True, first check if the exact sim (including the noise model `notes`), 
-            exists and disk, and if it does, load and return it. If it does not,
+            exists on disk, and if it does, load and return it. If it does not,
             generate the sim on-the-fly instead, by default True.
         write : bool, optional
             Save the generated sim to disk, by default False.
         keep_model : bool, optional
             Store the loaded model for this split in instance attributes, by default True.
-            This helps spends memory to avoid spending time loading the model from disk
+            This spends memory to avoid spending time loading the model from disk
             for each call to this method.
         do_mask_observed : bool, optional
             Apply the mask determined by the observed patch to the sim. If not applied, the sim
@@ -627,7 +627,7 @@ class NoiseModel(ABC):
 @register()
 class TiledNoiseModel(NoiseModel):
 
-    def __init__(self, *qids, data_model=None, mask=None, ivar=None, imap=None, calibrated=True,
+    def __init__(self, *qids, data_model=None, preload=True, mask=None, ivar=None, imap=None, calibrated=True,
                 downgrade=1, lmax=None, mask_version=None, mask_name=None, union_sources=None,
                 notes=None, width_deg=4., height_deg=4., delta_ell_smooth=400, **kwargs):
         """A TiledNoiseModel object supports drawing simulations which capture spatially-varying
@@ -641,6 +641,10 @@ class TiledNoiseModel(NoiseModel):
         data_model : soapack.DataModel, optional
             DataModel instance to help load raw products, by default None.
             If None, will load the `default_data_model` from the `mnms` config.
+        preload: bool, optional
+            If mask and/or ivar are respectively None, load them, by default True. Setting
+            to False can expedite access to helper methods of this class without waiting
+            for data to load.
         mask : enmap.ndmap, optional
             Mask denoting data that will be used to determine the harmonic filter used
             to whiten the data before estimating its variance, by default None.
@@ -702,7 +706,7 @@ class TiledNoiseModel(NoiseModel):
         >>> (2, 1, 3, 5600, 21600)
         """
         super().__init__(
-            *qids, data_model=data_model, mask=mask, ivar=ivar, imap=imap,
+            *qids, data_model=data_model, preload=preload, mask=mask, ivar=ivar, imap=imap,
             calibrated=calibrated, downgrade=downgrade, lmax=lmax, mask_version=mask_version,
             mask_name=mask_name, notes=notes, union_sources=union_sources, **kwargs
         )
@@ -788,7 +792,7 @@ class TiledNoiseModel(NoiseModel):
 @register()
 class WaveletNoiseModel(NoiseModel):
 
-    def __init__(self, *qids, data_model=None, mask=None, ivar=None, imap=None, calibrated=True,
+    def __init__(self, *qids, data_model=None, preload=True, mask=None, ivar=None, imap=None, calibrated=True,
                 downgrade=1, lmax=None, mask_version=None, mask_name=None, union_sources=None,
                 notes=None, lamb=1.3, smooth_loc=False, **kwargs):
         """A WaveletNoiseModel object supports drawing simulations which capture scale-dependent, 
@@ -802,6 +806,10 @@ class WaveletNoiseModel(NoiseModel):
         data_model : soapack.DataModel, optional
             DataModel instance to help load raw products, by default None.
             If None, will load the `default_data_model` from the `mnms` config.
+        preload: bool, optional
+            If mask and/or ivar are respectively None, load them, by default True. Setting
+            to False can expedite access to helper methods of this class without waiting
+            for data to load.
         mask : enmap.ndmap, optional
             Mask denoting data that will be used to determine the harmonic filter used
             to whiten the data before estimating its variance, by default None.
@@ -861,7 +869,7 @@ class WaveletNoiseModel(NoiseModel):
         >>> (2, 1, 3, 5600, 21600)
         """
         super().__init__(
-            *qids, data_model=data_model, mask=mask, ivar=ivar, imap=imap,
+            *qids, data_model=data_model, preload=preload, mask=mask, ivar=ivar, imap=imap,
             calibrated=calibrated, downgrade=downgrade, lmax=lmax, mask_version=mask_version,
             mask_name=mask_name, notes=notes, union_sources=union_sources, **kwargs
         )
