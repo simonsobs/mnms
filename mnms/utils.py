@@ -434,6 +434,8 @@ def radial_bin(smap, rmap, bins, weights=None):
     r=0 mode is never included even if bins[0]=0, since this function uses
     np.bincount(..., right=True)
     """
+    ndim_in = smap.ndim
+
     # make sure there is at least one prepended dim to smap
     smap = atleast_nd(smap, 3)
     assert rmap.ndim == 2, 'rmap must have two dimensions'
@@ -474,7 +476,10 @@ def radial_bin(smap, rmap, bins, weights=None):
     #     omap[i] = np.nan_to_num(omap[i] / bin_count)
     
     # same shape as spectra, with full 2D power replaced with binned spectra
-    return omap.reshape(*preshape, -1)
+    omap = omap.reshape(*preshape, -1)
+    if ndim_in == 2:
+        omap = omap[0]
+    return omap
 
 def interp1d_bins(bins, y, return_vals=False, **interp1d_kwargs):
     # prepare x values
