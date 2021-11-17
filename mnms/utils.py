@@ -723,11 +723,47 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, **kwar
         omap = enmap.empty((*alm.shape[:-1], *shape[-2:]), wcs=wcs, dtype=dtype)
     for preidx in np.ndindex(alm.shape[:-2]):
         # map2alm, alm2map doesn't work well for other dims beyond pol component
+        print(omap.shape)
         assert omap[preidx].ndim in [2, 3]
         omap[preidx] = curvedsky.alm2map(
             alm[preidx], omap[preidx], ainfo=ainfo, **kwargs
             )
     return omap
+
+def downgrade_geometry(imap, dg):
+    # get the shape, wcs corresponding to the sliced fullsky geometry, with resolution
+    # downgraded vs. imap resolution by factor dg, containg sky footprint of imap
+    res = np.deg2rad(np.abs(imap.wcs.wcs.cdelt)) * dg
+    full_dshape, full_dwcs = enmap.fullsky_geometry(res=res)
+    full_dpixbox = enmap.skybox2pixbox(full_dshape, full_dwcs, imap.corners(corner=False))
+    slice_dshape, slice_dwcs = slice_geometry_by_pixbox(full_dshape, full_dwcs, full_dpixbox)
+    return slice_dshape, slice_dwcs
+
+def downgrade(imap, dg):
+    lmax = lmax_from_wcs(imap.wcs)
+    ainfo = sharp.alm_info(lmax)
+    alm = map2alm(imap, lmax=lmax)
+
+    # need to remove info above new bandlimit
+    lfilter = np.ones(lmax + 1)
+    lfilter[lmax//dg + 1:] = 0
+
+    # alm_c_utils.lmul cannot blindly broadcast filters and alms
+    lfilter = np.broadcast_to(lfilter, (*imap.shape[:-2], lfilter.shape[-1]))
+
+    for preidx in np.ndindex(imap.shape[:-2]):
+        assert alm[preidx].ndim == 1
+        assert lfilter[preidx].ndim == 1
+        alm[preidx] = alm_c_utils.lmul(
+            alm[preidx], lfilter[preidx], ainfo
+            )
+
+    # distribute bandlimited harmonic info into downgraded pixels.
+    # make sure to use clenshaw-curtis compatible downgraded pixels!
+    oshape, owcs = downgrade_geometry(imap, dg)
+    oshape = (*imap.shape[:-2], *oshape)
+    omap = enmap.empty(oshape, owcs, dtype=imap.dtype)
+    return alm2map(alm, omap, ainfo=ainfo)
 
 # further extended here for ffts
 def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0):
