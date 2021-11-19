@@ -10,6 +10,11 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import time
 
+def clock(msg, t0):
+    t = time.time()
+    print(f'{msg}: {t-t0}')
+    return t
+
 def eshow(x, *args, title=None, write=False, fname='',**kwargs): 
     plots = enplot.plot(x, **kwargs)
     if write:
@@ -443,9 +448,10 @@ def get_KS_stats(data, sim, window=None, sample_size=50000, plot=True, save_path
 #     tiled_stats.loadedPower = True
 #     return tiled_stats
 
-def get_stats_by_tile2(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=2, height_deg=2, lmax=6000, mode='fft',
-                            normalize=True, weights=None, true_ratio=False, nthreads=0):
-    
+def get_stats_by_tile(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=2, height_deg=2,
+                        lmax=6000, mode='fft', diagonal=True, normalize=True, weights=None,
+                        nthreads=0):
+    t0 = time.time()
     # check that dmap, imap conforms with convention
     assert dmap.ndim in range(2, 6), 'dmap must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
     assert imap.ndim in range(2, 6), 'imap must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
@@ -463,23 +469,32 @@ def get_stats_by_tile2(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=
 
     dmap.set_unmasked_tiles(mask)
     imap.set_unmasked_tiles(mask)
-
+    t0 = clock('init time', t0)
+    
     dmap = dmap.to_tiled()
     imap = imap.to_tiled()
     apod = imap.apod()
     tiled_info = imap.tiled_info()
-    print('t')
+    t0 = clock('to tiled time', t0)
+
     # get component shapes
     num_arrays, num_splits, num_pol = imap.shape[1:4] # shape is (num_tiles, num_arrays, num_splits, num_pol, ...)
 
     # get all the 2D power spectra, averaged over splits
     dmap = enmap.fft(dmap*apod, normalize=normalize, nthread=nthreads)
-    dmap = np.einsum('...miayx,...nibyx->...manbyx', dmap, np.conj(dmap)).real / num_splits
     imap = enmap.fft(imap*apod, normalize=normalize, nthread=nthreads)
-    imap = np.einsum('...miayx,...nibyx->...manbyx', imap, np.conj(imap)).real / num_splits
+    t0 = clock('fft time', t0)
+    
+    if diagonal:
+        dmap = np.einsum('...miayx,...miayx->...mayx', dmap, np.conj(dmap)).real / num_splits
+        imap = np.einsum('...miayx,...miayx->...mayx', imap, np.conj(imap)).real / num_splits
+    else:
+        dmap = np.einsum('...miayx,...nibyx->...manbyx', dmap, np.conj(dmap)).real / num_splits
+        imap = np.einsum('...miayx,...nibyx->...manbyx', imap, np.conj(imap)).real / num_splits
 
     dmap = tiled_ndmap.tiled_ndmap(enmap.samewcs(dmap, mask), **tiled_info)
     imap = tiled_ndmap.tiled_ndmap(enmap.samewcs(imap, mask), **tiled_info)
+    t0 = clock('einsum time', t0)
 
     # prepare ell bin edges
     if ledges is None:
@@ -489,11 +504,11 @@ def get_stats_by_tile2(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=
     assert len(ledges.shape) == 1
     nbins = len(ledges)-1
 
-    cld = np.zeros((*dmap.shape[:-2], nbins), dtype=imap.dtype)
+    cld = np.zeros((*dmap.shape[:-2], nbins), dtype=dmap.dtype)
     cli = np.zeros((*imap.shape[:-2], nbins), dtype=imap.dtype)
 
     # cycle through the tiles   
-    for i, n in enumerate(tqdm(imap.unmasked_tiles)):
+    for i, n in enumerate(imap.unmasked_tiles):
 
         # get the 2d tile PS, shape is (num_arrays, num_splits, num_pol, ny, nx)
         # so trace over component -4
@@ -503,29 +518,35 @@ def get_stats_by_tile2(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=
         modlmap = enmap.modlmap(imap.shape[-2:], ewcs)
         cld[i] = utils.radial_bin(dmap[i], modlmap, ledges, weights=weights)
         cli[i] = utils.radial_bin(imap[i], modlmap, ledges, weights=weights)
-
-    cldiff = get_Cl_diffs(cld, cli, plot=False)
+    t0 = clock('bin time', t0)
+    if diagonal:
+        cldiff = np.ones_like(cld)
+        np.divide(cli, cld, out=cldiff, where=(cld != 0))
+        cldiff -= 1
+    else:
+        cldiff = get_Cl_diffs(cld, cli, plot=False)
+    t0 = clock('diff time', t0)
     return imap.sametiles(cldiff)
     
-def plot_stats_by_tile(powerMaps, stat='Cl', plot_type='map', window=None, f_sky=0.5, map1=0, map2=0, pol1=0, pol2=0, min=-1, max=1, 
-                            save_path=None, **kwargs):
-    if plot_type == 'map':
-        _plot_stats_map_by_tile2(powerMaps, stat=stat, mask=window, map1=map1, map2=map2, pol1=pol1, pol2=pol2, min=min, max=max, 
-                            save_path=save_path, **kwargs)
-    elif plot_type == 'hist':
-        _plot_stats_hist_by_tile2(powerMaps, stat=stat, mask=window, f_sky=f_sky, map1=map1, map2=map2, pol1=pol1, pol2=pol2, 
-                            save_path=save_path, **kwargs)
+# def plot_stats_by_tile(powerMaps, stat='Cl', plot_type='map', window=None, f_sky=0.5, map1=0, map2=0, pol1=0, pol2=0, min=-1, max=1, 
+#                             save_path=None, **kwargs):
+#     if plot_type == 'map':
+#         _plot_stats_map_by_tile2(powerMaps, stat=stat, mask=window, map1=map1, map2=map2, pol1=pol1, pol2=pol2, min=min, max=max, 
+#                             save_path=save_path, **kwargs)
+#     elif plot_type == 'hist':
+#         _plot_stats_hist_by_tile2(powerMaps, stat=stat, mask=window, f_sky=f_sky, map1=map1, map2=map2, pol1=pol1, pol2=pol2, 
+#                             save_path=save_path, **kwargs)
 
-def plot_stats_by_tile2(clmap,  plot_type='map', mask=None, f_sky=0.5, map1=0, map2=0, pol1=0, pol2=0, min=-1, max=1, 
+def plot_stats_by_tile(clmap, plot_type='map', mask=None, diagonal=True, f_sky=0.5, map1=0, map2=0, pol1=0, pol2=0, min=-1, max=1, 
                             save_path=None, ledges=None, **kwargs):
     if plot_type == 'map':
-        _plot_stats_map_by_tile2(clmap, mask=mask, map1=map1, map2=map2, pol1=pol1, pol2=pol2, min=min, max=max, 
+        _plot_stats_map_by_tile(clmap, mask=mask, diagonal=diagonal, map1=map1, map2=map2, pol1=pol1, pol2=pol2, min=min, max=max, 
                             save_path=save_path, ledges=ledges, **kwargs)
     elif plot_type == 'hist':
-        _plot_stats_hist_by_tile2(clmap, mask=mask, f_sky=f_sky, map1=map1, map2=map2, pol1=pol1, pol2=pol2, 
+        _plot_stats_hist_by_tile(clmap, mask=mask, diagonal=diagonal, f_sky=f_sky, map1=map1, map2=map2, pol1=pol1, pol2=pol2, 
                             save_path=save_path, ledges=ledges, **kwargs)
 
-def _plot_stats_map_by_tile2(clmap, stat='Cl', mask=None, map1=0, pol1=0, map2=0, pol2=0, min=-1, max=1, 
+def _plot_stats_map_by_tile(clmap, stat='Cl', mask=None, diagonal=True, map1=0, pol1=0, map2=0, pol2=0, min=-1, max=1, 
                             ledges=None, save_path=None, **kwargs): 
     # prepare window
     if mask is None:
@@ -534,7 +555,10 @@ def _plot_stats_map_by_tile2(clmap, stat='Cl', mask=None, map1=0, pol1=0, map2=0
 
     # get nbins
     nbins = clmap.shape[-1]
-    clmap = clmap[...,map1,pol1,map2,pol2,:]
+    if diagonal:
+        clmap = clmap[...,map1,pol1,:]
+    else:
+        clmap = clmap[...,map1,pol1,map2,pol2,:]
 
     # plot and save
     if save_path is None:
@@ -554,7 +578,7 @@ def _plot_stats_map_by_tile2(clmap, stat='Cl', mask=None, map1=0, pol1=0, map2=0
         else:
             eshow(m, min=min, max=max, mask=0, **kwargs)
 
-def _plot_stats_hist_by_tile2(clmap, stat='Cl', mask=None, f_sky=0.5, map1=0, pol1=0, map2=0, pol2=0, ledges=None, save_path=None, **kwargs):
+def _plot_stats_hist_by_tile(clmap, stat='Cl', mask=None, diagonal=True, f_sky=0.5, map1=0, pol1=0, map2=0, pol2=0, ledges=None, save_path=None, **kwargs):
     # prepare window
     if mask is None:
         mask = enmap.ones(clmap.ishape[-2:], wcs=clmap.wcs)
@@ -575,7 +599,10 @@ def _plot_stats_hist_by_tile2(clmap, stat='Cl', mask=None, f_sky=0.5, map1=0, po
     for i in range(nbins):
         lmin = ledges[i]
         lmax = ledges[i+1] 
-        y = clmap[...,map1,pol1,map2,pol2, i]
+        if diagonal:
+            y = clmap[...,map1,pol1, i]
+        else:
+            y = clmap[...,map1,pol1,map2,pol2, i]
         # y = y[y!=0]
         plt.hist(y, bins=50, histtype='step', label=f'std={np.std(y):0.3f}')
         plt.gca().axvline(np.mean(y), color='r', linestyle='--', label=f'mean={np.mean(y):0.3f}')

@@ -186,17 +186,20 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask_observed=None, mask
     mask_observed : array-like, optional
         Data mask, by default None.
     mask_est : array-like, optional
-        Mask used to estimate filter used to whiten the data, by default None.
+        Mask used to estimate the filter which whitens the data, by default None.
     width_deg : scalar, optional
         The characteristic tile width in degrees, by default 4.
     height_deg : scalar, optional
-        The characteristic tile height in degrees,, by default 4.
+        The characteristic tile height in degrees, by default 4.
     delta_ell_smooth : int, optional
         The smoothing scale in Fourier space to mitigate bias in the noise model
         from a small number of data splits, by default 400.
     lmax : int, optional
         The bandlimit of the maps, by default None.
         If None, will be set to twice the theoretical CAR limit, ie 180/wcs.wcs.cdelt[1].
+    rfft : bool, optional
+        Whether to generate tile shapes prepared for rfft's as opposed to fft's. For real 
+        imaps this reduces computation time and memory usage, by default True.
     nthread : int, optional
         The number of threads, by default 0.
         If 0, use output of get_cpu_count().
@@ -252,7 +255,6 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask_observed=None, mask
     # we want to keep split axis at -4, but slice out our split to reduce cost.
     # imap now has shape (num_arrays, 1, num_pol, ny, nx).
     # imap is henceforth masked, as part of the filtering.
-
     imap, sqrt_cov_ell = utils.ell_flatten(
         imap[..., split_num:split_num+1, :, :, :], mask_observed=mask_observed, mask_est=mask_est,
         return_sqrt_cov=True, per_split=True, mode='curvedsky', lmax=lmax
@@ -282,6 +284,7 @@ def get_tiled_noise_covsqrt(imap, split_num, ivar=None, mask_observed=None, mask
     # get all the 2D power spectra for this split; note smap 
     # has shape (num_tiles, num_arrays, num_pol, ny, nx) after this operation.
     # NOTE: imap already masked by ell_flatten, so don't reapply (tiled) mask here
+    assert num_splits == 1, 'Implementation only works per split'
     kmap = enmap.fft(imap[..., 0, :, :, :]*apod, normalize='phys', nthread=nthread)
 
     # we can 'delete' imap (really, just keep the 1st tile)
@@ -365,6 +368,9 @@ def get_tiled_noise_sim(covsqrt, split_num, ivar=None, sqrt_cov_ell=None, rfft=T
     sqrt_cov_ell : ndarray, optional
         An ndarray of shape (num_arrays, num_splits=1, num_pol, nell) 'sqrt_ell' used to
         unflatten the simulated map in harmonic space, by default None.
+    rfft : bool, optional
+        Whether to use rfft's as opposed to fft's when going from Fourier to map space. Should
+        match the value of the 'rfft' kwarg passed to get_tiled_noise_covsqrt, by default True.
     num_arrays : int, optional
         If ivar is None, the number of correlated arrays in num_comp, by default None.
     num_splits : int, optional
@@ -465,8 +471,7 @@ def get_tiled_noise_sim(covsqrt, split_num, ivar=None, sqrt_cov_ell=None, rfft=T
         lfilter = sqrt_cov_ell[..., :lmax+1]
         
         # do the filtering
-        for i in range(num_arrays):
-            omap[i] = utils.ell_filter(omap[i], lfilter[i], mode='curvedsky', lmax=lmax)
+        omap = utils.ell_filter(omap, lfilter, mode='curvedsky', lmax=lmax)
 
     # if ivar is not None, unwhiten the imap data using ivar
     if ivar is not None:

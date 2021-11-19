@@ -747,7 +747,7 @@ class TiledNoiseModel(NoiseModel):
         sqrt_cov_mat, sqrt_cov_ell = tiled_noise.get_tiled_noise_covsqrt(
             dmap, split_num, mask_observed=self._mask_observed, mask_est=self._mask, 
             width_deg=self._width_deg, height_deg=self._height_deg,
-            delta_ell_smooth=self._delta_ell_smooth, lmax=self._lmax, nthread=0, verbose=verbose
+            delta_ell_smooth=self._delta_ell_smooth, lmax=self._lmax, rfft=True, nthread=0, verbose=verbose
         )
         return {
             'sqrt_cov_mat': sqrt_cov_mat,

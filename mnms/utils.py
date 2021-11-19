@@ -502,7 +502,7 @@ def lmax_from_wcs(wcs):
     return int(180/np.abs(wcs.wcs.cdelt[1]))
 
 # forces shape to (num_arrays, num_splits, num_pol, ny, nx) and optionally averages over splits
-def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=False, per_split=False, mode='curvedsky',
+def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=True, per_split=True, mode='curvedsky',
                 lmax=None, ainfo=None, ledges=None, weights=None, nthread=0):
     """Flattens a map 'by its own power spectrum', i.e., such that the resulting map
     has a power spectrum of unity.
@@ -511,11 +511,11 @@ def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=False, per_sp
     ----------
     imap : enmap.ndmap
         Input map to flatten.
-    mask : enmap.ndmap, optional
+    mask_observed : enmap.ndmap, optional
         A spatial window to apply to the map, by default 1. Note that, if applied,
         the resulting 'flat' map will also masked.
     mask_est : enmap.ndmap, optional
-        Mask used to estimate filter used to whiten the data.
+        Mask used to estimate the filter which whitens the data.
     return_sqrt_cov : bool, optional
         If True, return the 'sqrt_covariance' which is the filter that flattens
         the map, by default False.
@@ -617,6 +617,8 @@ def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=False, per_sp
     elif mode == 'curvedsky':
         if lmax is None:
             lmax = lmax_from_wcs(imap.wcs)
+        if ainfo is None:
+            ainfo = sharp.alm_info(lmax)
 
         # since filtering maps by their own power only need diagonal
         alm = map2alm(imap*mask_est, ainfo=ainfo, lmax=lmax)
@@ -636,9 +638,7 @@ def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=False, per_sp
         lfilter = np.broadcast_to(lfilter, (*imap.shape[:-2], lfilter.shape[-1]))
 
         # Re-do the SHT for the map masked with the bigger mask.
-        alm = map2alm(imap*mask_observed, alm=alm, ainfo=ainfo)
-        if ainfo is None:
-            ainfo = sharp.alm_info(lmax)
+        alm = map2alm(imap*mask_observed, alm=alm, ainfo=ainfo, lmax=lmax)
         for preidx in np.ndindex(imap.shape[:-2]):
             assert alm[preidx].ndim == 1
             assert lfilter[preidx].ndim == 1
@@ -728,7 +728,6 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, **kwar
         omap = enmap.empty((*alm.shape[:-1], *shape[-2:]), wcs=wcs, dtype=dtype)
     for preidx in np.ndindex(alm.shape[:-2]):
         # map2alm, alm2map doesn't work well for other dims beyond pol component
-        print(omap.shape)
         assert omap[preidx].ndim in [2, 3]
         omap[preidx] = curvedsky.alm2map(
             alm[preidx], omap[preidx], ainfo=ainfo, **kwargs

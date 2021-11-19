@@ -102,7 +102,7 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_observed, lmax, mask_est, lamb=1
     lmax : int
         Bandlimit for output noise covariance.
     mask_est : (ny, nx) enmap
-        Mask used to estimate filter used to whiten the data.
+        Mask used to estimate the filter which whitens the data.
     lamb : float, optional
         Lambda parameter specifying width of wavelet kernels in 
         log(ell). Should be larger than 1.
