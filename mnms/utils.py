@@ -393,12 +393,12 @@ def linear_crossfade(cNy,cNx,npix_y,npix_x=None, dtype=np.float32):
     return fys[:,None] * fxs[None,:]
 
 @numba.njit(parallel=True)
-def _parallel_bin(smap, bin_rmaps, weights, nbins):
+def _parallel_bin(smap, bin_rmap, weights, nbins):
     bin_count = np.zeros((len(smap), nbins))
     omap = np.zeros((len(smap), nbins))
     for i in numba.prange(len(smap)):
-        bin_count[i] = np.bincount(bin_rmaps, weights=weights[i], minlength=nbins+1)[1:nbins+1] 
-        omap[i] = np.bincount(bin_rmaps, weights=weights[i]*smap[i], minlength=nbins+1)[1:nbins+1]
+        bin_count[i] = np.bincount(bin_rmap[i], weights=weights[i], minlength=nbins+1)[1:nbins+1] 
+        omap[i] = np.bincount(bin_rmap[i], weights=weights[i]*smap[i], minlength=nbins+1)[1:nbins+1]
     return bin_count, omap
 
 # based on enmap.lbin but handles arbitrary ell bins and weights
@@ -411,7 +411,7 @@ def radial_bin(smap, rmap, bins, weights=None):
     smap : array-like
         A maps to bin radially along last two axes, with any prepended shape
     rmap : array-like
-        A map of of shape smap.shape[-2:] that gives radial positions
+        A map (broadcastable to smap.shape) that gives radial positions of smap
     bins : iterable
         A sequence of bin edges
     weights : array-like or callable
@@ -438,7 +438,6 @@ def radial_bin(smap, rmap, bins, weights=None):
 
     # make sure there is at least one prepended dim to smap
     smap = atleast_nd(smap, 3)
-    assert rmap.ndim == 2, 'rmap must have two dimensions'
 
     # get prepended smap shape
     preshape = smap.shape[:-2]
@@ -455,19 +454,22 @@ def radial_bin(smap, rmap, bins, weights=None):
         weights = np.ones_like(rmap)
     elif callable(weights):
         weights = weights(rmap)
-    weights = np.broadcast_to(weights, preshape + weights.shape, subok=True)
+    weights = np.broadcast_to(weights, smap.shape, subok=True)
 
-    # "flatten" rmap, smap, and weights; we will reshape everything at the end
-    rmap = rmap.reshape(-1)
-    bin_rmaps = np.digitize(rmap, bins, right=True) # the bin of each pixel
+    # prepare binned rmaps
+    bin_rmap = np.digitize(rmap, bins, right=True) # the bin of each pixel
+    bin_rmap = np.broadcast_to(bin_rmap, smap.shape, subok=True)
+
+    # "flatten" smap, bin_rmap, and weights; we will reshape everything at the end
     smap = smap.reshape(np.prod(preshape), -1)
+    bin_rmap = bin_rmap.reshape(smap.shape)
     weights = weights.reshape(np.prod(preshape), -1)
 
     # iterate through all smaps to be binned and do a weighted sum by 
     # number of pixels within ell bins, with an optional weight map.
     # [1:nbins+1] index because 0'th bin is always empty or not needed with right=True in 
     # digitize and don't need data beyond last bin, if any
-    bin_count, omap = _parallel_bin(smap, bin_rmaps, weights, nbins)
+    bin_count, omap = _parallel_bin(smap, bin_rmap, weights, nbins)
     np.divide(omap, bin_count, out=omap, where=bin_count!=0)
 
     # for i in range(len(smap)):

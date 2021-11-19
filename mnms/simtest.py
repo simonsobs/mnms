@@ -508,16 +508,18 @@ def get_stats_by_tile(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=2
     cli = np.zeros((*imap.shape[:-2], nbins), dtype=imap.dtype)
 
     # cycle through the tiles   
+    modlmap = []
     for i, n in enumerate(imap.unmasked_tiles):
-
         # get the 2d tile PS, shape is (num_arrays, num_splits, num_pol, ny, nx)
         # so trace over component -4
         # this normalization is different than DR4 but avoids the need to save num_splits metadata, and we
         # only ever simulate splits anyway...
         _, ewcs = imap.get_tile_geometry(n)
-        modlmap = enmap.modlmap(imap.shape[-2:], ewcs)
-        cld[i] = utils.radial_bin(dmap[i], modlmap, ledges, weights=weights)
-        cli[i] = utils.radial_bin(imap[i], modlmap, ledges, weights=weights)
+        modlmap.append(enmap.modlmap(imap.shape[-2:], ewcs))
+    modlmap = utils.atleast_nd(modlmap, 5, axis=[-4, -3])
+    
+    cld = utils.radial_bin(dmap, modlmap, ledges, weights=weights)
+    cli = utils.radial_bin(imap, modlmap, ledges, weights=weights)
     t0 = clock('bin time', t0)
     if diagonal:
         cldiff = np.ones_like(cld)
