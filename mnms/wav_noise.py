@@ -184,7 +184,8 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_observed, lmax, mask_est, lamb=1
     cov_wav = noise_utils.estimate_cov_wav(alm_obs, ainfo, w_ell, [0, 2], diag=False,
                                            features=features, minfo_features=minfo_features,
                                            wav_template=wav_template)
-    sqrt_cov_wav = mat_utils.wavmatpow(cov_wav, 0.5, return_diag=True, axes=[[0,1], [2,3]])
+    sqrt_cov_wav = mat_utils.wavmatpow(cov_wav, 0.5, return_diag=True, axes=[[0,1], [2,3]],
+                                        inplace=True)
 
     return sqrt_cov_wav, sqrt_cov_ell, w_ell
 
