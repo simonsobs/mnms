@@ -71,9 +71,9 @@ class tiled_ndmap(enmap.ndmap):
 
         # build the unmasked tiles
         if unmasked_tiles is not None:
-            obj.unmasked_tiles = np.array(np.unique(unmasked_tiles), dtype=np.int32)
+            obj.unmasked_tiles = np.array(np.unique(unmasked_tiles), dtype=int)
         else:
-            obj.unmasked_tiles = np.arange(numy*numx).astype(np.int32)
+            obj.unmasked_tiles = np.arange(numy*numx).astype(int)
         obj.num_tiles = len(obj.unmasked_tiles)
 
         # do some sanity checks
@@ -187,21 +187,36 @@ class tiled_ndmap(enmap.ndmap):
             self.pix_height + 2*self.pix_pad_y,
             self.pix_width + 2*self.pix_pad_x)), width=width).astype(self.dtype)
 
-    def set_unmasked_tiles(self, mask, min_sq_f_sky=MIN_SQ_F_SKY, return_sq_f_sky=False):
-        assert not self.tiled, 'Can only modify unmasked_tiles of an *untiled* map; impossible to mask tiled map in-place'
+    def set_unmasked_tiles(self, mask, is_mask_tiled=False, min_sq_f_sky=MIN_SQ_F_SKY, return_sq_f_sky=False):
         assert wcsutils.is_compatible(self.wcs, mask.wcs), 'Current wcs and mask wcs are not compatible'
 
-        # explicitly passing tiled=False and self.ishape will check that mask.shape and self.ishape are compatible
-        mask = self.sametiles(mask, tiled=False, unmasked_tiles=None).to_tiled()
-        apod = mask.apod()
+        if is_mask_tiled:
+            if isinstance(mask, tiled_ndmap):
+                assert mask.tiled, 'mask is tiled_ndmap with tiled=False but passed is_mask_tiled=True'
+                assert np.all(mask.unmasked_tiles == np.arange(mask.num_tiles)), \
+                    'mask is tiled_ndmap with some masked tiles, not sure how to proceed'
+            else:
+                mask = self.sametiles(mask, tiled=True, unmasked_tiles=None)
+        else:
+            if isinstance(mask, tiled_ndmap):
+                assert not mask.tiled, 'mask is tiled_ndmap with tiled=True but passed is_mask_tiled=False'
+                assert np.all(mask.unmasked_tiles == np.arange(mask.num_tiles)), \
+                    'mask is tiled_ndmap with some masked tiles, not sure how to proceed'
+                mask = mask.to_tiled()
+            else:
+                # explicitly passing tiled=False will check mask.shape against self.ishape
+                mask = self.sametiles(mask, tiled=False, unmasked_tiles=None).to_tiled()
+        
+        apod = self.apod()
         sq_f_sky = np.mean((mask*apod)**2, axis=(-2, -1)) # this computes the f_sky for each tile, taking mean along map axes 
         unmasked_tiles = np.nonzero(sq_f_sky >= min_sq_f_sky)[0]
-        
         self.unmasked_tiles = unmasked_tiles
         self.num_tiles = len(unmasked_tiles)
 
         if return_sq_f_sky:
             return sq_f_sky[unmasked_tiles]
+        else:
+            return None
 
     def _crossfade(self):
         return utils.linear_crossfade(self.pix_height+2*self.pix_cross_y, self.pix_width+2*self.pix_cross_x,

@@ -463,7 +463,7 @@ def radial_bin(smap, rmap, bins, weights=None):
     # "flatten" smap, bin_rmap, and weights; we will reshape everything at the end
     smap = smap.reshape(np.prod(preshape), -1)
     bin_rmap = bin_rmap.reshape(smap.shape)
-    weights = weights.reshape(np.prod(preshape), -1)
+    weights = weights.reshape(smap.shape)
 
     # iterate through all smaps to be binned and do a weighted sum by 
     # number of pixels within ell bins, with an optional weight map.
@@ -746,30 +746,16 @@ def downgrade_geometry(imap, dg):
     return slice_dshape, slice_dwcs
 
 def downgrade(imap, dg):
-    lmax = lmax_from_wcs(imap.wcs)
+    lmax = lmax_from_wcs(imap.wcs) // dg # new bandlimit
     ainfo = sharp.alm_info(lmax)
-    alm = map2alm(imap, lmax=lmax)
-
-    # need to remove info above new bandlimit
-    lfilter = np.ones(lmax + 1)
-    lfilter[lmax//dg + 1:] = 0
-
-    # alm_c_utils.lmul cannot blindly broadcast filters and alms
-    lfilter = np.broadcast_to(lfilter, (*imap.shape[:-2], lfilter.shape[-1]))
-
-    for preidx in np.ndindex(imap.shape[:-2]):
-        assert alm[preidx].ndim == 1
-        assert lfilter[preidx].ndim == 1
-        alm[preidx] = alm_c_utils.lmul(
-            alm[preidx], lfilter[preidx], ainfo
-            )
+    alm = map2alm(imap, ainfo=ainfo, lmax=lmax)
 
     # distribute bandlimited harmonic info into downgraded pixels.
     # make sure to use clenshaw-curtis compatible downgraded pixels!
     oshape, owcs = downgrade_geometry(imap, dg)
     oshape = (*imap.shape[:-2], *oshape)
     omap = enmap.empty(oshape, owcs, dtype=imap.dtype)
-    return alm2map(alm, omap, ainfo=ainfo)
+    return alm2map(alm, omap=omap, ainfo=ainfo)
 
 # further extended here for ffts
 def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0):

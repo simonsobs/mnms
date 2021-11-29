@@ -15,12 +15,6 @@ def clock(msg, t0):
     print(f'{msg}: {t-t0}')
     return t
 
-def eshow(x, *args, title=None, write=False, fname='',**kwargs): 
-    plots = enplot.plot(x, **kwargs)
-    if write:
-        enplot.write(fname, plots)
-    enplot.show(plots, title=title)
-
 def map2binned_Cl(imap, mode='fft', window=None, lmax=6000, ledges=None, weights=None, normalize=True, spin=[0]):
     if mode == 'fft':
         return _map2binned_Cl_fft(imap, window=window, normalize=normalize, weights=weights, lmax=lmax, ledges=ledges)
@@ -94,15 +88,16 @@ def _map2binned_Cl_curvedsky(imap, window=None, spin=[0], lmax=6000, ledges=None
     pass
 
 
-def get_Cl_diffs(data_clmap, sim_clmap, plot=True, save_path=None, map1=0, map2=0, ledges=None):
+def get_Cl_diffs(data_clmap, sim_clmap, diagonal=True, 
+                plot=True, save_path=None, map1=0, map2=0, ledges=None):
     """Get the normalized differences of a set of power spectra. The difference
     is the sim spectra minus the data spectra, and the normalization is given
     by the following:
 
-    If data is: C_wx, the cross of components wx
-    And sim is: C_yz, the cross of components yz
+    If data is: D_xy, the cross of components wx
+    And sim is: S_xy, the cross of components yz
 
-    Then the result is (C_yz - C_wx) / (C_ww*C_xx*C_yy*C_zz)^0.25
+    Then the result is (S_xy - D_xy) / (S_xx*S_yy*D_xx*D_yy)^0.25
 
     Parameters
     ----------
@@ -121,50 +116,56 @@ def get_Cl_diffs(data_clmap, sim_clmap, plot=True, save_path=None, map1=0, map2=
     """
     assert data_clmap.shape == sim_clmap.shape
 
-    # add new axes to the beginning if no components to avoid special cases
-    if len(data_clmap.shape) == 2:
-        data_clmap = data_clmap[None, None, ...]
-        sim_clmap = sim_clmap[None, None, ...]
-    if len(data_clmap.shape) == 3:
-        data_clmap = data_clmap[None, ...]
-        sim_clmap = sim_clmap[None, ...]
+    # check matching dimensions if not diagonal
+    if not diagonal:
+        assert data_clmap.shape[-5] == data_clmap.shape[-3]
+        assert data_clmap.shape[-4] == data_clmap.shape[-2]
+    omap = np.zeros_like(data_clmap)
 
-    # must be explicit cross spectra matrix, so shape has
-    # to be (..., npol, :, npol, nell), even if npol=1
-    assert data_clmap.shape[-4] == data_clmap.shape[-2]
-    omap = np.zeros(data_clmap.shape, data_clmap.dtype)
+    # get our selection objects depending on whether we include
+    # cross spectra (in pol only) or not
     
-    # iterate over polarizations
-    for i in range(omap.shape[-4]):
-        for j in range(i, omap.shape[-2]):
-            diff_cl = sim_clmap[..., i, :, j, :] - data_clmap[..., i, :, j, :]
+    # iterate over polarizations; inner loop depending on if diagonal
+    for i in range(omap.shape[-2]):
+        if diagonal:
+            diff_cl = sim_clmap[..., i, :] - data_clmap[..., i, :]
             norm = np.prod(np.stack((
-                sim_clmap[..., i, :, i, :],
-                sim_clmap[..., j, :, j, :],
-                data_clmap[..., i, :, i, :],
-                data_clmap[..., j, :, j, :]
+                sim_clmap[..., i, :],
+                data_clmap[..., i, :]
             )), axis=0)
             assert np.all(norm >= 0)
-            norm = norm**0.25 + 1e-14
-            omap[..., i, :, j, :] = diff_cl/norm
-            omap[..., j, :, i, :] = omap[..., i, :, j, :]
+            norm = norm**0.5 + 1e-14
+            omap[..., i, :] = diff_cl/norm
+        else:
+            for j in range(i, omap.shape[-2]):
+                diff_cl = sim_clmap[..., i, :, j, :] - data_clmap[..., i, :, j, :]
+                norm = np.prod(np.stack((
+                    sim_clmap[..., i, :, i, :],
+                    sim_clmap[..., j, :, j, :],
+                    data_clmap[..., i, :, i, :],
+                    data_clmap[..., j, :, j, :]
+                )), axis=0)
+                assert np.all(norm >= 0)
+                norm = norm**0.25 + 1e-14
+                omap[..., i, :, j, :] = diff_cl/norm
+                omap[..., j, :, i, :] = omap[..., i, :, j, :]
 
-            if plot:
-                y = omap[map1, i, map2, j, :] + 1
-                lcents = (ledges[:-1] + ledges[1:])/2
-                _, ax = plt.subplots()
-                ax.axhline(y=1, ls='--', color='k', label='unity')
-                ax.axhline(y=np.mean(y), color='k', label=f'mean={np.mean(y):0.3f}')
-                ax.plot(lcents, y)
-                ax.set_xlabel('$\ell$', fontsize=16)
-                ax.set_ylabel('$C^{sim}/C^{data}$', fontsize=16)
-                ax.set_ylim(0, 2)
-                plt.legend()
-                plt.title(f'Map Cross: {str(map1)+str(map2)}, Pol Cross: {"IQU"[i]+"IQU"[j]}')
-                fn = f'_map{str(map1)+str(map2)}_pol{"IQU"[i]+"IQU"[j]}'
-                if save_path is not None:
-                    plt.savefig(save_path + fn, bbox_inches='tight')
-                plt.show()
+                # if plot:
+                #     y = omap[map1, i, map2, j, :] + 1
+                #     lcents = (ledges[:-1] + ledges[1:])/2
+                #     _, ax = plt.subplots()
+                #     ax.axhline(y=1, ls='--', color='k', label='unity')
+                #     ax.axhline(y=np.mean(y), color='k', label=f'mean={np.mean(y):0.3f}')
+                #     ax.plot(lcents, y)
+                #     ax.set_xlabel('$\ell$', fontsize=16)
+                #     ax.set_ylabel('$C^{sim}/C^{data}$', fontsize=16)
+                #     ax.set_ylim(0, 2)
+                #     plt.legend()
+                #     plt.title(f'Map Cross: {str(map1)+str(map2)}, Pol Cross: {"IQU"[i]+"IQU"[j]}')
+                #     fn = f'_map{str(map1)+str(map2)}_pol{"IQU"[i]+"IQU"[j]}'
+                #     if save_path is not None:
+                #         plt.savefig(save_path + fn, bbox_inches='tight')
+                #     plt.show()
 
     return np.nan_to_num(omap)
 
@@ -459,16 +460,22 @@ def get_stats_by_tile(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=2
     imap = utils.atleast_nd(imap, 5) # make data 5d
     assert dmap.shape == imap.shape, 'dmap and imap must have the same shape'
 
+    # retain wcs objects for later, and check for compatibility
+    dmap_wcs = dmap.wcs
+    imap_wcs = imap.wcs
+    assert wcsutils.is_compatible(dmap_wcs, imap_wcs), 'dmap and imap must have compatible wcs'
+
+    # if mask is None, don't perform any masking operations.
+    # if mask provided, tile it once before setting unmasked tiles
     if mask is None:
-        mask = np.array([1])
-    mask = mask.astype(imap.dtype)
-
-    # get the tiled data, apod window
-    dmap = tiled_ndmap.tiled_ndmap(dmap*mask, width_deg=width_deg, height_deg=height_deg)
-    imap = tiled_ndmap.tiled_ndmap(imap*mask, width_deg=width_deg, height_deg=height_deg)
-
-    dmap.set_unmasked_tiles(mask)
-    imap.set_unmasked_tiles(mask)
+        dmap = tiled_ndmap.tiled_ndmap(dmap, width_deg=width_deg, height_deg=height_deg)
+        imap = tiled_ndmap.tiled_ndmap(imap, width_deg=width_deg, height_deg=height_deg)
+    else:
+        dmap = tiled_ndmap.tiled_ndmap(dmap*mask, width_deg=width_deg, height_deg=height_deg)
+        imap = tiled_ndmap.tiled_ndmap(imap*mask, width_deg=width_deg, height_deg=height_deg)
+        mask = tiled_ndmap.tiled_ndmap(mask, width_deg=width_deg, height_deg=height_deg).to_tiled()
+        dmap.set_unmasked_tiles(mask, is_mask_tiled=True)
+        imap.set_unmasked_tiles(mask, is_mask_tiled=True)
     t0 = clock('init time', t0)
     
     dmap = dmap.to_tiled()
@@ -492,8 +499,8 @@ def get_stats_by_tile(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=2
         dmap = np.einsum('...miayx,...nibyx->...manbyx', dmap, np.conj(dmap)).real / num_splits
         imap = np.einsum('...miayx,...nibyx->...manbyx', imap, np.conj(imap)).real / num_splits
 
-    dmap = tiled_ndmap.tiled_ndmap(enmap.samewcs(dmap, mask), **tiled_info)
-    imap = tiled_ndmap.tiled_ndmap(enmap.samewcs(imap, mask), **tiled_info)
+    dmap = tiled_ndmap.tiled_ndmap(enmap.ndmap(dmap, dmap_wcs), **tiled_info)
+    imap = tiled_ndmap.tiled_ndmap(enmap.ndmap(imap, imap_wcs), **tiled_info)
     t0 = clock('einsum time', t0)
 
     # prepare ell bin edges
@@ -507,7 +514,7 @@ def get_stats_by_tile(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=2
     cld = np.zeros((*dmap.shape[:-2], nbins), dtype=dmap.dtype)
     cli = np.zeros((*imap.shape[:-2], nbins), dtype=imap.dtype)
 
-    # cycle through the tiles   
+    # cycle through the tiles to get all the modlmaps
     modlmap = []
     for i, n in enumerate(imap.unmasked_tiles):
         # get the 2d tile PS, shape is (num_arrays, num_splits, num_pol, ny, nx)
@@ -516,17 +523,18 @@ def get_stats_by_tile(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=2
         # only ever simulate splits anyway...
         _, ewcs = imap.get_tile_geometry(n)
         modlmap.append(enmap.modlmap(imap.shape[-2:], ewcs))
-    modlmap = utils.atleast_nd(modlmap, 5, axis=[-4, -3])
-    
+
+    # need tile axis of modlmap to properly align with 2D spectra
+    if diagonal:
+        modlmap = utils.atleast_nd(modlmap, 5, axis=[-4, -3])
+    else:
+        modlmap = utils.atleast_nd(modlmap, 7, axis=[-6, -5, -4, -3])
+
+    # finally, bin the 2d power spectra into 1d bins
     cld = utils.radial_bin(dmap, modlmap, ledges, weights=weights)
     cli = utils.radial_bin(imap, modlmap, ledges, weights=weights)
     t0 = clock('bin time', t0)
-    if diagonal:
-        cldiff = np.ones_like(cld)
-        np.divide(cli, cld, out=cldiff, where=(cld != 0))
-        cldiff -= 1
-    else:
-        cldiff = get_Cl_diffs(cld, cli, plot=False)
+    cldiff = get_Cl_diffs(cld, cli, diagonal=diagonal, plot=False)
     t0 = clock('diff time', t0)
     return imap.sametiles(cldiff)
     
@@ -540,16 +548,16 @@ def get_stats_by_tile(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=2
 #                             save_path=save_path, **kwargs)
 
 def plot_stats_by_tile(clmap, plot_type='map', mask=None, diagonal=True, f_sky=0.5, map1=0, map2=0, pol1=0, pol2=0, min=-1, max=1, 
-                            save_path=None, ledges=None, **kwargs):
+                            save_path=None, ledges=None, show=False, **kwargs):
     if plot_type == 'map':
         _plot_stats_map_by_tile(clmap, mask=mask, diagonal=diagonal, map1=map1, map2=map2, pol1=pol1, pol2=pol2, min=min, max=max, 
-                            save_path=save_path, ledges=ledges, **kwargs)
+                            save_path=save_path, ledges=ledges, show=show, **kwargs)
     elif plot_type == 'hist':
         _plot_stats_hist_by_tile(clmap, mask=mask, diagonal=diagonal, f_sky=f_sky, map1=map1, map2=map2, pol1=pol1, pol2=pol2, 
-                            save_path=save_path, ledges=ledges, **kwargs)
+                            save_path=save_path, ledges=ledges, show=show, **kwargs)
 
 def _plot_stats_map_by_tile(clmap, stat='Cl', mask=None, diagonal=True, map1=0, pol1=0, map2=0, pol2=0, min=-1, max=1, 
-                            ledges=None, save_path=None, **kwargs): 
+                            ledges=None, save_path=None, show=False, **kwargs): 
     # prepare window
     if mask is None:
         mask = enmap.ones(clmap.ishape[-2:], wcs=clmap.wcs)
@@ -575,16 +583,16 @@ def _plot_stats_map_by_tile(clmap, stat='Cl', mask=None, diagonal=True, map1=0, 
             lmin = ledges[i]
             lmax = ledges[i+1] 
             fn = f'_map_lmin{lmin}_lmax{lmax}'
-            title = f'$\ell_{{min}}={ledges[i]}, \ell_{{max}}={ledges[i+1]}$'
-            eshow(m, title=title, write=write, fname=save_path+fn, min=min, max=max, mask=0, **kwargs)
+            # title = f'$\ell_{{min}}={ledges[i]}, \ell_{{max}}={ledges[i+1]}$'
+            utils.eplot(m, fname=save_path+fn, min=min, max=max, mask=0, show=show, **kwargs)
         else:
-            eshow(m, min=min, max=max, mask=0, **kwargs)
+            utils.eplot(m, min=min, max=max, mask=0, show=show, **kwargs)
 
-def _plot_stats_hist_by_tile(clmap, stat='Cl', mask=None, diagonal=True, f_sky=0.5, map1=0, pol1=0, map2=0, pol2=0, ledges=None, save_path=None, **kwargs):
+def _plot_stats_hist_by_tile(clmap, stat='Cl', mask=None, diagonal=True, f_sky=0.5, map1=0, pol1=0, map2=0, pol2=0, ledges=None, save_path=None, show=False, **kwargs):
     # prepare window
     if mask is None:
         mask = enmap.ones(clmap.ishape[-2:], wcs=clmap.wcs)
-    mask = clmap.sametiles(mask, tiled=False)
+    mask = clmap.sametiles(mask, tiled=False, unmasked_tiles=None)
     
     # get good tiles
     mask.set_unmasked_tiles(mask, min_sq_f_sky=f_sky**2)
@@ -615,8 +623,11 @@ def _plot_stats_hist_by_tile(clmap, stat='Cl', mask=None, diagonal=True, f_sky=0
         
         fn = f'_hist_lmin{lmin}_lmax{lmax}.png'
         if save_path is not None:
-            plt.savefig(save_path + fn, bbox_inches='tight')    
-        plt.show()
+            plt.savefig(save_path + fn, bbox_inches='tight')
+        if show:    
+            plt.show()
+        else:
+            plt.close()
 
 def get_map_histograms(data, sim, window=1, ledges=None, lmax=6000, mode='fft', plot=True, save_path=None):
     # prepare window
