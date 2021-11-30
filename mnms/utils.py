@@ -859,6 +859,11 @@ def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
     -------
     ndmap
         The downgraded map.
+
+    Notes
+    -----
+    Constructs a new interpolant for each 2D map in the input array. This can be
+    very slow (~1min per 2D map).
     """
     # cast imap to dtype so now omap has omap dtype
     if dtype is not None:
