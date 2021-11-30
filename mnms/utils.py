@@ -1,10 +1,11 @@
-from pixell import enmap, curvedsky, fft as enfft, sharp
+from pixell import enmap, curvedsky, fft as enfft, sharp, wcsutils
 from enlib import array_ops, bench
 from soapack import interfaces as sints
 from optweight import alm_c_utils
 
 import numpy as np
-from scipy.interpolate import interp1d
+from scipy.interpolate import interp1d, RectBivariateSpline
+from scipy import ndimage
 import numba
 import healpy as hp
 from astropy.io import fits
@@ -75,11 +76,15 @@ def get_nsplits_by_qid(qid, data_model):
 
 def slice_geometry_by_pixbox(ishape, iwcs, pixbox):
     pb = np.asarray(pixbox)
-    return enmap.slice_geometry(ishape[-2:], iwcs, (slice(*pb[:, -2]), slice(*pb[:, -1])), nowrap=True)
+    return enmap.slice_geometry(
+        ishape[-2:], iwcs, (slice(*pb[:, -2]), slice(*pb[:, -1])), nowrap=True
+        )
 
 def slice_geometry_by_geometry(ishape, iwcs, oshape, owcs):
     pb = enmap.pixbox_of(iwcs, oshape, owcs)
-    return enmap.slice_geometry(ishape[-2:], iwcs, (slice(*pb[:, -2]), slice(*pb[:, -1])), nowrap=True)
+    return enmap.slice_geometry(
+        ishape[-2:], iwcs, (slice(*pb[:, -2]), slice(*pb[:, -1])), nowrap=True
+        )
 
 # users must be careful with indices shape. it gets promoted to 2D array by
 # prepending a dimension if necessary. afterward, indices[i] (ie, indexing along
@@ -736,26 +741,162 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, **kwar
             )
     return omap
 
-def downgrade_geometry(imap, dg):
+def downgrade_geometry_cc_quad(imap, dg):
+    """Get downgraded geometry that adheres to Clenshaw-Curtis quadrature.
+
+    Parameters
+    ----------
+    imap : ndmap
+        Map to be downgraded.
+    dg : int or float
+        Downgrade factor.
+
+    Returns
+    -------
+    (tuple, astropy.wcs.WCS)
+        The shape and wcs of the downgraded geometry.
+
+    Notes
+    -----
+    Works by generating a fullsky geometry at downgraded resolution and slicing
+    out coordinates of original map.
+    """
     # get the shape, wcs corresponding to the sliced fullsky geometry, with resolution
     # downgraded vs. imap resolution by factor dg, containg sky footprint of imap
     res = np.deg2rad(np.abs(imap.wcs.wcs.cdelt)) * dg
     full_dshape, full_dwcs = enmap.fullsky_geometry(res=res)
-    full_dpixbox = enmap.skybox2pixbox(full_dshape, full_dwcs, imap.corners(corner=False))
-    slice_dshape, slice_dwcs = slice_geometry_by_pixbox(full_dshape, full_dwcs, full_dpixbox)
+    full_dpixbox = enmap.skybox2pixbox(
+        full_dshape, full_dwcs, imap.corners(corner=False), corner=False
+        )
+
+    # full_dpixbox has inclusive pixel corners, but slice_geometry_by_pixbox
+    # uses slice notation (exclusive ends), so need to add 1 to the "ends"
+    assert full_dpixbox.shape == (2, 2), 'full_dpixbox.shape is not (2, 2)'
+    full_dpixbox[1] += 1
+
+    slice_dshape, slice_dwcs = slice_geometry_by_pixbox(
+        full_dshape, full_dwcs, full_dpixbox
+        )
     return slice_dshape, slice_dwcs
 
-def downgrade(imap, dg):
+def empty_downgrade_cc_quad(imap, dg):
+    """Get an empty enmap to hold the Clenshaw-Curtis-preserving downgraded map."""
+    oshape, owcs = downgrade_geometry_cc_quad(imap, dg)
+    oshape = (*imap.shape[:-2], *oshape)
+    omap = enmap.empty(oshape, owcs, dtype=imap.dtype)
+    return omap
+
+def harmonic_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None):
+    """Downgrade a map by harmonic resampling into a geometry that adheres
+    to Clenshaw-Curtis quadrature. This will bandlimit the input signal in 
+    harmonic space which may introduce ringing around bright objects, but 
+    will not introduce a pixel-window nor aliasing.
+
+    Parameters
+    ----------
+    imap : ndmap
+        Map to be downgraded.
+    dg : int or float
+        Downgrade factor.
+    area_pow : int or float, optional
+        The area scaling of the downgraded signal, by default 0. Output map
+        is multiplied by dg^(2*area_pow).
+    dtype : np.dtype, optional
+        If not None, cast the input map to this data type, by default None.
+        Useful for allowing boolean masks to be "interpolated."
+
+    Returns
+    -------
+    ndmap
+        The downgraded map.
+    """
+    # cast imap to dtype so now omap has omap dtype
+    if dtype is not None:
+        imap = imap.astype(dtype, copy=False)
+
+    omap = empty_downgrade_cc_quad(imap, dg)
+    
     lmax = lmax_from_wcs(imap.wcs) // dg # new bandlimit
     ainfo = sharp.alm_info(lmax)
     alm = map2alm(imap, ainfo=ainfo, lmax=lmax)
 
-    # distribute bandlimited harmonic info into downgraded pixels.
-    # make sure to use clenshaw-curtis compatible downgraded pixels!
-    oshape, owcs = downgrade_geometry(imap, dg)
-    oshape = (*imap.shape[:-2], *oshape)
-    omap = enmap.empty(oshape, owcs, dtype=imap.dtype)
-    return alm2map(alm, omap=omap, ainfo=ainfo)
+    # scale values by area factor, e.g. dg^2 if ivar maps
+    mult = dg ** (2*area_pow)
+
+    return mult * alm2map(alm, omap=omap, ainfo=ainfo)
+
+# inspired by optweight.map_utils.gauss2guass
+def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
+                                negative_cdelt_ra=True, order=1, preconvolve=True):
+    """Downgrade a map by spline interpolating into a geometry that adheres
+    to Clenshaw-Curtis quadrature. This will bandlimit the input signal, but 
+    operates only in pixel space: there will be no ringing around bright sources,
+    but this will introduce a pixel-window and aliasing.
+
+    Parameters
+    ----------
+    imap : ndmap
+        Map to be downgraded.
+    dg : int or float
+        Downgrade factor.
+    area_pow : int or float, optional
+        The area scaling of the downgraded signal, by default 0. Output map
+        is multiplied by dg^(2*area_pow).
+    dtype : np.dtype, optional
+        If not None, cast the input map to this data type, by default None.
+        Useful for allowing boolean masks to be "interpolated."
+    negative_cdelt_ra : bool, optional
+        Whether the geometry of the input map is ordered by "decreasing" RA, 
+        by default True.
+    order : int, optional
+        The order of the spline interpolation, by default 1 (linear).
+    preconvolve : bool, optional
+        Whether to presmooth the input map in pixel space with a uniform filter
+        before interpolating, by default True. Necessary for maps with high-frequency
+        information to avoid significant aliasing in the downgrade.
+
+    Returns
+    -------
+    ndmap
+        The downgraded map.
+    """
+    # cast imap to dtype so now omap has omap dtype
+    if dtype is not None:
+        imap = imap.astype(dtype, copy=False)
+
+    if preconvolve:
+        imap = imap.copy() # you don't want to convolve the input buffer
+        for preidx in np.ndindex(imap.shape[:-2]):
+            imap[preidx] = ndimage.uniform_filter(imap[preidx], size=dg, mode='wrap')
+    
+    omap = empty_downgrade_cc_quad(imap, dg)
+    thetas_in, phis_in = imap.posmap()
+    thetas_out, phis_out = omap.posmap()
+
+    # thetas, phis are 2D grids. need to check unique and make 1D
+    assert wcsutils.is_cyl(imap.wcs), 'imap must have cyl wcs'
+    assert wcsutils.is_cyl(omap.wcs), 'omap must have cyl wcs'
+    thetas_in = thetas_in[:, 0]
+    thetas_out = thetas_out[:, 0]
+    phis_in = phis_in[0]
+    phis_out = phis_out[0]
+
+    # negate phi values if specified so that phis are strictly increasing
+    if negative_cdelt_ra:
+        phis_in = -phis_in
+        phis_out = -phis_out
+
+    for preidx in np.ndindex(imap.shape[:-2]):
+        interpolator = RectBivariateSpline(
+            thetas_in, phis_in, imap[preidx], kx=order, ky=order
+            )
+        omap[preidx] = interpolator(thetas_out, phis_out)
+
+    # scale values by area factor, e.g. dg^2 if ivar maps
+    mult = dg ** (2*area_pow)
+
+    return mult * omap
+
 
 # further extended here for ffts
 def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0):
