@@ -1,8 +1,9 @@
 from pixell import enmap
+from soapack.interfaces import DR6
 
 # helper functions to add features to soapack data models
 
-def read_map(data_model, qid, split_num, ivar=False, ncomp=None):
+def read_map(data_model, qid, split_num, ivar=False, npass=4):
     """Read a map from disk according to the soapack data_model
     filename conventions.
 
@@ -17,22 +18,41 @@ def read_map(data_model, qid, split_num, ivar=False, ncomp=None):
     ivar : bool, optional
         If True, load the inverse-variance map for the qid and split. If False,
         load the source-free map for the same, by default False.
-    ncomp : int, optional
-        The the first ncomp Stokes components, by default None.
-        If None, load all Stokes components.
+    npass : int, optional
+        The npass of the data set, by default 4.
 
     Returns
     -------
     enmap.ndmap
         The loaded map product, with at least 3 dimensions.
     """
-    fname = data_model.get_map_fname(qid, split_num, ivar)
-    omap = data_model._read_map(fname, ncomp=ncomp)
+    map_fname = data_model.get_map_fname(qid, split_num, ivar, nPass=npass)
+    omap = enmap.read_map(map_fname)
+
+    # dr6 releases have no srcfree maps, need to build by-hand
+    if isinstance(data_model, DR6):
+        src_fname = get_src_fname(data_model, qid, split_num)
+        omap -= enmap.read_map(src_fname)
+
     if omap.ndim == 2:
         omap = omap[None]
     return omap
 
-def read_map_geometry(data_model, qid, split_num, ivar=False, ncomp=None):
+def get_src_fname(data_model, qid, split_num):
+    fname = data_model.apath
+
+    region = data_model.ainfo(qid,'region')
+    daynight = data_model.ainfo(qid,'daynight')
+    array = data_model.ainfo(qid,'array')
+    freq = data_model.ainfo(qid,'freq')
+    nway = "8way"
+    mstr = 'srcs'
+    ## example: cmb_night_pa5_f150_8way
+    fname += f'/{region}_{daynight}_{array}_{freq}_{nway}_set{split_num}_{mstr}.fits'
+    
+    return fname
+
+def read_map_geometry(data_model, qid, split_num, ivar=False, npass=4):
     """Read a map geometry from disk according to the soapack data_model
     filename conventions.
 
@@ -47,21 +67,18 @@ def read_map_geometry(data_model, qid, split_num, ivar=False, ncomp=None):
     ivar : bool, optional
         If True, load the inverse-variance map for the qid and split. If False,
         load the source-free map for the same, by default False.
-    ncomp : int, optional
-        The the first ncomp Stokes components, by default None.
-        If None, load all Stokes components.
+    npass : int, optional
+        The npass of the data set, by default 4.
 
     Returns
     -------
     tuple
         The loaded map product geometry, with at least 3 dimensions.
     """
-    fname = data_model.get_map_fname(qid, split_num, ivar)
+    fname = data_model.get_map_fname(qid, split_num, ivar, nPass=npass)
     shape, wcs = enmap.read_map_geometry(fname)
     if len(shape) == 2:
         shape = (1, *shape)
-    elif ncomp is not None:
-        shape = (ncomp, *shape[-2:])
     return shape, wcs
 
 def get_mult_fact(data_model, qid, ivar=False):

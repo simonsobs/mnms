@@ -741,47 +741,53 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, **kwar
             )
     return omap
 
-def downgrade_geometry_cc_quad(imap, dg):
+def downgrade_geometry_cc_quad(shape, wcs, dg):
     """Get downgraded geometry that adheres to Clenshaw-Curtis quadrature.
 
     Parameters
     ----------
-    imap : ndmap
-        Map to be downgraded.
+    shape : tuple
+        Shape of map geometry to be downgraded.
+    wcs : astropy.wcs.WCS
+        Wcs of map geometry to be downgraded
     dg : int or float
         Downgrade factor.
 
     Returns
     -------
     (tuple, astropy.wcs.WCS)
-        The shape and wcs of the downgraded geometry.
+        The shape and wcs of the downgraded geometry. If dg <= 1, the 
+        geometry of the input map.
 
     Notes
     -----
     Works by generating a fullsky geometry at downgraded resolution and slicing
     out coordinates of original map.
     """
-    # get the shape, wcs corresponding to the sliced fullsky geometry, with resolution
-    # downgraded vs. imap resolution by factor dg, containg sky footprint of imap
-    res = np.deg2rad(np.abs(imap.wcs.wcs.cdelt)) * dg
-    full_dshape, full_dwcs = enmap.fullsky_geometry(res=res)
-    full_dpixbox = enmap.skybox2pixbox(
-        full_dshape, full_dwcs, imap.corners(corner=False), corner=False
-        )
+    if dg <= 1:
+        return shape[-2:], wcs
+    else:
+        # get the shape, wcs corresponding to the sliced fullsky geometry, with resolution
+        # downgraded vs. imap resolution by factor dg, containg sky footprint of imap
+        res = np.deg2rad(np.abs(wcs.wcs.cdelt)) * dg
+        full_dshape, full_dwcs = enmap.fullsky_geometry(res=res)
+        full_dpixbox = enmap.skybox2pixbox(
+            full_dshape, full_dwcs, enmap.corners(shape, wcs, corner=False), corner=False
+            )
 
-    # full_dpixbox has inclusive pixel corners, but slice_geometry_by_pixbox
-    # uses slice notation (exclusive ends), so need to add 1 to the "ends"
-    assert full_dpixbox.shape == (2, 2), 'full_dpixbox.shape is not (2, 2)'
-    full_dpixbox[1] += 1
+        # full_dpixbox has inclusive pixel corners, but slice_geometry_by_pixbox
+        # uses slice notation (exclusive ends), so need to add 1 to the "ends"
+        assert full_dpixbox.shape == (2, 2), 'full_dpixbox.shape is not (2, 2)'
+        full_dpixbox[1] += 1
 
-    slice_dshape, slice_dwcs = slice_geometry_by_pixbox(
-        full_dshape, full_dwcs, full_dpixbox
-        )
-    return slice_dshape, slice_dwcs
+        slice_dshape, slice_dwcs = slice_geometry_by_pixbox(
+            full_dshape, full_dwcs, full_dpixbox
+            )
+        return slice_dshape, slice_dwcs
 
 def empty_downgrade_cc_quad(imap, dg):
     """Get an empty enmap to hold the Clenshaw-Curtis-preserving downgraded map."""
-    oshape, owcs = downgrade_geometry_cc_quad(imap, dg)
+    oshape, owcs = downgrade_geometry_cc_quad(imap.shape, imap.wcs, dg)
     oshape = (*imap.shape[:-2], *oshape)
     omap = enmap.empty(oshape, owcs, dtype=imap.dtype)
     return omap
@@ -808,22 +814,25 @@ def harmonic_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None):
     Returns
     -------
     ndmap
-        The downgraded map.
+        The downgraded map. The unchanged input if dg <= 1.
     """
-    # cast imap to dtype so now omap has omap dtype
-    if dtype is not None:
-        imap = imap.astype(dtype, copy=False)
+    if dg <= 1:
+        return imap
+    else:
+        # cast imap to dtype so now omap has omap dtype
+        if dtype is not None:
+            imap = imap.astype(dtype, copy=False)
 
-    omap = empty_downgrade_cc_quad(imap, dg)
-    
-    lmax = lmax_from_wcs(imap.wcs) // dg # new bandlimit
-    ainfo = sharp.alm_info(lmax)
-    alm = map2alm(imap, ainfo=ainfo, lmax=lmax)
+        omap = empty_downgrade_cc_quad(imap, dg)
+        
+        lmax = lmax_from_wcs(imap.wcs) // dg # new bandlimit
+        ainfo = sharp.alm_info(lmax)
+        alm = map2alm(imap, ainfo=ainfo, lmax=lmax)
 
-    # scale values by area factor, e.g. dg^2 if ivar maps
-    mult = dg ** (2*area_pow)
+        # scale values by area factor, e.g. dg^2 if ivar maps
+        mult = dg ** (2*area_pow)
 
-    return mult * alm2map(alm, omap=omap, ainfo=ainfo)
+        return mult * alm2map(alm, omap=omap, ainfo=ainfo)
 
 # inspired by optweight.map_utils.gauss2guass
 def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
@@ -858,50 +867,52 @@ def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
     Returns
     -------
     ndmap
-        The downgraded map.
+        The downgraded map. The unchanged input if dg <= 1.
 
     Notes
     -----
     Constructs a new interpolant for each 2D map in the input array. This can be
     very slow (~1min per 2D map).
     """
-    # cast imap to dtype so now omap has omap dtype
-    if dtype is not None:
-        imap = imap.astype(dtype, copy=False)
+    if dg <= 1:
+        return imap
+    else:
+        # cast imap to dtype so now omap has omap dtype
+        if dtype is not None:
+            imap = imap.astype(dtype, copy=False)
 
-    if preconvolve:
-        imap = imap.copy() # you don't want to convolve the input buffer
+        if preconvolve:
+            imap = imap.copy() # you don't want to convolve the input buffer
+            for preidx in np.ndindex(imap.shape[:-2]):
+                imap[preidx] = ndimage.uniform_filter(imap[preidx], size=dg, mode='wrap')
+        
+        omap = empty_downgrade_cc_quad(imap, dg)
+        thetas_in, phis_in = imap.posmap()
+        thetas_out, phis_out = omap.posmap()
+
+        # thetas, phis are 2D grids. need to check unique and make 1D
+        assert wcsutils.is_cyl(imap.wcs), 'imap must have cyl wcs'
+        assert wcsutils.is_cyl(omap.wcs), 'omap must have cyl wcs'
+        thetas_in = thetas_in[:, 0]
+        thetas_out = thetas_out[:, 0]
+        phis_in = phis_in[0]
+        phis_out = phis_out[0]
+
+        # negate phi values if specified so that phis are strictly increasing
+        if negative_cdelt_ra:
+            phis_in = -phis_in
+            phis_out = -phis_out
+
         for preidx in np.ndindex(imap.shape[:-2]):
-            imap[preidx] = ndimage.uniform_filter(imap[preidx], size=dg, mode='wrap')
-    
-    omap = empty_downgrade_cc_quad(imap, dg)
-    thetas_in, phis_in = imap.posmap()
-    thetas_out, phis_out = omap.posmap()
+            interpolator = RectBivariateSpline(
+                thetas_in, phis_in, imap[preidx], kx=order, ky=order
+                )
+            omap[preidx] = interpolator(thetas_out, phis_out)
 
-    # thetas, phis are 2D grids. need to check unique and make 1D
-    assert wcsutils.is_cyl(imap.wcs), 'imap must have cyl wcs'
-    assert wcsutils.is_cyl(omap.wcs), 'omap must have cyl wcs'
-    thetas_in = thetas_in[:, 0]
-    thetas_out = thetas_out[:, 0]
-    phis_in = phis_in[0]
-    phis_out = phis_out[0]
+        # scale values by area factor, e.g. dg^2 if ivar maps
+        mult = dg ** (2*area_pow)
 
-    # negate phi values if specified so that phis are strictly increasing
-    if negative_cdelt_ra:
-        phis_in = -phis_in
-        phis_out = -phis_out
-
-    for preidx in np.ndindex(imap.shape[:-2]):
-        interpolator = RectBivariateSpline(
-            thetas_in, phis_in, imap[preidx], kx=order, ky=order
-            )
-        omap[preidx] = interpolator(thetas_out, phis_out)
-
-    # scale values by area factor, e.g. dg^2 if ivar maps
-    mult = dg ** (2*area_pow)
-
-    return mult * omap
-
+        return mult * omap
 
 # further extended here for ffts
 def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0):
