@@ -707,7 +707,10 @@ class NoiseModel(ABC):
 
     def delete_model(self, split_num):
         """Delete a dictionary entry of noise model variables from instance attributes under key split_num"""
-        del self._nm_dict[split_num]
+        try:
+            del self._nm_dict[split_num] 
+        except KeyError:
+            print(f'Nothing to delete, no model in memory for split {split_num}')
 
     @property
     def num_splits(self):
