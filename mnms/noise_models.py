@@ -216,7 +216,11 @@ class NoiseModel(ABC):
             # define downgraded mask_observed to be True only where the interpolated 
             # downgrade is all 1 -- this is the most conservative route in terms of 
             # excluding pixels that may not actually have nonzero ivar or data
-            mask_observed = utils.get_mask_bool(mask_observed, threshold=1.) 
+            mask_observed = utils.get_mask_bool(mask_observed, threshold=1.)
+
+            # finally, need to layer on any ivars that may still be 0 that aren't yet
+            # masked
+            mask_observed *= utils.get_bool_mask_from_ivar(ivars)
         
         return ivars*mask_observed, mask_observed
 

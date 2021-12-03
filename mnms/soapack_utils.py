@@ -30,9 +30,9 @@ def read_map(data_model, qid, split_num, ivar=False, npass=4):
     omap = enmap.read_map(map_fname)
 
     # dr6 releases have no srcfree maps, need to build by-hand
-    if isinstance(data_model, DR6):
+    if isinstance(data_model, DR6) and not ivar:
         src_fname = get_src_fname(data_model, qid, split_num)
-        omap -= enmap.read_map(src_fname)
+        omap = omap - enmap.read_map(src_fname)
 
     if omap.ndim == 2:
         omap = omap[None]
