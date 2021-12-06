@@ -452,7 +452,6 @@ def get_KS_stats(data, sim, window=None, sample_size=50000, plot=True, save_path
 def get_stats_by_tile(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=2, height_deg=2,
                         lmax=6000, mode='fft', diagonal=True, normalize=True, weights=None,
                         nthreads=0):
-    t0 = time.time()
     # check that dmap, imap conforms with convention
     assert dmap.ndim in range(2, 6), 'dmap must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
     assert imap.ndim in range(2, 6), 'imap must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
@@ -476,13 +475,11 @@ def get_stats_by_tile(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=2
         mask = tiled_ndmap.tiled_ndmap(mask, width_deg=width_deg, height_deg=height_deg).to_tiled()
         dmap.set_unmasked_tiles(mask, is_mask_tiled=True)
         imap.set_unmasked_tiles(mask, is_mask_tiled=True)
-    t0 = clock('init time', t0)
     
     dmap = dmap.to_tiled()
     imap = imap.to_tiled()
     apod = imap.apod()
     tiled_info = imap.tiled_info()
-    t0 = clock('to tiled time', t0)
 
     # get component shapes
     num_arrays, num_splits, num_pol = imap.shape[1:4] # shape is (num_tiles, num_arrays, num_splits, num_pol, ...)
@@ -490,7 +487,6 @@ def get_stats_by_tile(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=2
     # get all the 2D power spectra, averaged over splits
     dmap = enmap.fft(dmap*apod, normalize=normalize, nthread=nthreads)
     imap = enmap.fft(imap*apod, normalize=normalize, nthread=nthreads)
-    t0 = clock('fft time', t0)
     
     if diagonal:
         dmap = np.einsum('...miayx,...miayx->...mayx', dmap, np.conj(dmap)).real / num_splits
@@ -501,7 +497,6 @@ def get_stats_by_tile(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=2
 
     dmap = tiled_ndmap.tiled_ndmap(enmap.ndmap(dmap, dmap_wcs), **tiled_info)
     imap = tiled_ndmap.tiled_ndmap(enmap.ndmap(imap, imap_wcs), **tiled_info)
-    t0 = clock('einsum time', t0)
 
     # prepare ell bin edges
     if ledges is None:
@@ -533,9 +528,7 @@ def get_stats_by_tile(dmap, imap, stat='Cl', mask=None, ledges=None, width_deg=2
     # finally, bin the 2d power spectra into 1d bins
     cld = utils.radial_bin(dmap, modlmap, ledges, weights=weights)
     cli = utils.radial_bin(imap, modlmap, ledges, weights=weights)
-    t0 = clock('bin time', t0)
     cldiff = get_Cl_diffs(cld, cli, diagonal=diagonal, plot=False)
-    t0 = clock('diff time', t0)
     return imap.sametiles(cldiff)
     
 # def plot_stats_by_tile(powerMaps, stat='Cl', plot_type='map', window=None, f_sky=0.5, map1=0, map2=0, pol1=0, pol2=0, min=-1, max=1, 
@@ -735,7 +728,7 @@ def get_map_histograms(data, sim, window=1, ledges=None, lmax=6000, mode='fft', 
     return ks_stat_map, ks_p_map
 
 
-def get_Cl_ratio(data_map, sim_map, window=1, ledges=None, lmax=6000, method='curvedsky', ylim=None, plot=True, show=False, save_path=None):
+def get_Cl_ratio(data_map, sim_map, data_window=1, sim_window=1, ledges=None, lmax=6000, method='curvedsky', ylim=None, plot=True, show=False, save_path=None):
     """Returns the ratio of Cls for the two maps masked with the given window.
 
     Parameters
@@ -765,8 +758,8 @@ def get_Cl_ratio(data_map, sim_map, window=1, ledges=None, lmax=6000, method='cu
     assert len(ledges) > 1
     ledges = np.array(ledges)
 
-    alm_data = curvedsky.map2alm(data_map*window, lmax=lmax)
-    alm_sim = curvedsky.map2alm(sim_map*window, lmax=lmax)
+    alm_data = curvedsky.map2alm(data_map*data_window, lmax=lmax)
+    alm_sim = curvedsky.map2alm(sim_map*sim_window, lmax=lmax)
 
     Cl_data = curvedsky.alm2cl(alm_data)
     Cl_sim = curvedsky.alm2cl(alm_sim)

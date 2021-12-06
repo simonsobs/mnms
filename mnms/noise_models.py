@@ -189,6 +189,7 @@ class NoiseModel(ABC):
 
                     ivar = s_utils.read_map(self._data_model, qid, j, ivar=True)
                     ivar = enmap.extract(ivar, full_shape, full_wcs)
+                    ivar *= mul
 
                     # iteratively build the mask_observed at full resolution, 
                     # loop over leading dims
@@ -205,7 +206,7 @@ class NoiseModel(ABC):
                     # zero-out any numerical negative ivar
                     ivar[ivar < 0] = 0
                     
-                    ivars[i, j] = ivar * mul
+                    ivars[i, j] = ivar
 
         with bench.show('Generating observed-pixels mask'):
             mask_observed = enmap.enmap(mask_observed, wcs=full_wcs, copy=False)
@@ -387,15 +388,16 @@ class NoiseModel(ABC):
         full_shape, full_wcs = self._check_geometry()
 
         dmaps = self._empty(ivar=False)
+        num_pol = dmaps.shape[-3]
     
         for i, qid in enumerate(self._qids):
             with bench.show(self._action_str(qid, ivar=False)):
                 # load the first data map geometry so that we may allocate a buffer to accumulate
-                # all data maps in -- this has shape (nmaps=1, nsplits, npol, ny, nx). we do this
-                # one array at a time to save memory
-                imaps = self._empty(num_arrays=1, ivar=False, shape=full_shape, wcs=full_wcs)
-                ivars = self._empty(num_arrays=1, ivar=True, shape=full_shape, wcs=full_wcs)
-                num_pol = imaps.shape[-3]
+                # all data maps in -- this has shape (nmaps=1, nsplits, npol, ny, nx). 
+                if self._downgrade != 1:
+                    # we do this one array at a time to save memory
+                    imaps = self._empty(num_arrays=1, ivar=False, shape=full_shape, wcs=full_wcs)
+                    ivars = self._empty(num_arrays=1, ivar=True, shape=full_shape, wcs=full_wcs)
 
                 if self._calibrated:
                     mul_imap = s_utils.get_mult_fact(self._data_model, qid, ivar=False)
@@ -407,9 +409,9 @@ class NoiseModel(ABC):
                 # we want to do this split-by-split in case we can save
                 # memory by downgrading one split at a time
                 for j in range(self._num_splits):
-
                     imap = s_utils.read_map(self._data_model, qid, j, ivar=False)
                     imap = enmap.extract(imap, full_shape, full_wcs) 
+                    imap *= mul_imap
 
                     if self._downgrade != 1:
                         # need to reload ivar at full res for differencing (and inpainting)
@@ -429,20 +431,28 @@ class NoiseModel(ABC):
                             
                         self._inpaint(imap, ivar, mask_bool, qid=qid, split_num=j) 
 
-                    imaps[0, j] = imap * mul_imap
-                    ivars[0, j] = ivar * mul_ivar
+                    if self._downgrade != 1:
+                        imaps[0, j] = imap
+                        ivars[0, j] = ivar
+                    else:
+                        dmaps[i, j] = imap
 
                 # get difference map for this array. do 1 polarization at a time to save memory.
                 # differences before harmonic downgrade avoids ringing around bright objects
                 for k in range(num_pol):
                     sel = np.s_[..., k:k+1, :, :] # preserve pol dim to keep dim ordering
-                    imaps[sel] = utils.get_noise_map(imaps[sel], ivars)
+
+                    if self._downgrade != 1:
+                        imaps[sel] = utils.get_noise_map(imaps[sel], ivars)
+                    else:
+                        dmaps[sel] = utils.get_noise_map(dmaps[sel], self._ivar)
 
                 # downgrade each split separately to save memory
-                for j in range(self._num_splits):
-                    dmaps[i, j] = utils.harmonic_downgrade_cc_quad(
-                        imaps[0, j], self._downgrade
-                    )
+                if self._downgrade != 1:
+                    for j in range(self._num_splits):
+                        dmaps[i, j] = utils.harmonic_downgrade_cc_quad(
+                            imaps[0, j], self._downgrade
+                        )
     
         return dmaps*self._mask_observed
 
