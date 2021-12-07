@@ -46,7 +46,12 @@ def get_default_data_model():
     """
     config = sints.dconfig['mnms']
     dm_name = config['default_data_model']
-    return getattr(sints, dm_name.upper())()
+
+    # capitalize all chars except v3
+    dm_name = ''.join(
+        [dm_name[i].upper() if dm_name[i] != 'v' else 'v' for i in range(len(dm_name))]
+            )
+    return getattr(sints, dm_name)()
 
 def get_default_mask_version():
     """Returns the mask version (string) depending on what is specified
