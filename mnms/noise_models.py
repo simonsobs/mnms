@@ -611,7 +611,7 @@ class NoiseModel(ABC):
         """Write sqrt_cov_mat, sqrt_cov_ell, and possibly more noise model variables to filename fn"""
         pass
 
-    def get_sim(self, split_num, sim_num, alm=False, check_on_disk=True, write=False,
+    def get_sim(self, split_num, sim_num, alm=True, check_on_disk=True, write=False,
                 keep_model=True, do_mask_observed=True, verbose=False):
         """Generate a sim from this NoiseModel.
 
@@ -625,7 +625,7 @@ class NoiseModel(ABC):
             9999, ie, one cannot have more than 10_000 of the same sim, of the same split, 
             from the same noise model (including the 'notes').
         alm : bool, optional
-            Generate simulated alms instead of a simulated map, by default False
+            Generate simulated alms instead of a simulated map, by default True.
         check_on_disk : bool, optional
             If True, first check if the exact sim (including the noise model 'notes'), 
             exists on disk, and if it does, load and return it. If it does not,
@@ -905,7 +905,7 @@ class TiledNoiseModel(NoiseModel):
     def _get_sim_alm(self, split_num, seed, mask=None, verbose=False):    
         """Return a masked alm sim of split split_num, with seed <sequence of ints>"""
 
-        sim = self._get_sim(self, split_num, seed, mask=mask, verbose=verbose)
+        sim = self._get_sim(split_num, seed, mask=mask, verbose=verbose)
         return utils.map2alm(sim, lmax=self._lmax)
 
 @register()
