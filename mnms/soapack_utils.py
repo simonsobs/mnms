@@ -1,5 +1,5 @@
 from pixell import enmap
-from soapack.interfaces import DR6
+from soapack.interfaces import DR6v3
 
 # helper functions to add features to soapack data models
 
@@ -30,7 +30,7 @@ def read_map(data_model, qid, split_num, ivar=False, npass=4):
     omap = enmap.read_map(map_fname)
 
     # dr6 releases have no srcfree maps, need to build by-hand
-    if isinstance(data_model, DR6) and not ivar:
+    if isinstance(data_model, DR6v3) and not ivar:
         src_fname = get_src_fname(data_model, qid, split_num)
         omap = omap - enmap.read_map(src_fname)
 
@@ -39,6 +39,22 @@ def read_map(data_model, qid, split_num, ivar=False, npass=4):
     return omap
 
 def get_src_fname(data_model, qid, split_num):
+    """Gets the filename for a sources map.
+
+    Parameters
+    ----------
+    data_model : soapack.DataModel
+         DataModel instance to help load raw products
+    qid : str
+        Map identification string.
+    split_num : int
+        The 0-based index of the split to simulate.
+
+    Returns
+    -------
+    enmap.ndmap
+        The loaded sources product.
+    """
     fname = data_model.apath
 
     region = data_model.ainfo(qid,'region')
