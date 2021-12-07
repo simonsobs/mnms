@@ -63,8 +63,8 @@ parser.add_argument('--maps-step', dest='maps_step', type=int, default=1,
                     help='like --maps, except step iteration over map_ids by '
                     'this number (default: %(default)s)')
 
-parser.add_argument('--alm', dest='alm', default=False, 
-                    action='store_true', help='Generate simulated alms instead of maps.')
+parser.add_argument('--map', dest='alm', default=True, 
+                    action='store_false', help='Generate simulated maps instead of alms.')
 
 args = parser.parse_args()
 

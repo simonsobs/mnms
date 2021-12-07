@@ -637,8 +637,10 @@ class NoiseModel(ABC):
             This spends memory to avoid spending time loading the model from disk
             for each call to this method.
         do_mask_observed : bool, optional
-            Apply the mask determined by the observed patch to the sim. If not applied, the sim
-            will bleed into unobserved pixels, but is band-limited to provided lmax.
+            Apply the mask determined by the observed patch to the sim, by default True. 
+            If not applied, the sim will bleed into unobserved pixels, but this can
+            potentially avoid intermediate calculation if the user will be applying
+            their own analysis mask to sims before processing them.
         verbose : bool, optional
             Print possibly helpful messages, by default False.
 
