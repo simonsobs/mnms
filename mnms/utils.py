@@ -779,12 +779,12 @@ def downgrade_geometry_cc_quad(shape, wcs, dg):
         full_dpixbox = enmap.skybox2pixbox(
             full_dshape, full_dwcs, enmap.corners(shape, wcs, corner=False), corner=False
             )
-        full_dpixbox = np.round(full_dpixbox).astype(int)
 
-        # full_dpixbox has inclusive pixel corners, but slice_geometry_by_pixbox
-        # uses slice notation (exclusive ends), so need to add 1 to the "ends"
-        assert full_dpixbox.shape == (2, 2), 'full_dpixbox.shape is not (2, 2)'
-        full_dpixbox[1] += 1
+        # we need to round this to an exact integer in order to guarantee that 
+        # the sliced geometry is still clenshaw-curtis compatible. we use 
+        # np.round here (as opposed to np.floor) since we want pixel centers,
+        # see enmap.sky2pix documemtation
+        full_dpixbox = np.round(full_dpixbox).astype(int)
 
         slice_dshape, slice_dwcs = slice_geometry_by_pixbox(
             full_dshape, full_dwcs, full_dpixbox
