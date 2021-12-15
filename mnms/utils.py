@@ -779,6 +779,7 @@ def downgrade_geometry_cc_quad(shape, wcs, dg):
         full_dpixbox = enmap.skybox2pixbox(
             full_dshape, full_dwcs, enmap.corners(shape, wcs, corner=False), corner=False
             )
+        full_dpixbox = np.round(full_dpixbox).astype(int)
 
         # full_dpixbox has inclusive pixel corners, but slice_geometry_by_pixbox
         # uses slice notation (exclusive ends), so need to add 1 to the "ends"
