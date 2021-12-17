@@ -917,9 +917,9 @@ class TiledNoiseModel(NoiseModel):
 class WaveletNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, preload=True, ivar=None, mask_est=None,
-                calibrated=True, downgrade=1, lmax=None, mask_version=None, mask_name=None,
-                union_sources=None, notes=None, dtype=None, lamb=1.3, smooth_loc=False,
-                **kwargs):
+                 calibrated=True, downgrade=1, lmax=None, mask_version=None, mask_name=None,
+                 union_sources=None, notes=None, dtype=None, lamb=1.3, smooth_loc=False,
+                 fwhm_fact=2, **kwargs):
         """A WaveletNoiseModel object supports drawing simulations which capture scale-dependent, 
         spatially-varying map depth. They also capture the total noise power spectrum, and 
         array-array correlations.
@@ -973,6 +973,10 @@ class WaveletNoiseModel(NoiseModel):
         smooth_loc : bool, optional
             If passed, use smoothing kernel that varies over the map, smaller along edge of 
             mask, by default False.
+        fwhm_fact : float, optional
+            Factor determining smoothing scale at each wavelet scale:
+            FWHM = fact * pi / lmax, where lmax is the max wavelet ell.
+
         kwargs : dict, optional
             Optional keyword arguments to pass to simio.get_sim_mask_fn (currently just
             'galcut' and 'apod_deg'), by default None.
@@ -1005,14 +1009,15 @@ class WaveletNoiseModel(NoiseModel):
         # save model-specific info
         self._lamb = lamb
         self._smooth_loc = smooth_loc
+        self._fwhm_fact = fwhm_fact
 
     def _get_model_fn(self, split_num):
         """Get a noise model filename for split split_num; return as <str>"""
         return simio.get_wav_model_fn(
-            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, notes=self._notes,
-            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask,
-            mask_name=self._mask_name, calibrated=self._calibrated, downgrade=self._downgrade,
-            union_sources=self._union_sources, **self._kwargs
+            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, self._fwhm_fact, 
+            notes=self._notes, data_model=self._data_model, mask_version=self._mask_version,
+            bin_apod=self._use_default_mask, mask_name=self._mask_name, calibrated=self._calibrated,
+            downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
         )
 
     def _read_model(self, fn):
@@ -1042,7 +1047,7 @@ class WaveletNoiseModel(NoiseModel):
         
         sqrt_cov_mat, sqrt_cov_ell, w_ell = wav_noise.estimate_sqrt_cov_wav_from_enmap(
             dmap[:, split_num], self._mask_observed, self._lmax, self._mask_est, lamb=self._lamb,
-            smooth_loc=self._smooth_loc
+            smooth_loc=self._smooth_loc, fwhm_fact=self._fwhm_fact
         )
 
         return {
@@ -1061,10 +1066,11 @@ class WaveletNoiseModel(NoiseModel):
     def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num; return as <str>"""
         return simio.get_wav_sim_fn(
-            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, sim_num, alm=alm,
-            notes=self._notes, data_model=self._data_model, mask_version=self._mask_version,
-            bin_apod=self._use_default_mask, mask_name=self._mask_name, calibrated=self._calibrated,
-            downgrade=self._downgrade, union_sources=self._union_sources, mask_obs=mask_obs, **self._kwargs
+            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, self._fwhm_fact,
+            sim_num, alm=alm, notes=self._notes, data_model=self._data_model,
+            mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
+            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
+            mask_obs=mask_obs, **self._kwargs
         )
 
     def _get_sim(self, split_num, seed, mask=None, verbose=False):

@@ -107,7 +107,7 @@ def get_tiled_sim_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, split_n
     fn += f'{mapalm}{str(sim_num).zfill(4)}.fits'
     return fn
 
-def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, notes=None, **kwargs):
+def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, notes=None, **kwargs):
     """
     Determine filename for square-root wavelet covariance file.
 
@@ -118,12 +118,14 @@ def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, notes=None, **kwarg
     split_num : int
         Split index.
     lamb : float
-        'Parameter specifying width of wavelets kernels in log(ell).'
+        Parameter specifying width of wavelets kernels in log(ell).
     lmax : int
         Max multipole.
-    smooth_loc : bool, optional
+    smooth_loc : bool
         If set, use smoothing kernel that varies over the map, 
         smaller along edge of mask.
+    fwhm_fact : float
+        Factor specifying smoothing FWHM per wavelet.
 
     Returns
     -------
@@ -132,6 +134,7 @@ def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, notes=None, **kwarg
     """
     # cast to floating point for consistency
     lamb = float(lamb)
+    fwhm_fact = float(fwhm_fact)
 
     # get root fn
     fn = config['covmat_path']
@@ -143,17 +146,23 @@ def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, notes=None, **kwarg
     else:
         smooth_loc = '_smoothloc'
 
+    # allow for possibility of no fwhm_fact
+    if fwhm_fact == 2.:
+        fwhm_str = ''
+    else:
+        fwhm_str = f'_fwhm_fact{fwhm_fact}'
+
     # allow for possibility of no notes
     if notes is None:
         notes = ''
     else:
         notes = f'_{notes}'
         
-    fn += f'lamb{lamb}_lmax{lmax}{smooth_loc}{notes}_set{split_num}.hdf5'
+    fn += f'lamb{lamb}{fwhm_str}_lmax{lmax}{smooth_loc}{notes}_set{split_num}.hdf5'
     return fn
     
-def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, sim_num, alm=False, mask_obs=True, 
-                   notes=None, **kwargs):
+def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, sim_num, alm=False,
+                   mask_obs=True, notes=None, **kwargs):
     """
     Determine filename for simulated noise map.
 
@@ -164,12 +173,14 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, sim_num, alm=False, m
     split_num : int
         Split index.
     lamb : float
-        'Parameter specifying width of wavelets kernels in log(ell).'
+        Parameter specifying width of wavelets kernels in log(ell).
     lmax : int
         Max multipole.
-    smooth_loc : bool, optional
+    smooth_loc : bool
         If set, use smoothing kernel that varies over the map, 
         smaller along edge of mask.
+    fwhm_fact : float
+        Factor specifying smoothing FWHM per wavelet.
     sim_num : int
         Simulation number.
     alm : bool
@@ -184,6 +195,7 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, sim_num, alm=False, m
     """
     # cast to floating point for consistency
     lamb = float(lamb)
+    fwhm_fact = float(fwhm_fact)
 
     # get root fn
     fn = config['maps_path']
@@ -200,13 +212,19 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, sim_num, alm=False, m
     else:
         smooth_loc = '_smoothloc'
 
+    # allow for possibility of no fwhm_fact
+    if fwhm_fact == 2.:
+        fwhm_str = ''
+    else:
+        fwhm_str = f'_fwhm_fact{fwhm_fact}'
+
     # allow for possibility of no notes
     if notes is None:
         notes = ''
     else:
         notes = f'_{notes}'
     
-    fn += f'lamb{lamb}_{mask_obs_str}lmax{lmax}{smooth_loc}{notes}_set{split_num}_'
+    fn += f'lamb{lamb}{fwhm_str}_{mask_obs_str}lmax{lmax}{smooth_loc}{notes}_set{split_num}_'
 
     # prepare map num tags
     mapalm = 'alm' if alm else 'map'

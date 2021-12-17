@@ -1,7 +1,7 @@
 import numpy as np
 
 from pixell import enmap, curvedsky, sharp
-from mnms import utils 
+from mnms import utils
 from optweight import noise_utils, type_utils, alm_c_utils, operators, wlm_utils
 from optweight import mat_utils, wavtrans, map_utils
 import healpy as hp
@@ -29,7 +29,7 @@ def rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax, w_ell,
     Returns
     -------
     alm : (ncomp, npol, nelem) complex array
-        Simulated noise alms. 
+        Simulated noise alms.
     ainfo : sharp.alm_info object
         Metainfo for alms.
     """
@@ -81,7 +81,7 @@ def rand_enmap_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, mask, lmax, w_ell,
     Returns
     -------
     omap : (ncomp, npol, ny, nx) enmap
-        Simulated noise map(s). 
+        Simulated noise map(s).
     """
 
     alm, ainfo = rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax,
@@ -89,7 +89,7 @@ def rand_enmap_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, mask, lmax, w_ell,
     return utils.alm2map(alm, shape=mask.shape, wcs=mask.wcs, dtype=dtype, ainfo=ainfo)
 
 def estimate_sqrt_cov_wav_from_enmap(imap, mask_observed, lmax, mask_est, lamb=1.3,
-                                     smooth_loc=False):
+                                     smooth_loc=False, fwhm_fact=2):
     """
     Estimate wavelet-based covariance matrix given noise enmap.
 
@@ -104,11 +104,14 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_observed, lmax, mask_est, lamb=1
     mask_est : (ny, nx) enmap
         Mask used to estimate the filter which whitens the data.
     lamb : float, optional
-        Lambda parameter specifying width of wavelet kernels in 
+        Lambda parameter specifying width of wavelet kernels in
         log(ell). Should be larger than 1.
     smooth_loc : bool, optional
-        If set, use smoothing kernel that varies over the map, 
+        If set, use smoothing kernel that varies over the map,
         smaller along edge of mask.
+    fwhm_fact : float, optional
+        Factor determining smoothing scale at each wavelet scale:
+        FWHM = fact * pi / lmax, where lmax is the max wavelet ell.
 
     Returns
     -------
@@ -121,9 +124,9 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_observed, lmax, mask_est, lamb=1
 
     Notes
     -----
-    The sqrt_cov_wav output can be used to draw noise realisations that 
+    The sqrt_cov_wav output can be used to draw noise realisations that
     are effectively filtered by sqrt(icov_ell). To generate the final
-    noise the generated noise needs to be filtered by sqrt(cov_ell) and 
+    noise the generated noise needs to be filtered by sqrt(cov_ell) and
     masked using the pixel mask.
     """
 
@@ -161,7 +164,7 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_observed, lmax, mask_est, lamb=1
     alm_obs = utils.map2alm(imap * mask_observed, alm=alm, ainfo=ainfo)
 
     for cidx in range(ncomp):
-        # Filter grown alm by sqrt of inverse diagonal spectrum from first alm.
+        # Filter by sqrt of inverse diagonal spectrum from first alm.
         sqrt_icov_ell = operators.EllMatVecAlm(ainfo, n_ell[cidx], power=-0.5,
                                                inplace=True)
         sqrt_icov_ell(alm_obs[cidx])
@@ -178,12 +181,12 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_observed, lmax, mask_est, lamb=1
     lmax_j = min(max(lmax - 100, lmin), 5300)
     w_ell, _ = wlm_utils.get_sd_kernels(lamb, lmax_w, lmin=lmin, lmax_j=lmax_j)
 
-    wav_template = wavtrans.Wav.from_enmap(imap.shape, imap.wcs, w_ell, 1, 
+    wav_template = wavtrans.Wav.from_enmap(imap.shape, imap.wcs, w_ell, 1,
                                            preshape=imap.shape[:-2],
                                            dtype=type_utils.to_real(alm_obs.dtype))
     cov_wav = noise_utils.estimate_cov_wav(alm_obs, ainfo, w_ell, [0, 2], diag=False,
                                            features=features, minfo_features=minfo_features,
-                                           wav_template=wav_template)
+                                           wav_template=wav_template, fwhm_fact=fwhm_fact)
     sqrt_cov_wav = mat_utils.wavmatpow(cov_wav, 0.5, return_diag=True, axes=[[0,1], [2,3]],
                                         inplace=True)
 
@@ -209,7 +212,7 @@ def grow_mask(mask, lmax, radius=np.radians(0.5), fwhm=np.radians(0.5)):
     mask_out : (ny, nx) enmap
         Expanded and apodized mask.
     """
-    
+
     if mask.ndim == 2:
         mask = mask[np.newaxis,:]
     if mask.shape[0] != 1:
@@ -239,12 +242,11 @@ def lmax_from_wcs(wcs):
     ----------
     wcs : astropy.wcs.wcs.WCS object
         WCS object of enmap.
-    
+
     Returns
     -------
     lmax : int
-        Max multipole.    
+        Max multipole.
     """
-    
-    return int(180 / np.abs(wcs.wcs.cdelt[1]) / 2)
 
+    return int(180 / np.abs(wcs.wcs.cdelt[1]) / 2)
