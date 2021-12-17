@@ -133,24 +133,22 @@ class NoiseModel(ABC):
                 'Num_splits inferred from ivar shape != num_splits from data model table'
 
     def _check_geometry(self, return_geometry=True):
-        """Check that each qid in this instance's qids has compatible shape and wcs with its mask."""
+        """Check that each qid in this instance's qids has compatible shape and wcs."""
         for i, qid in enumerate(self._qids):
-            fn = simio.get_sim_mask_fn(
-                qid, self._data_model, use_default_mask=self._use_default_mask,
-                mask_version=self._mask_version, mask_name=self._mask_name, **self._kwargs
-            )
-            shape, wcs = enmap.read_map_geometry(fn)
-            assert len(shape) == 2, 'Mask shape must have only 2 dimensions'
+            # Load up first geometry of first split's ivar. Only need pixel shape.
+            shape, wcs = s_utils.read_map_geometry(self._data_model, qid, 0, ivar=True)
+            shape = shape[-2:]
+            assert len(shape) == 2, 'shape must have only 2 dimensions'
 
-            # check that we are using the same mask for each qid -- this is required!
+            # Check that we are using the geometry for each qid -- this is required!
             if i == 0:
                 main_shape, main_wcs = shape, wcs
             else:
-                with bench.show(f'Checking mask compatibility between {qid} and {self._qids[0]}'):
+                with bench.show(f'Checking geometry compatibility between {qid} and {self._qids[0]}'):
                     assert(
-                        shape == main_shape), 'qids do not share a common mask wcs -- this is required!'
+                        shape == main_shape), 'qids do not share pixel shape -- this is required!'
                     assert wcsutils.is_compatible(
-                        wcs, main_wcs), 'qids do not share a common mask wcs -- this is required!'
+                        wcs, main_wcs), 'qids do not share a common wcs -- this is required!'
         
         if return_geometry:
             return main_shape, main_wcs
@@ -168,7 +166,7 @@ class NoiseModel(ABC):
             possibly downgraded.
         """
 
-        # first check for mask compatibility and get map geometry
+        # first check for ivar compatibility and get map geometry
         full_shape, full_wcs = self._check_geometry()
 
         # load the first ivar map geometry so that we may allocate a buffer to accumulate
@@ -188,7 +186,6 @@ class NoiseModel(ABC):
                 for j in range(self._num_splits):
 
                     ivar = s_utils.read_map(self._data_model, qid, j, ivar=True)
-                    ivar = enmap.extract(ivar, full_shape, full_wcs)
                     ivar *= mul
 
                     # iteratively build the mask_observed at full resolution, 
@@ -204,9 +201,8 @@ class NoiseModel(ABC):
                             )
                     
                     # zero-out any numerical negative ivar
-                    ivar[ivar < 0] = 0
-                    
-                    ivars[i, j] = ivar
+                    ivar[ivar < 0] = 0                    
+                    ivars[i,j] = ivar
 
         with bench.show('Generating observed-pixels mask'):
             mask_observed = enmap.enmap(mask_observed, wcs=full_wcs, copy=False)
@@ -500,6 +496,10 @@ class NoiseModel(ABC):
             Sky mask. Dowgraded if requested.
         """
         with bench.show('Generating harmonic-filter-estimate mask'):
+
+            # first check for ivar compatibility and get map geometry
+            full_shape, full_wcs = self._check_geometry()
+
             for i, qid in enumerate(self._qids):
                 fn = simio.get_sim_mask_fn(
                     qid, self._data_model, use_default_mask=self._use_default_mask,
@@ -516,15 +516,18 @@ class NoiseModel(ABC):
                             mask, mask_est), 'qids do not share a common mask -- this is required!'
                         assert wcsutils.is_compatible(
                             mask.wcs, mask_est.wcs), 'qids do not share a common mask wcs -- this is required!'
-                        
+
+            # Extract mask onto geometry specified by the ivar map.
+            mask_est = enmap.extract(mask, full_shape, full_wcs)                                    
+            
             if self._downgrade != 1:
-                    mask_est = utils.interpol_downgrade_cc_quad(mask_est, self._downgrade)
+                mask_est = utils.interpol_downgrade_cc_quad(mask_est, self._downgrade)
 
-                    # to prevent numerical error, cut below a threshold
-                    mask_est[mask_est < min_threshold] = 0.
+                # to prevent numerical error, cut below a threshold
+                mask_est[mask_est < min_threshold] = 0.
 
-                    # to prevent numerical error, cut above a maximum
-                    mask_est[mask_est > max_threshold] = 1.
+                # to prevent numerical error, cut above a maximum
+                mask_est[mask_est > max_threshold] = 1.
 
         return mask_est
 
