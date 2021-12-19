@@ -842,7 +842,7 @@ def harmonic_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None):
 
 # inspired by optweight.map_utils.gauss2guass
 def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
-                                negative_cdelt_ra=True, order=1, preconvolve=True):
+                               negative_cdelt_ra=True, order=1, preconvolve=True):
     """Downgrade a map by spline interpolating into a geometry that adheres
     to Clenshaw-Curtis quadrature. This will bandlimit the input signal, but 
     operates only in pixel space: there will be no ringing around bright sources,
