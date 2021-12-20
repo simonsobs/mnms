@@ -842,7 +842,7 @@ def harmonic_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None):
 
 # inspired by optweight.map_utils.gauss2guass
 def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
-                                negative_cdelt_ra=True, order=1, preconvolve=True):
+                               negative_cdelt_ra=True, order=1, preconvolve=True):
     """Downgrade a map by spline interpolating into a geometry that adheres
     to Clenshaw-Curtis quadrature. This will bandlimit the input signal, but 
     operates only in pixel space: there will be no ringing around bright sources,
@@ -896,7 +896,7 @@ def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
         thetas_in, phis_in = imap.posmap()
         thetas_out, phis_out = omap.posmap()
 
-        # thetas, phis are 2D grids. need to check unique and make 1D
+        # thetas, phis are 2D grids. need to make 1D
         assert wcsutils.is_cyl(imap.wcs), 'imap must have cyl wcs'
         assert wcsutils.is_cyl(omap.wcs), 'omap must have cyl wcs'
         thetas_in = thetas_in[:, 0]
@@ -909,6 +909,11 @@ def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
             phis_in = -phis_in
             phis_out = -phis_out
 
+        # recenter coordinates to ensure that both the full-res and
+        # downgraded grids are on the "central" mod-180, mod-360 block of sky
+        thetas_in, phis_in = recenter_coords(thetas_in, phis_in)
+        thetas_out, phis_out = recenter_coords(thetas_out, phis_out)
+
         for preidx in np.ndindex(imap.shape[:-2]):
             interpolator = RectBivariateSpline(
                 thetas_in, phis_in, imap[preidx], kx=order, ky=order
@@ -919,6 +924,49 @@ def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
         mult = dg ** (2*area_pow)
 
         return mult * omap
+
+def recenter_coords(theta, phi):
+    """Recenters coordinates that have moved into the non-central 
+    (mod 180-deg, mod 360-deg) representation of the sky, back 
+    into the central representation.
+
+    Parameters
+    ----------
+    theta : array-like
+        Strictly increasing, 1-dimensional, at least size 2 list of
+        theta coordinates, in radians.
+    phi : Strictly increasing, 1-dimensional, at least size 2 list of
+        phi coordinates, in radians.
+
+    Returns
+    -------
+    array, array
+        The theta, phi arrays but translated so that their center
+        is between (-90-deg, -180-deg) and (90-deg, 180-deg). 
+    """
+    theta = np.rad2deg(theta)
+    phi = np.rad2deg(phi)
+    assert theta.size > 1, 'Must have multiple theta coords'
+    assert phi.size > 1, 'Must have multiple phi coords'
+    assert theta.ndim == 1, 'Can only handle 1-d theta arrays'
+    assert phi.ndim == 1, 'Can only handle 1-d phi arrays'
+
+    # test strictly increasing
+    assert np.all(theta[1:] - theta[:-1] > 0 ), \
+        'Can only handle strictly increasing theta arrays'
+    assert np.all(phi[1:] - phi[:-1] > 0 ), \
+        'Can only handle strictly increasing phi arrays'
+
+    # get the bottom left corner
+    center = np.array([theta.mean(), phi.mean()])
+
+    # get how many multiples of a full map from the central map we are,
+    # correct the output
+    mult = (center - np.array([-90, -180])) // np.array([180, 360])
+    theta -= mult[0] * 180
+    phi -= mult[1] * 360
+
+    return theta, phi
 
 # further extended here for ffts
 def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0):

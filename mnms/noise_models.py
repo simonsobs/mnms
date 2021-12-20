@@ -133,24 +133,22 @@ class NoiseModel(ABC):
                 'Num_splits inferred from ivar shape != num_splits from data model table'
 
     def _check_geometry(self, return_geometry=True):
-        """Check that each qid in this instance's qids has compatible shape and wcs with its mask."""
+        """Check that each qid in this instance's qids has compatible shape and wcs."""
         for i, qid in enumerate(self._qids):
-            fn = simio.get_sim_mask_fn(
-                qid, self._data_model, use_default_mask=self._use_default_mask,
-                mask_version=self._mask_version, mask_name=self._mask_name, **self._kwargs
-            )
-            shape, wcs = enmap.read_map_geometry(fn)
-            assert len(shape) == 2, 'Mask shape must have only 2 dimensions'
+            # Load up first geometry of first split's ivar. Only need pixel shape.
+            shape, wcs = s_utils.read_map_geometry(self._data_model, qid, 0, ivar=True)
+            shape = shape[-2:]
+            assert len(shape) == 2, 'shape must have only 2 dimensions'
 
-            # check that we are using the same mask for each qid -- this is required!
+            # Check that we are using the geometry for each qid -- this is required!
             if i == 0:
                 main_shape, main_wcs = shape, wcs
             else:
-                with bench.show(f'Checking mask compatibility between {qid} and {self._qids[0]}'):
+                with bench.show(f'Checking geometry compatibility between {qid} and {self._qids[0]}'):
                     assert(
-                        shape == main_shape), 'qids do not share a common mask wcs -- this is required!'
+                        shape == main_shape), 'qids do not share pixel shape -- this is required!'
                     assert wcsutils.is_compatible(
-                        wcs, main_wcs), 'qids do not share a common mask wcs -- this is required!'
+                        wcs, main_wcs), 'qids do not share a common wcs -- this is required!'
         
         if return_geometry:
             return main_shape, main_wcs
@@ -168,7 +166,7 @@ class NoiseModel(ABC):
             possibly downgraded.
         """
 
-        # first check for mask compatibility and get map geometry
+        # first check for ivar compatibility and get map geometry
         full_shape, full_wcs = self._check_geometry()
 
         # allocate a buffer to accumulate all ivar maps in.
@@ -187,7 +185,6 @@ class NoiseModel(ABC):
                 # memory by downgrading one split at a time
                 for j in range(self._num_splits):
                     ivar = s_utils.read_map(self._data_model, qid, j, ivar=True)
-                    ivar = enmap.extract(ivar, full_shape, full_wcs)
                     ivar *= mul
 
                     # iteratively build the mask_observed at full resolution, 
@@ -203,9 +200,8 @@ class NoiseModel(ABC):
                             )
                     
                     # zero-out any numerical negative ivar
-                    ivar[ivar < 0] = 0
-                    
-                    ivars[i, j] = ivar
+                    ivar[ivar < 0] = 0                    
+                    ivars[i,j] = ivar
 
         with bench.show('Generating observed-pixels mask'):
             mask_observed = enmap.enmap(mask_observed, wcs=full_wcs, copy=False)
@@ -484,6 +480,10 @@ class NoiseModel(ABC):
             Sky mask. Dowgraded if requested.
         """
         with bench.show('Generating harmonic-filter-estimate mask'):
+
+            # first check for ivar compatibility and get map geometry
+            full_shape, full_wcs = self._check_geometry()
+
             for i, qid in enumerate(self._qids):
                 fn = simio.get_sim_mask_fn(
                     qid, self._data_model, use_default_mask=self._use_default_mask,
@@ -500,15 +500,18 @@ class NoiseModel(ABC):
                             mask, mask_est), 'qids do not share a common mask -- this is required!'
                         assert wcsutils.is_compatible(
                             mask.wcs, mask_est.wcs), 'qids do not share a common mask wcs -- this is required!'
-                        
+
+            # Extract mask onto geometry specified by the ivar map.
+            mask_est = enmap.extract(mask, full_shape, full_wcs)                                    
+            
             if self._downgrade != 1:
-                    mask_est = utils.interpol_downgrade_cc_quad(mask_est, self._downgrade)
+                mask_est = utils.interpol_downgrade_cc_quad(mask_est, self._downgrade)
 
-                    # to prevent numerical error, cut below a threshold
-                    mask_est[mask_est < min_threshold] = 0.
+                # to prevent numerical error, cut below a threshold
+                mask_est[mask_est < min_threshold] = 0.
 
-                    # to prevent numerical error, cut above a maximum
-                    mask_est[mask_est > max_threshold] = 1.
+                # to prevent numerical error, cut above a maximum
+                mask_est[mask_est > max_threshold] = 1.
 
         return mask_est
 
@@ -898,9 +901,9 @@ class TiledNoiseModel(NoiseModel):
 class WaveletNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, preload=True, ivar=None, mask_est=None,
-                calibrated=True, downgrade=1, lmax=None, mask_version=None, mask_name=None,
-                union_sources=None, notes=None, dtype=None, lamb=1.3, smooth_loc=False,
-                **kwargs):
+                 calibrated=True, downgrade=1, lmax=None, mask_version=None, mask_name=None,
+                 union_sources=None, notes=None, dtype=None, lamb=1.3, smooth_loc=False,
+                 fwhm_fact=2, **kwargs):
         """A WaveletNoiseModel object supports drawing simulations which capture scale-dependent, 
         spatially-varying map depth. They also capture the total noise power spectrum, and 
         array-array correlations.
@@ -954,6 +957,10 @@ class WaveletNoiseModel(NoiseModel):
         smooth_loc : bool, optional
             If passed, use smoothing kernel that varies over the map, smaller along edge of 
             mask, by default False.
+        fwhm_fact : float, optional
+            Factor determining smoothing scale at each wavelet scale:
+            FWHM = fact * pi / lmax, where lmax is the max wavelet ell.
+
         kwargs : dict, optional
             Optional keyword arguments to pass to simio.get_sim_mask_fn (currently just
             'galcut' and 'apod_deg'), by default None.
@@ -986,14 +993,15 @@ class WaveletNoiseModel(NoiseModel):
         # save model-specific info
         self._lamb = lamb
         self._smooth_loc = smooth_loc
+        self._fwhm_fact = fwhm_fact
 
     def _get_model_fn(self, split_num):
         """Get a noise model filename for split split_num; return as <str>"""
         return simio.get_wav_model_fn(
-            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, notes=self._notes,
-            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask,
-            mask_name=self._mask_name, calibrated=self._calibrated, downgrade=self._downgrade,
-            union_sources=self._union_sources, **self._kwargs
+            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, self._fwhm_fact, 
+            notes=self._notes, data_model=self._data_model, mask_version=self._mask_version,
+            bin_apod=self._use_default_mask, mask_name=self._mask_name, calibrated=self._calibrated,
+            downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
         )
 
     def _read_model(self, fn):
@@ -1023,7 +1031,7 @@ class WaveletNoiseModel(NoiseModel):
         
         sqrt_cov_mat, sqrt_cov_ell, w_ell = wav_noise.estimate_sqrt_cov_wav_from_enmap(
             dmap[:, split_num], self._mask_observed, self._lmax, self._mask_est, lamb=self._lamb,
-            smooth_loc=self._smooth_loc
+            smooth_loc=self._smooth_loc, fwhm_fact=self._fwhm_fact
         )
 
         return {
@@ -1042,10 +1050,11 @@ class WaveletNoiseModel(NoiseModel):
     def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num; return as <str>"""
         return simio.get_wav_sim_fn(
-            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, sim_num, alm=alm,
-            notes=self._notes, data_model=self._data_model, mask_version=self._mask_version,
-            bin_apod=self._use_default_mask, mask_name=self._mask_name, calibrated=self._calibrated,
-            downgrade=self._downgrade, union_sources=self._union_sources, mask_obs=mask_obs, **self._kwargs
+            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, self._fwhm_fact,
+            sim_num, alm=alm, notes=self._notes, data_model=self._data_model,
+            mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
+            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
+            mask_obs=mask_obs, **self._kwargs
         )
 
     def _get_sim(self, split_num, seed, mask=None, verbose=False):
