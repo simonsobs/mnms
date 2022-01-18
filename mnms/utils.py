@@ -1367,6 +1367,7 @@ def rfft(emap, omap=None, nthread=0, normalize=True, adjoint_ifft=False):
     if norm != 1: res *= norm
     return res
 
+# NOTE: irfft overwrites the emap buffer!
 def irfft(emap, omap=None, n=None, nthread=0, normalize=True, adjoint_fft=False):
     """Perform a 'real'-iFFT: an iFFT to recover a real-valued function, 
     over only half the usual frequency modes.
