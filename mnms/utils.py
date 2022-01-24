@@ -1684,3 +1684,33 @@ def crop_center(img, cropy, cropx=None):
 def cosine_apodize(bmask, width_deg):
     r = width_deg * np.pi / 180.
     return 0.5*(1 - np.cos(bmask.distance_transform(rmax=r) * (np.pi/r)))
+
+# ~copied from PSpipe.project.data_analysis.python.data_analysis_utils.py;
+# don't want PSpipe dependencies
+def pickup_filter(imap, vk_mask=None, hk_mask=None):
+    """Filter the map in Fourier space removing modes in a horizontal and vertical band
+    defined by hk_mask and vk_mask.
+    
+    Parameters
+    ---------
+    map: ``so_map``
+        the map to be filtered
+    vk_mask: list with 2 elements
+        format is fourier modes [-lx,+lx]
+    hk_mask: list with 2 elements
+        format is fourier modes [-ly,+ly]
+    """
+
+    ly, lx = enmap.laxes(imap.shape, imap.wcs)
+
+   # filtered_map = map.copy()
+    ft = enmap.fft(imap)
+    
+    if vk_mask is not None:
+        id_vk = np.where((lx > vk_mask[0]) & (lx < vk_mask[1]))
+        ft[..., id_vk] = 0.
+    if hk_mask is not None:
+        id_hk = np.where((ly > hk_mask[0]) & (ly < hk_mask[1]))
+        ft[..., id_hk, :] = 0.
+
+    return enmap.ifft(ft).real
