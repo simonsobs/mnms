@@ -798,6 +798,63 @@ def empty_downgrade_cc_quad(imap, dg):
     omap = enmap.empty(oshape, owcs, dtype=imap.dtype)
     return omap
 
+def fourier_downgrade_cc_quad(imap, dg, area_pow=-.5, dtype=None):
+    """Downgrade a map by Fourier resampling into a geometry that adheres
+    to Clenshaw-Curtis quadrature. This will bandlimit the input signal in 
+    Fourier space which may introduce ringing around bright objects, but 
+    will not introduce a pixel-window nor aliasing.
+
+    Parameters
+    ----------
+    imap : ndmap
+        Map to be downgraded.
+    dg : int or float
+        Downgrade factor.
+    area_pow : int or float, optional
+        The area scaling of the downgraded signal, by default -0.5. Output map
+        is multiplied by dg^(2*area_pow).
+    dtype : np.dtype, optional
+        If not None, cast the input map to this data type, by default None.
+        Useful for allowing boolean masks to be "interpolated."
+
+    Returns
+    -------
+    ndmap
+        The downgraded map. The unchanged input if dg <= 1.
+    """
+    if dg <= 1:
+        return imap
+    else:
+        # cast imap to dtype so now omap has omap dtype
+        if dtype is not None:
+            imap = imap.astype(dtype, copy=False)
+        ikmap = rfft(imap)
+
+        # create empty buffers for map and downgraded fourier space
+        omap = empty_downgrade_cc_quad(imap, dg)
+        okshape = (*omap.shape[:-2], omap.shape[-2], omap.shape[-1]//2 + 1)
+        okmap = enmap.empty(okshape, omap.wcs, dtype=ikmap.dtype)
+
+        # get fourier space selection tuples. if the output map is
+        # even in y, then we select :ny//2 and -ny//2:. if odd, then
+        # select :ny//2+1 and -ny//2:. in x we always select :nx
+        ny, nx = okshape[-2:]
+        if ny%2 == 0:
+            y_pos_sel = ny//2
+        else:
+            y_pos_sel = ny//2+1
+        y_neg_sel = ny//2
+        sels = [np.s_[..., :y_pos_sel, :nx], np.s_[..., -y_neg_sel:, :nx]]
+
+        # perform downgrade in fourier space
+        for sel in sels:
+            okmap[sel] = ikmap[sel]
+
+        # scale values by area factor, e.g. dg^0 if ivar maps
+        mult = dg ** (2*area_pow)
+
+        return mult * irfft(okmap, omap=omap)
+
 def harmonic_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None):
     """Downgrade a map by harmonic resampling into a geometry that adheres
     to Clenshaw-Curtis quadrature. This will bandlimit the input signal in 
@@ -893,16 +950,8 @@ def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
                 imap[preidx] = ndimage.uniform_filter(imap[preidx], size=dg, mode='wrap')
         
         omap = empty_downgrade_cc_quad(imap, dg)
-        thetas_in, phis_in = imap.posmap()
-        thetas_out, phis_out = omap.posmap()
-
-        # thetas, phis are 2D grids. need to make 1D
-        assert wcsutils.is_cyl(imap.wcs), 'imap must have cyl wcs'
-        assert wcsutils.is_cyl(omap.wcs), 'omap must have cyl wcs'
-        thetas_in = thetas_in[:, 0]
-        thetas_out = thetas_out[:, 0]
-        phis_in = phis_in[0]
-        phis_out = phis_out[0]
+        thetas_in, phis_in = imap.posaxes()
+        thetas_out, phis_out = omap.posaxes()
 
         # negate phi values if specified so that phis are strictly increasing
         if negative_cdelt_ra:
