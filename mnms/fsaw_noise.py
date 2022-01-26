@@ -11,19 +11,20 @@ from scipy.interpolate import interp1d
 class FSAWKernels:
 
     def __init__(self, lamb, lmax, lmin, lmax_j, n, full_shape, full_wcs,
-                 dtype=np.float32, iso_low=True, iso_high=True):
+                 dtype=np.float32, iso_low=True, iso_high=True, nthread=0):
         self._kf = KernelFactory(lamb, lmax, lmin, lmax_j, n, full_shape,
                                  full_wcs, dtype=dtype, iso_low=iso_low,
                                  iso_high=iso_high)
+        self._nthread = nthread
 
         # get all my kernels -- radial ordering
         self._kernels = {}
         for i in range(len(self._kf._rad_funcs)):
             if (i == 0 and iso_low) or (i == len(self._kf._rad_funcs)-1 and iso_high):
-                self._kernels[i, 0] = self._kf.get_kernel(i, 0)
+                self._kernels[i, 0] = self._kf.get_kernel(i, 0, nthread=nthread)
             else:
                 for j in range(n+1):
-                    self._kernels[i, j] = self._kf.get_kernel(i, j)
+                    self._kernels[i, j] = self._kf.get_kernel(i, j, nthread=nthread)
         self._num_kernels = len(self._kernels)
 
     def k2wav(self, kmap):
@@ -58,7 +59,8 @@ class FSAWKernels:
 
 class Kernel:
 
-    def __init__(self, k_kernel, sels=None, modlmap2=None, nthread=0, plot_wcs=None):
+    def __init__(self, k_kernel, sels=None, modlmap2=None, fwhm=None, plot_wcs=None,
+                 nthread=0):
         self._k_kernel = k_kernel
         self._k_kernel_conj = np.conj(k_kernel)
         assert k_kernel.ndim == 2, f'k_kernel must have 2 dims, got{k_kernel.ndim}'
@@ -76,6 +78,7 @@ class Kernel:
         self._sels = sels
 
         self._modlmap2 = modlmap2
+        self._fwhm = fwhm
         self._nthread = nthread
         if plot_wcs is None:
             pass
@@ -86,7 +89,6 @@ class Kernel:
             _shape = (*kmap.shape[:-2], *self._k_kernel.shape)
             _kmap = np.empty(_shape, dtype=self._k_kernel.dtype)
             for sel in self._sels:
-                # print(sel)
                 _kmap[sel] = self._k_kernel[sel] * kmap[sel]
             kmap = _kmap
         else:
@@ -110,9 +112,12 @@ class Kernel:
             kmap[sel] *= self._k_kernel_conj[sel]
         return kmap
 
-    def smooth_gauss(self, wmap, fwhm, inplace=True, kernel_modlmap2=None, full_modlmap2=None):
-        assert wmap.shape[-2:] == self._k_kernel.shape, \
-            f'wmap must have same shape[-2:] as k_kernel, got {wmap.shape}'
+    def smooth_gauss(self, wmap, kernel_modlmap2=None, full_modlmap2=None, fwhm=None, 
+                     fwhm_fact=2, inplace=True):
+        assert wmap.shape[-2] == self._k_kernel.shape[-2], \
+            f'wmap must have same shape[-2] as k_kernel, got {wmap.shape[-2]}'
+        assert wmap.shape[-1]//2+1 == self._k_kernel.shape[-1], \
+            f'wmap must have same shape[-1]//2+1 as k_kernel, got {wmap.shape[-1]//2+1}'
         if kernel_modlmap2 is not None:
             modlmap2 = kernel_modlmap2
         elif full_modlmap2 is not None:
@@ -123,9 +128,12 @@ class Kernel:
             modlmap2 = self._modlmap2
         assert modlmap2.shape[-2:] == self._k_kernel.shape, \
             f'modlmap2 must have same shape as k_kernel, got {modlmap2.shape}'
+
+        if fwhm is None:
+            fwhm = self._fwhm
                 
         kmap = utils.rfft(wmap, nthread=self._nthread)
-        sigma = fwhm / np.sqrt(2 * np.log(2)) / 2
+        sigma = fwhm_fact * fwhm / np.sqrt(2 * np.log(2)) / 2
         kmap *= np.exp(-0.5*modlmap2*sigma**2)
         if inplace:
             return utils.irfft(kmap, omap=wmap, nthread=self._nthread)
@@ -190,7 +198,11 @@ class KernelFactory:
         self._iso_low = iso_low
         self._iso_high = iso_high
 
-    def get_kernel(self, rad_idx, az_idx):
+        # # start building kernels and selection tuples
+        # for i, rad_func in enumerate(self._rad_funcs):
+        #     rad_kern = self._rad_funcs[i](self._modlmap).astype(self._dtype, copy=False)
+
+    def get_kernel(self, rad_idx, az_idx, nthread=0):
         rad_kern = self._rad_funcs[rad_idx](self._modlmap).astype(self._dtype, copy=False)
         if (rad_idx == 0 and self._iso_low) or \
             (rad_idx == len(self._rad_funcs)-1 and self._iso_high):
@@ -202,37 +214,41 @@ class KernelFactory:
         real_kern = rad_kern * az_kern
 
         # find the slices of the small kernel (odd y-axis size!)
-        x_sum = real_kern.sum(axis=0).astype(bool)
-        x_sum = np.nonzero(x_sum == False)[0]
-        if x_sum.size == 0: # no columns have all 0's
-            x_max = self._real_shape[1]
+        ny, nx = self._real_shape
+        x_sum = real_kern.astype(bool).sum(axis=0)
+        x_sum = np.nonzero(x_sum > 0)[0]
+        if x_sum.size == nx: # all columns in use
+            x_max = nx
         else:
-            x_max = x_sum.min() + 1 # for safety
+            assert x_sum.size >= 1, \
+                f'rad_idx {rad_idx}, az_idx {az_idx}, has empty kernel'
+            x_max = x_sum.max() + 1 # for safety
 
-        y_sum = real_kern.sum(axis=1).astype(bool)
-        y_sum_pos = np.nonzero(y_sum == False)[0]
-        y_sum_neg = np.nonzero(y_sum[::-1] == False)[0]
+        y_sum = real_kern.astype(bool).sum(axis=1)
+        y_sum_pos = np.nonzero(y_sum[:ny//2+1] > 0)[0]
+        y_sum_neg = np.nonzero(y_sum[:-(ny//2+1):-1] > 0)[0]
 
-        # either both or neither are empty
-        assert not np.logical_xor(y_sum_pos.size == 0, y_sum_neg.size == 0), \
+        # either both or neither are full
+        assert not np.logical_xor(y_sum_pos.size == ny//2+1, y_sum_neg.size == ny//2), \
             '0-cuts in y-direction of kernel must occur in both +y and -y'
         
-        if y_sum_pos.size == 0: # no rows have all 0's
-            y_max_pos = self._real_shape[0]
+        if y_sum_pos.size == ny//2+1: # all rows in use
+            y_max_pos = ny
             y_max_neg = 0
         else:
-            y_max_pos = y_sum_pos.min() + 1 # for safety
-            y_max_neg = y_sum_neg.min() + 1 # for safety
+            y_max_pos = y_sum_pos.max() + 1 # for safety
+            y_max_neg = y_sum_neg.max() + 1 # for safety
             
             # we did everything right if there is 1 more in y than x
             assert y_max_pos == y_max_neg + 1, \
                 f'y_max_pos and y_max_neg must differ in absval by 1, ' \
-                f'got {y_max_pos} and {y_max_neg}'
+                f'got {y_max_pos} and {y_max_neg} for rad_idx {rad_idx}, ' \
+                f'az_idx {az_idx}'
 
         # check to see if we just need the full shape at this point
         kern_shape = (
-            np.min([y_max_pos + y_max_neg, self._real_shape[0]]),
-            np.min([x_max, self._real_shape[1]])
+            np.min([y_max_pos + y_max_neg, ny]),
+            np.min([x_max, nx])
             )
         if kern_shape == self._real_shape:
             sels = [(Ellipsis,)] # get everything, insert everything
@@ -240,7 +256,7 @@ class KernelFactory:
             modlmap2 = self._modlmap**2
         else:
             # if y's are full but x's are clipped, then only need to slice in x
-            if (kern_shape[0] == self._real_shape[0]) and (kern_shape[1] != self._real_shape[1]):
+            if (kern_shape[0] == ny) and (kern_shape[1] != nx):
                 sels = [np.s_[..., :x_max],]
             # if y's are clipped, need to slice in y, and :x_max will work whether clipped or not
             else:
@@ -251,9 +267,12 @@ class KernelFactory:
                 kern[sel] = real_kern[sel]
                 modlmap2[sel] = self._modlmap[sel]**2
 
+        fwhm = np.pi / self._lmaxs[rad_idx]
+
         plot_pos = enmap.corners(self._full_shape, self._full_wcs, corner=False)
         # kernels have 2(rkx-1)+1 pixels in map space x direction
-        plot_shape = (kern_shape[0], 2*(kern.shape[1]-1) + 1)
-        _, plot_wcs = enmap.geometry(plot_pos, plot_shape) 
+        plot_shape = (kern_shape[0], 2*(kern_shape[1]-1) + 1)
+        _, plot_wcs = enmap.geometry(plot_pos, shape=plot_shape) 
 
-        return Kernel(kern, sels=sels, modlmap2=modlmap2, plot_wcs=plot_wcs)
+        return Kernel(kern, sels=sels, modlmap2=modlmap2, fwhm=fwhm, plot_wcs=plot_wcs,
+                      nthread=nthread)
