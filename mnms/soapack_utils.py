@@ -5,7 +5,7 @@ import re
 
 # helper functions to add features to soapack data models
 
-def read_map(data_model, qid, split_num=0, coadd=False, ivar=False, npass=4):
+def read_map(data_model, qid, split_num=0, coadd=False, ivar=False, **kwargs):
     """Read a map from disk according to the soapack data_model
     filename conventions.
 
@@ -23,15 +23,17 @@ def read_map(data_model, qid, split_num=0, coadd=False, ivar=False, npass=4):
     ivar : bool, optional
         If True, load the inverse-variance map for the qid and split. If False,
         load the source-free map for the same, by default False.
-    npass : int, optional
-        The npass of the data set, by default 4.
+    **kwargs : dict
+        Other keyword arguments (so besides 'qid', 'splitnum', 'ivar') for 
+        `get_map_fname` in soapack's data models (e.g. nPass).
 
     Returns
     -------
     enmap.ndmap
         The loaded map product, with at least 3 dimensions.
     """
-    map_fname = data_model.get_map_fname(qid, split_num, ivar, nPass=npass)
+
+    map_fname = data_model.get_map_fname(qid, split_num, ivar, **kwargs)
 
     # TODO: this is not ideal and soapack needs some major cleanup
     if coadd:
@@ -86,7 +88,7 @@ def get_src_fname(data_model, qid, split_num=0, coadd=False):
     
     return fname
 
-def read_map_geometry(data_model, qid, split_num=0, coadd=False, ivar=False, npass=4):
+def read_map_geometry(data_model, qid, split_num=0, coadd=False, ivar=False, **kwargs):
     """Read a map geometry from disk according to the soapack data_model
     filename conventions.
 
@@ -104,15 +106,17 @@ def read_map_geometry(data_model, qid, split_num=0, coadd=False, ivar=False, npa
     ivar : bool, optional
         If True, load the inverse-variance map for the qid and split. If False,
         load the source-free map for the same, by default False.
-    npass : int, optional
-        The npass of the data set, by default 4.
+    **kwargs : dict
+        Other keyword arguments (so besides 'qid', 'splitnum', 'ivar') for 
+        `get_map_fname` in soapack's data models (e.g. nPass).
 
     Returns
     -------
     tuple
         The loaded map product geometry, with at least 3 dimensions.
     """
-    map_fname = data_model.get_map_fname(qid, split_num, ivar, nPass=npass)
+
+    map_fname = data_model.get_map_fname(qid, split_num, ivar, **kwargs)
 
     # TODO: this is not ideal and soapack needs some major cleanup
     if coadd:

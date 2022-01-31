@@ -359,7 +359,8 @@ class NoiseModel(ABC):
 
         # get the conservative mask for estimating the harmonic filter used to whiten
         # the difference maps
-        self._mask_est = self._get_mask_est(min_threshold=1e-4)
+        if self._mask_est is None:
+            self._mask_est = self._get_mask_est(min_threshold=1e-4)
 
         for s in does_not_exist:
             with bench.show(f'Generating noise model for split {s}'):
