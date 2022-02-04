@@ -262,11 +262,11 @@ class KernelFactory:
                 # clipped or not
                 else:
                     sels = [np.s_[..., :y_max_pos, :x_max], np.s_[..., -y_max_neg:, :x_max]]
-                    _modlmap2 = np.empty(kern_shape, dtype=dtype)
-                    for sel in sels:
-                        _modlmap2[sel] = modlmap2[sel]
-                    self._sels.append(sels)
-                    self._modlmap2s.append(_modlmap2)
+                _modlmap2 = np.empty(kern_shape, dtype=dtype)
+                for sel in sels:
+                    _modlmap2[sel] = modlmap2[sel]
+                self._sels.append(sels)
+                self._modlmap2s.append(_modlmap2)
 
     def get_kernel(self, rad_idx, az_idx):
         if (rad_idx == 0 and self._iso_low) or \
