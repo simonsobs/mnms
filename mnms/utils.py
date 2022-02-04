@@ -1714,3 +1714,41 @@ def pickup_filter(imap, vk_mask=None, hk_mask=None):
         ft[..., id_hk, :] = 0.
 
     return enmap.ifft(ft).real
+
+# copied from https://github.com/amaurea/tenki/blob/master/filter_pickup.py,
+# commit 2ddafa9; don't want tenki dependencies
+def build_filter(shape, wcs, lbounds, dtype=np.float32):
+	# Intermediate because the filter we're applying is for a systematic that
+	# isn't on the curved sky.
+	ly, lx  = enmap.laxes(shape, wcs) #, method="intermediate")
+	ly, lx  = [a.astype(dtype) for a in [ly,lx]]
+	lbounds = np.asarray(lbounds).astype(dtype)
+	if lbounds.ndim < 2:
+		lbounds = np.broadcast_to(lbounds, (1,2))
+	if lbounds.ndim > 2 or lbounds.shape[-1] != 2:
+		raise ValueError("lbounds must be [:,{ly,lx}]")
+	filter = enmap.ones(shape[-2:], wcs, dtype)
+	# Apply the filters
+	for i , (ycut, xcut) in enumerate(lbounds):
+		filter *= 1-(np.exp(-0.5*(ly/ycut)**2)[:,None]*np.exp(-0.5*(lx/xcut)**2)[None,:])
+	return filter
+
+def filter_simple(imap, filter):
+	return enmap.ifft(enmap.fft(imap)*filter).real
+
+def filter_weighted(imap, ivar, filter, tol=1e-4, ref=0.9):
+	"""Filter enmap imap with the given 2d fourier filter while
+	weithing spatially with ivar"""
+	filter = 1-filter
+	omap   = enmap.ifft(filter*enmap.fft(imap*ivar)).real
+	div    = enmap.ifft(filter*enmap.fft(     ivar)).real
+	del filter
+	# Avoid division by very low values
+	div    = np.maximum(div, np.percentile(ivar[::10,::10],ref*100)*tol)
+	# omap = imap - rhs/div
+	omap /= div
+	del div
+	omap *= -1
+	omap += imap
+	omap *= imap != 0
+	return omap
