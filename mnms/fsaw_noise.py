@@ -257,7 +257,7 @@ class KernelFactory:
             else:
                 # if y's are full but x's are clipped, then only need to slice in x
                 if (kern_shape[0] == ny) and (kern_shape[1] != nx):
-                    self._sels.append([np.s_[..., :x_max],])
+                    sels = [np.s_[..., :x_max],]
                 # if y's are clipped, need to slice in y, and :x_max will work whether
                 # clipped or not
                 else:
