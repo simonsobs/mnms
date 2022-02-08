@@ -513,6 +513,67 @@ def lmax_from_wcs(wcs):
     """Returns 180/wcs.cdelt[1]; this is twice the theoretical CAR bandlimit"""
     return int(180/np.abs(wcs.wcs.cdelt[1]))
 
+# further extended here for ffts
+def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0):
+    """Filter a map by an isotropic function of harmonic ell.
+
+    Parameters
+    ----------
+    imap : ndmap
+        Maps to be filtered.
+    lfilter : array-like or callable
+        If callable, will be evaluated over range(lmax+1) if 'curvedsky'
+        and imap.modlmap() if 'fft'. If array-like or after being called, 
+        lfilter.shape[:-1] must broadcast with imap.shape[:-2].
+    mode : str, optional
+        The convolution space: 'curvedsky' or 'fft', by default 'curvedsky'.
+    ainfo : sharp.alm_info, optional
+        Info for the alms, by default None.
+    lmax : int, optional
+        Bandlimit of transforms, by default None. If None, will 
+        be the result of lmax_from_wcs(imap.wcs)
+    nthread : int, optional
+        Threads to use in FFTs, by default 0. If 0, will be
+        the result of get_cpu_count()
+
+    Returns
+    -------
+    ndmap
+        Imap filtered by lfilter.
+    """
+    if mode == 'fft':
+        kmap = rfft(imap, nthread=nthread)
+        if callable(lfilter):
+            modlmap = imap.modlmap().astype(imap.dtype, copy=False) # modlmap is np.float64 always...
+            modlmap = modlmap[..., :modlmap.shape[-1]//2+1] # need "real" modlmap
+            lfilter = lfilter(modlmap) 
+        return irfft(kmap * lfilter, n=imap.shape[-1], nthread=nthread)
+
+    elif mode == 'curvedsky':
+        # get the lfilter, which might be different per pol component
+        if lmax is None:
+            lmax = lmax_from_wcs(imap.wcs)
+        if callable(lfilter):
+            lfilter = lfilter(np.arange(lmax+1)).astype(imap.dtype)
+        
+        # alm_c_utils.lmul cannot blindly broadcast filters and alms
+        lfilter = np.broadcast_to(lfilter, (*imap.shape[:-2], lfilter.shape[-1]))
+
+        # perform the filter
+        alm = map2alm(imap, ainfo=ainfo, lmax=lmax)
+
+        if ainfo is None:
+            ainfo = sharp.alm_info(lmax)
+        for preidx in np.ndindex(imap.shape[:-2]):
+            assert alm[preidx].ndim == 1
+            assert lfilter[preidx].ndim == 1
+            alm[preidx] = alm_c_utils.lmul(
+                alm[preidx], lfilter[preidx], ainfo
+                )
+
+        omap = enmap.empty(imap.shape, imap.wcs, dtype=imap.dtype)
+        return alm2map(alm, omap, ainfo=ainfo)
+
 # forces shape to (num_arrays, num_splits, num_pol, ny, nx) and optionally averages over splits
 def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=True, per_split=True, mode='curvedsky',
                 lmax=None, ainfo=None, ledges=None, weights=None, nthread=0):
@@ -583,7 +644,7 @@ def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=True, per_spl
             smap = smap.mean(axis=-4, keepdims=True).real
 
         # bin the 2D power into ledges and take the square-root
-        modlmap = smap.modlmap().astype(imap.dtype) # modlmap is np.float64 always...
+        modlmap = smap.modlmap().astype(imap.dtype, copy=False) # modlmap is np.float64 always...
         smap = radial_bin(smap, modlmap, ledges, weights=weights) ** 0.5
         sqrt_cls = []
         lfuncs = []
@@ -1016,64 +1077,6 @@ def recenter_coords(theta, phi):
     phi -= mult[1] * 360
 
     return theta, phi
-
-# further extended here for ffts
-def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0):
-    """Filter a map by an isotropic function of harmonic ell.
-
-    Parameters
-    ----------
-    imap : ndmap
-        Maps to be filtered.
-    lfilter : array-like or callable
-        If callable, will be evaluated over range(lmax+1) if 'curvedsky'
-        and imap.modlmap() if 'fft'. If array-like or after being called, 
-        lfilter.shape[:-1] must broadcast with imap.shape[:-2].
-    mode : str, optional
-        The convolution space: 'curvedsky' or 'fft', by default 'curvedsky'.
-    ainfo : sharp.alm_info, optional
-        Info for the alms, by default None.
-    lmax : int, optional
-        Bandlimit of transforms, by default None. If None, will 
-        be the result of lmax_from_wcs(imap.wcs)
-    nthread : int, optional
-        Threads to use in FFTs, by default 0. If 0, will be
-        the result of get_cpu_count()
-
-    Returns
-    -------
-    ndmap
-        Imap filtered by lfilter.
-    """
-    if mode == 'fft':
-        kmap = enmap.fft(imap, nthread=nthread)
-        if callable(lfilter):
-            lfilter = lfilter(imap.modlmap().astype(imap.dtype)) # modlmap is np.float64 always...
-        return enmap.ifft(kmap * lfilter, nthread=nthread).real
-    elif mode == 'curvedsky':
-        # get the lfilter, which might be different per pol component
-        if lmax is None:
-            lmax = lmax_from_wcs(imap.wcs)
-        if callable(lfilter):
-            lfilter = lfilter(np.arange(lmax+1)).astype(imap.dtype)
-        
-        # alm_c_utils.lmul cannot blindly broadcast filters and alms
-        lfilter = np.broadcast_to(lfilter, (*imap.shape[:-2], lfilter.shape[-1]))
-
-        # perform the filter
-        alm = map2alm(imap, ainfo=ainfo, lmax=lmax)
-
-        if ainfo is None:
-            ainfo = sharp.alm_info(lmax)
-        for preidx in np.ndindex(imap.shape[:-2]):
-            assert alm[preidx].ndim == 1
-            assert lfilter[preidx].ndim == 1
-            alm[preidx] = alm_c_utils.lmul(
-                alm[preidx], lfilter[preidx], ainfo
-                )
-
-        omap = enmap.empty(imap.shape, imap.wcs, dtype=imap.dtype)
-        return alm2map(alm, omap, ainfo=ainfo)
 
 def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
     lmin = center - width/2

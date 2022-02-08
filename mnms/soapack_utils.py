@@ -25,7 +25,7 @@ def read_map(data_model, qid, split_num=0, coadd=False, ivar=False, **kwargs):
         load the source-free map for the same, by default False.
     **kwargs : dict
         Other keyword arguments (so besides 'qid', 'splitnum', 'ivar') for 
-        `get_map_fname` in soapack's data models (e.g. nPass).
+        `get_map_fname` in soapack's data models.
 
     Returns
     -------
@@ -43,7 +43,7 @@ def read_map(data_model, qid, split_num=0, coadd=False, ivar=False, **kwargs):
 
     # dr6 releases have no srcfree maps, need to build by-hand
     # TODO: this is not ideal and soapack needs some major cleanup
-    if isinstance(data_model, DR6v3) and not ivar:
+    if isinstance(data_model, DR6v3) and qid not in DR6v3().dpatches and not ivar:
         src_fname = get_src_fname(data_model, qid, split_num=split_num, coadd=coadd)
         omap -= enmap.read_map(src_fname)
 
