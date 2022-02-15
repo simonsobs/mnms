@@ -26,7 +26,7 @@ class NoiseModel(ABC):
 
     def __init__(self, *qids, data_model=None, preload=True, ivar=None, mask_est=None,
                 calibrated=True, downgrade=1, lmax=None, mask_version=None, mask_name=None,
-                union_sources=None, notes=None, dtype=None, **kwargs):
+                union_sources=None, kfilt_lbounds=None, notes=None, dtype=None, **kwargs):
         """Base class for all NoiseModel subclasses. Supports loading raw data necessary for all 
         subclasses, such as masks and ivars. Also defines some class methods usable in subclasses.
 
@@ -67,6 +67,9 @@ class NoiseModel(ABC):
             If None, a default mask will be loaded from disk.
         union_sources : str, optional
             A soapack source catalog, by default None. If given, inpaint data and ivar maps.
+        kfilt_lbounds : size-2 iterable, optional
+            The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
+            If given, filter data before (possibly) downgrading it. 
         notes : str, optional
             A descriptor string to differentiate this instance from
             otherwise identical instances, by default None.
@@ -94,6 +97,9 @@ class NoiseModel(ABC):
         self._mask_name = mask_name
         self._notes = notes
         self._union_sources = union_sources
+        if kfilt_lbounds is not None:
+            kfilt_lbounds = np.array(kfilt_lbounds).reshape(2)
+        self._kfilt_lbounds = kfilt_lbounds
         self._kwargs = kwargs
         self._dtype = dtype if dtype is not None else self._data_model.dtype
 
@@ -299,20 +305,20 @@ class NoiseModel(ABC):
         >>> tnm._action_str('s18_03')
         >>> 'Loading, inpainting, downgrading imap for s18_03'
         """
+        ostr = 'Loading'
         if ivar:
             if self._downgrade != 1:
-                return f'Loading, downgrading ivar for {qid}'
-            else:
-                return f'Loading ivar for {qid}'
+                ostr += ', downgrading'
+            ostr += f' ivar for {qid}'
         else:
-            if self._downgrade != 1 and self._union_sources:
-                return f'Loading, inpainting, downgrading imap for {qid}'
-            elif self._downgrade != 1 and not self._union_sources:
-                return f'Loading, downgrading imap for {qid}'
-            elif self._downgrade == 1 and self._union_sources:
-                return f'Loading, inpainting imap for {qid}'
-            else:
-                return f'Loading imap for {qid}'
+            if self._union_sources:
+                ostr += ', inpainting'
+            if self._kfilt_lbounds is not None:
+                ostr += ', kspace filtering'
+            if self._downgrade != 1:
+                ostr += ', downgrading'
+            ostr += f' imap for {qid}'
+        return ostr
 
     def get_model(self, check_on_disk=True, write=True, keep_model=False, keep_data=False, 
                   verbose=False, **kwargs):
@@ -387,6 +393,12 @@ class NoiseModel(ABC):
         # allocate a buffer to accumulate all difference maps in.
         # this has shape (nmaps, nsplits, npol, ny, nx).
         dmaps = self._empty(ivar=False)
+
+        # all filtering operations use the same filter
+        if self._kfilt_lbounds is not None:
+            filt = utils.build_filter(
+                full_shape, full_wcs, self._kfilt_lbounds, self._dtype
+                )
     
         for i, qid in enumerate(self._qids):
             with bench.show(self._action_str(qid, ivar=False)):
@@ -402,22 +414,29 @@ class NoiseModel(ABC):
                 cmap = enmap.extract(cmap, full_shape, full_wcs) 
                 cmap *= mul_imap
 
+                # need full-res coadd ivar if kspace filtering
+                if self._kfilt_lbounds is not None:
+                    cvar = s_utils.read_map(self._data_model, qid, coadd=True, ivar=True)
+                    cvar = enmap.extract(cvar, full_shape, full_wcs)
+                    cvar *= mul_ivar
+
                 # we want to do this split-by-split in case we can save
                 # memory by downgrading one split at a time
                 for j in range(self._num_splits):
                     imap = s_utils.read_map(self._data_model, qid, j, ivar=False)
                     imap = enmap.extract(imap, full_shape, full_wcs) 
                     imap *= mul_imap
-                    
-                    if self._union_sources:
+
+                    # need to reload ivar at full res if inpainting or kspace filtering
+                    if self._union_sources or self._kfilt_lbounds:
                         if self._downgrade != 1:
-                            # need to reload ivar at full res
                             ivar = s_utils.read_map(self._data_model, qid, j, ivar=True)
                             ivar = enmap.extract(ivar, full_shape, full_wcs)
                             ivar *= mul_ivar
                         else:
                             ivar = self._ivar[i, j]
 
+                    if self._union_sources:
                         # the boolean mask for this array, split, is non-zero ivar.
                         # iteratively build the boolean mask at full resolution, 
                         # loop over leading dims. this really should be a singleton
@@ -428,12 +447,18 @@ class NoiseModel(ABC):
                             
                         self._inpaint(imap, ivar, mask_bool, qid=qid, split_num=j) 
 
+                    dmap = imap - cmap
+
+                    if self._kfilt_lbounds is not None:
+                        ivar_eff = utils.get_ivar_eff(ivar, sum_ivar=cvar, use_zero=True)
+                        dmap = utils.filter_weighted(dmap, ivar_eff, filt)
+
                     if self._downgrade != 1:
                         dmaps[i, j] = utils.harmonic_downgrade_cc_quad(
-                            imap - cmap, self._downgrade
+                            dmap, self._downgrade
                         )
                     else:
-                        dmaps[i, j] = imap - cmap
+                        dmaps[i, j] = dmap
     
         return dmaps*self._mask_observed
 
@@ -548,14 +573,14 @@ class NoiseModel(ABC):
         try:
             self._get_model_from_disk(split_num, keep_model=keep_model)
             return True
-        except (FileNotFoundError, OSError):
+        except (FileNotFoundError, OSError) as e:
             fn = self._get_model_fn(split_num)
             if generate:
                 print(f'Model for split {split_num} not found on-disk, generating instead')
                 return False
             else:
                 print(f'Model for split {split_num} not found on-disk, please generate it first')
-                raise FileNotFoundError(fn)
+                raise FileNotFoundError(fn) from e
 
     def _get_model_from_disk(self, split_num, keep_model=True):
         """Load a sqrt-covariance matrix from disk. If keep_model, store it in instance attributes."""
@@ -730,7 +755,7 @@ class TiledNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, preload=True, ivar=None, mask_est=None,
                 calibrated=True, downgrade=1, lmax=None, mask_version=None, mask_name=None,
-                union_sources=None, notes=None, dtype=None, width_deg=4., height_deg=4.,
+                union_sources=None, kfilt_lbounds=None, notes=None, dtype=None, width_deg=4., height_deg=4.,
                 delta_ell_smooth=400, **kwargs):
         """A TiledNoiseModel object supports drawing simulations which capture spatially-varying
         noise correlation directions in map-domain data. They also capture the total noise power
@@ -777,7 +802,10 @@ class TiledNoiseModel(NoiseModel):
             Name of mask file, by default None.
             If None, a default mask will be loaded from disk.
         union_sources : str, optional
-            A soapack source catalog, by default None.
+            A soapack source catalog, by default None. If given, inpaint data and ivar maps.
+        kfilt_lbounds : size-2 iterable, optional
+            The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
+            If given, filter data before (possibly) downgrading it. 
         notes : str, optional
             A descriptor string to differentiate this instance from
             otherwise identical instances, by default None.
@@ -817,7 +845,8 @@ class TiledNoiseModel(NoiseModel):
         super().__init__(
             *qids, data_model=data_model, preload=preload, ivar=ivar, mask_est=mask_est,
             calibrated=calibrated, downgrade=downgrade, lmax=lmax, mask_version=mask_version,
-            mask_name=mask_name, union_sources=union_sources, notes=notes, dtype=dtype, **kwargs
+            mask_name=mask_name, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
+            notes=notes, dtype=dtype, **kwargs
         )
 
         # save model-specific info
@@ -830,7 +859,8 @@ class TiledNoiseModel(NoiseModel):
         return simio.get_tiled_model_fn(
             self._qids, split_num, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, notes=self._notes,
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
-            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
+            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
+            kfilt_lbounds=self._kfilt_lbounds, **self._kwargs
         )
 
     def _read_model(self, fn):
@@ -874,7 +904,8 @@ class TiledNoiseModel(NoiseModel):
         return simio.get_tiled_sim_fn(
             self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, split_num, sim_num, alm=alm, notes=self._notes,
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
-            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, mask_obs=mask_obs, **self._kwargs
+            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, kfilt_lbounds=self._kfilt_lbounds,
+            mask_obs=mask_obs, **self._kwargs
         )
 
     def _get_sim(self, split_num, seed, mask=None, verbose=False):
@@ -903,7 +934,7 @@ class WaveletNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, preload=True, ivar=None, mask_est=None,
                  calibrated=True, downgrade=1, lmax=None, mask_version=None, mask_name=None,
-                 union_sources=None, notes=None, dtype=None, lamb=1.3, smooth_loc=False,
+                 union_sources=None, kfilt_lbounds=None, notes=None, dtype=None, lamb=1.3, smooth_loc=False,
                  fwhm_fact=2, **kwargs):
         """A WaveletNoiseModel object supports drawing simulations which capture scale-dependent, 
         spatially-varying map depth. They also capture the total noise power spectrum, and 
@@ -946,7 +977,10 @@ class WaveletNoiseModel(NoiseModel):
             Name of mask file, by default None.
             If None, a default mask will be loaded from disk.
         union_sources : str, optional
-            A soapack source catalog, by default None.
+            A soapack source catalog, by default None. If given, inpaint data and ivar maps.
+        kfilt_lbounds : size-2 iterable, optional
+            The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
+            If given, filter data before (possibly) downgrading it. 
         notes : str, optional
             A descriptor string to differentiate this instance from
             otherwise identical instances, by default None.
@@ -988,7 +1022,8 @@ class WaveletNoiseModel(NoiseModel):
         super().__init__(
             *qids, data_model=data_model, preload=preload, ivar=ivar, mask_est=mask_est,
             calibrated=calibrated, downgrade=downgrade, lmax=lmax, mask_version=mask_version,
-            mask_name=mask_name, union_sources=union_sources, notes=notes, dtype=dtype, **kwargs
+            mask_name=mask_name, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
+            notes=notes, dtype=dtype, **kwargs
         )
 
         # save model-specific info
@@ -1002,7 +1037,8 @@ class WaveletNoiseModel(NoiseModel):
             self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, self._fwhm_fact, 
             notes=self._notes, data_model=self._data_model, mask_version=self._mask_version,
             bin_apod=self._use_default_mask, mask_name=self._mask_name, calibrated=self._calibrated,
-            downgrade=self._downgrade, union_sources=self._union_sources, **self._kwargs
+            downgrade=self._downgrade, union_sources=self._union_sources, kfilt_lbounds=self._kfilt_lbounds,
+            **self._kwargs
         )
 
     def _read_model(self, fn):
@@ -1055,7 +1091,7 @@ class WaveletNoiseModel(NoiseModel):
             sim_num, alm=alm, notes=self._notes, data_model=self._data_model,
             mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
             calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
-            mask_obs=mask_obs, **self._kwargs
+            kfilt_lbounds=self._kfilt_lbounds, mask_obs=mask_obs, **self._kwargs
         )
 
     def _get_sim(self, split_num, seed, mask=None, verbose=False):
