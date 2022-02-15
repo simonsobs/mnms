@@ -21,6 +21,9 @@ parser.add_argument('--notes',dest='notes',type=str,default=None,help='a simple 
 parser.add_argument('--union-sources', dest='union_sources', type=str, default=None,
                     help="Version string for soapack's union sources. E.g. " 
                     "'20210209_sncut_10_aggressive'. Will be used for inpainting.")
+parser.add_argument('--kfilt-lbounds', dest='kfilt_lbounds', nargs='+', type=float, default=None,
+                    help="The ly, lx scale for an ivar-weighted Gaussian kspace filter. E.g. " 
+                    "'4000 5'. Will be used for kspace filtering.")
 parser.add_argument('--data-model',dest='data_model',type=str,default=None,help='soapack DataModel class to use (default: %(default)s)')
 args = parser.parse_args()
 
@@ -31,6 +34,6 @@ else:
     
 model = nm.TiledNoiseModel(
     *args.qid, data_model=data_model, downgrade=args.downgrade, lmax=args.lmax, mask_version=args.mask_version,
-    mask_name=args.mask_name, union_sources=args.union_sources, notes=args.notes, width_deg=args.width_deg, height_deg=args.height_deg,
-    delta_ell_smooth=args.delta_ell_smooth)
+    mask_name=args.mask_name, union_sources=args.union_sources, kfilt_lbounds=args.kfilt_lbounds, notes=args.notes, 
+    width_deg=args.width_deg, height_deg=args.height_deg, delta_ell_smooth=args.delta_ell_smooth)
 model.get_model(check_on_disk=True, verbose=True)

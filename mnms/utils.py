@@ -315,7 +315,7 @@ def get_coadd_map(imap, ivar):
         coadd =  enmap.ndmap(coadd, wcs)
     return coadd
 
-def get_ivar_eff(ivar, use_inf=False):
+def get_ivar_eff(ivar, sum_ivar=None, use_inf=False, use_zero=False):
     """
     Return ivar_eff = 1 / (1 / ivar - 1 / sum_ivar), 
     where sum_ivar is the sum over splits.
@@ -324,22 +324,32 @@ def get_ivar_eff(ivar, use_inf=False):
     ----------
     ivar : (..., nsplit, 1, ny, nx) ndmap
         Inverse variance maps for N splits.
+    sum_ivar : (..., nsplit, 1, ny, nx) ndmap, optional
+        Sum of the inverse variance maps for N splits.
     use_inf : bool, optional
         If set, use np.inf for values that approach infinity, 
         instead of large numerical values.
+    use_zero : bool, optional
+        If set, use 0.0 for values that approach infinity,
+        instead of np.inf or large numerical values.
     
     Returns
     -------
     ivar_eff : (..., nsplit, 1, ny, nx) enmap
         Ivar_eff for each split.
     """
+    assert not (use_inf and use_zero), \
+        'Both use_inf and use_zero are True, but this is impossible'
 
     # Make 4d by prepending splits along -4 axis.
     ivar = atleast_nd(ivar, 4) 
+    if sum_ivar is not None:
+        sum_ivar = atleast_nd(sum_ivar, 4)
+    else:
+        sum_ivar = np.sum(ivar, axis=-4, keepdims=True)
 
     # We want to calculate 1 / (1/ivar - 1/sum(ivar). It easier to do 
     # ivar * sum(ivar) / (sum(ivar) - ivar) to avoid (some) divisions by zero.
-    sum_ivar = np.sum(ivar, axis=-4, keepdims=True)
     num = sum_ivar * ivar # Numerator.
     den = sum_ivar - ivar # Denominator.
 
@@ -349,6 +359,8 @@ def get_ivar_eff(ivar, use_inf=False):
 
     if use_inf:
         out[~mask] = np.inf
+    if use_zero:
+        out[~mask] = 0.0
     else:
         # Fill with largest value allowed by dtype to mimic np.nan_to_num.
         out[~mask] = np.finfo(out.dtype).max
@@ -1723,7 +1735,7 @@ def pickup_filter(imap, vk_mask=None, hk_mask=None):
 def build_filter(shape, wcs, lbounds, dtype=np.float32):
 	# Intermediate because the filter we're applying is for a systematic that
 	# isn't on the curved sky.
-	ly, lx  = enmap.laxes(shape, wcs) #, method="intermediate")
+	ly, lx  = enmap.laxes(shape, wcs, method="intermediate")
 	ly, lx  = [a.astype(dtype) for a in [ly,lx]]
 	lbounds = np.asarray(lbounds).astype(dtype)
 	if lbounds.ndim < 2:

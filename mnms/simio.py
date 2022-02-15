@@ -26,8 +26,9 @@ def get_sim_mask_fn(qid, data_model, use_default_mask=True, mask_version=None, m
             mask_name += '.fits'
         return f'{fbase}{mask_version}/{mask_name}'
 
-def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=True, mask_name=None,
-                     galcut=None, apod_deg=None, calibrated=None, downgrade=None, union_sources=None):
+def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=True,
+                     mask_name=None, galcut=None, apod_deg=None, calibrated=None,
+                     downgrade=None, union_sources=None, kfilt_lbounds=None):
     '''
     '''
     qid = '_'.join(qid)
@@ -58,7 +59,13 @@ def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=True, mask_nam
     else:
         inpaint_flag = f'ip{union_sources}_'
 
-    fn = f'{qid}_{data_model.name}_{mask_version}_{mask_flag}cal_{calibrated}_{dg_flag}{inpaint_flag}'
+    if kfilt_lbounds is None:
+        kfilt_flag = ''
+    else:
+        ycut, xcut = kfilt_lbounds
+        kfilt_flag = f'lyfilt{ycut}_lxfilt{xcut}_'
+
+    fn = f'{qid}_{data_model.name}_{mask_version}_{mask_flag}cal_{calibrated}_{dg_flag}{inpaint_flag}{kfilt_flag}'
     return fn
 
 def get_tiled_model_fn(qid, split_num, width_deg, height_deg, delta_ell_smooth, lmax, notes=None, **kwargs):
