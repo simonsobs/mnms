@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
-from pixell import enmap, utils
-from mnms import utils as tnu, mpi
-
+from mnms import utils
 import numpy as np
-from scipy.interpolate import RectBivariateSpline as rectinterp
 
 # Some utilities for calculating effective mode coupling matrices in 2D Fourier space
 # Currently, only supports matrices which are formed as outerproducts of two vectors
 # If want general mode coupling matrices, would need to write a C extension because things
 # won't separate nicely and you'll have to do a full sum
 
-def get_outer_mask(arr1, arr2=None):
+def get_outer_mask_from_vecs(arr1, arr2=None):
     arr1 = np.atleast_1d(arr1)
     if arr2 is None:
         arr2 = arr1
@@ -22,8 +19,8 @@ def get_outer_mask(arr1, arr2=None):
 
 def get_vecs_from_outer_mask(mask):
     Ny, Nx = mask.shape
-    arr1 = mask[Ny//2]
-    arr2 = mask[:, Nx//2]
+    arr1 = mask[:, Nx//2]
+    arr2 = mask[Ny//2]
     return arr1, arr2
 
 def get_1d_kernel(arr1):
@@ -31,7 +28,7 @@ def get_1d_kernel(arr1):
     assert arr1.ndim == 1
     
     fnorm = np.abs(np.fft.fft(arr1) / arr1.size)**2
-    kernel = np.zeros((fnorm.size, fnorm.size))
+    kernel = np.zeros((fnorm.size, fnorm.size), dtype=arr1.dtype)
     for i in range(fnorm.size):
         for j in range(fnorm.size):
             kernel[i, j] = fnorm[i - j]
@@ -49,7 +46,7 @@ def get_binned_1d_kernel(kernel, bin_slices):
             binned_kernel[i, j] = kernel[bin_slices[i], bin_slices[j]].sum() / nperbin
     return binned_kernel
 
-def get_mcm(arr1, arr2=None, bin_slices1=None, bin_slices2=None):
+def get_kernels(arr1, arr2=None, bin_slices1=None, bin_slices2=None):
     arr1 = np.atleast_1d(arr1)
     if arr2 is None:
         square = True
@@ -72,13 +69,18 @@ def get_mcm(arr1, arr2=None, bin_slices1=None, bin_slices2=None):
         if bin_slices2 is not None:
             kernel2 = get_binned_1d_kernel(kernel2, bin_slices2)
 
+    return kernel1, kernel2
+
+def get_mcm(arr1, arr2=None, bin_slices1=None, bin_slices2=None):
+    kernel1, kernel2 = get_kernels(
+        arr1, arr2=arr2, bin_slices1=bin_slices1, bin_slices2=bin_slices2
+        )
+
     # kernel1 is M_yy' and kernel2 is M_xx', we want M_yxy'x'
     return np.einsum('Yy,Xx->YXyx', kernel1, kernel2)
 
-def get_inv_mcm(arr1, arr2=None, bin_slices1=None, bin_slices2=None, verbose=False):
+def get_inv_mcm_brute_force(arr1, arr2=None, bin_slices1=None, bin_slices2=None, verbose=False):
     M = get_mcm(arr1, arr2=arr2, bin_slices1=bin_slices1, bin_slices2=bin_slices2)
-    assert M.ndim == 4
-    assert M.shape[0] == M.shape[2] and M.shape[1] == M.shape[3]
     Ny = M.shape[0]
     Nx = M.shape[1]
     M = M.reshape(Ny*Nx, Ny*Nx)
@@ -87,12 +89,14 @@ def get_inv_mcm(arr1, arr2=None, bin_slices1=None, bin_slices2=None, verbose=Fal
     M = np.linalg.inv(M)
     return M.reshape(Ny, Nx, Ny, Nx)
 
-def get_uniform_bin_slices(arr1, nbins):
-    arr1 = np.atleast_1d(arr1)
-    assert arr1.ndim == 1
-
-    npix = arr1.size
-    counts, displs = mpi.mpi_distribute(npix, nbins)
-    slices = tuple(slice(d, d + counts[i]) for i, d in enumerate(displs))
-    return slices
-
+def get_inv_mcm(arr1, arr2=None, bin_slices1=None, bin_slices2=None, verbose=False):
+    kernel1, kernel2 = get_kernels(
+        arr1, arr2=arr2, bin_slices1=bin_slices1, bin_slices2=bin_slices2
+        )
+    if verbose:
+        print(f'Condition number of kernel1 is {np.round(np.linalg.cond(kernel1), 3)}\n' 
+              f'Condition number of kernel2 is {np.round(np.linalg.cond(kernel2), 3)}')
+    k1_inv = np.linalg.inv(kernel1)
+    k2_inv = np.linalg.inv(kernel2)
+    M = np.einsum('Yy,Xx->YXyx', k1_inv, k2_inv)
+    return M
