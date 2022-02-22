@@ -37,7 +37,7 @@ Tests are being built and may not work properly. A good sanity check that your i
 ## Setup
 This package looks for raw data and saves products using the functionality in `soapack`. Users must create the following file in their home directory:
 ```
-mkdir ~/.soapack.yml
+.soapack.yml
 ```
 Currently only raw ACT data is supported. Users must configure their `soapack` configuration file accordingly: there must be a `dr5` and/or `dr6` and/or `dr6v3` block that points to raw data on disk. Required fields within this block are `coadd_input_path`, `coadd_output_path`, `coadd_beam_path`, `planck_path`, `mask_path`. Optionally users can add a `default_mask_version` field or accept the `soapack` default of `masks_20200723`. Further details can be gleaned from the `soapack` [source](https://github.com/simonsobs/soapack/blob/master/soapack/interfaces.py). Sample configuration files with prepopulated paths to raw data for various clusters can be found [in this repository](https://github.com/ACTCollaboration/soapack_configs).
 
