@@ -526,7 +526,7 @@ def lmax_from_wcs(wcs):
     return int(180/np.abs(wcs.wcs.cdelt[1]))
 
 # further extended here for ffts
-def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0):
+def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0, tweak=False):
     """Filter a map by an isotropic function of harmonic ell.
 
     Parameters
@@ -547,6 +547,9 @@ def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0
     nthread : int, optional
         Threads to use in FFTs, by default 0. If 0, will be
         the result of get_cpu_count()
+    tweak : bool, optional
+        Whether to allow map2alm to shift the map to match a libsharp quadrature
+        rule, by default False.
 
     Returns
     -------
@@ -572,7 +575,7 @@ def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0
         lfilter = np.broadcast_to(lfilter, (*imap.shape[:-2], lfilter.shape[-1]))
 
         # perform the filter
-        alm = map2alm(imap, ainfo=ainfo, lmax=lmax)
+        alm = map2alm(imap, ainfo=ainfo, lmax=lmax, tweak=tweak)
 
         if ainfo is None:
             ainfo = sharp.alm_info(lmax)
@@ -584,11 +587,11 @@ def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0
                 )
 
         omap = enmap.empty(imap.shape, imap.wcs, dtype=imap.dtype)
-        return alm2map(alm, omap, ainfo=ainfo)
+        return alm2map(alm, omap, ainfo=ainfo, tweak=tweak)
 
 # forces shape to (num_arrays, num_splits, num_pol, ny, nx) and optionally averages over splits
 def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=True, per_split=True, mode='curvedsky',
-                lmax=None, ainfo=None, ledges=None, weights=None, nthread=0):
+                lmax=None, ainfo=None, ledges=None, weights=None, nthread=0, tweak=False):
     """Flattens a map 'by its own power spectrum', i.e., such that the resulting map
     has a power spectrum of unity.
 
@@ -624,6 +627,9 @@ def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=True, per_spl
         binning, by default None. Note if supplied, must broadcast with imap.
     nthread : int, optional
         If mode is 'fft', the number of threads to pass to enamp.fft, by default 0.
+    tweak : bool, optional
+        Whether to allow map2alm to shift the map to match a libsharp quadrature
+        rule, by default False.
 
     Returns
     -------
@@ -706,7 +712,7 @@ def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=True, per_spl
             ainfo = sharp.alm_info(lmax)
 
         # since filtering maps by their own power only need diagonal
-        alm = map2alm(imap*mask_est, ainfo=ainfo, lmax=lmax)
+        alm = map2alm(imap*mask_est, ainfo=ainfo, lmax=lmax, tweak=tweak)
         cl = curvedsky.alm2cl(alm, ainfo=ainfo)
         if not per_split:
             cl = cl.mean(axis=-3, keepdims=True)
@@ -723,7 +729,7 @@ def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=True, per_spl
         lfilter = np.broadcast_to(lfilter, (*imap.shape[:-2], lfilter.shape[-1]))
 
         # Re-do the SHT for the map masked with the bigger mask.
-        alm = map2alm(imap*mask_observed, alm=alm, ainfo=ainfo, lmax=lmax)
+        alm = map2alm(imap*mask_observed, alm=alm, ainfo=ainfo, lmax=lmax, tweak=tweak)
         for preidx in np.ndindex(imap.shape[:-2]):
             assert alm[preidx].ndim == 1
             assert lfilter[preidx].ndim == 1
@@ -732,7 +738,7 @@ def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=True, per_spl
                 )
 
         # finally go back to map space
-        omap = alm2map(alm, shape=imap.shape, wcs=imap.wcs, dtype=imap.dtype, ainfo=ainfo)
+        omap = alm2map(alm, shape=imap.shape, wcs=imap.wcs, dtype=imap.dtype, ainfo=ainfo, tweak=tweak)
 
         if return_sqrt_cov:
             return omap, sqrt_cl
