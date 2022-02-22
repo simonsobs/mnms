@@ -152,6 +152,7 @@ class KernelFactory:
         ny, nx = (full_shape[0], full_shape[1]//2+1)
         modlmap = enmap.modlmap(full_shape, full_wcs).astype(dtype, copy=False)[..., :nx]
         phimap = np.arctan2(*enmap.lrmap(full_shape, full_wcs), dtype=dtype)
+        self._phimap = phimap
         assert modlmap.shape == phimap.shape, \
             'modlmap and phimap have different shapes' 
         self._map_pos = enmap.corners(full_shape, full_wcs, corner=False)
@@ -167,57 +168,19 @@ class KernelFactory:
             'radial kernels clipped, please adjust inputs (e.g. increase lmax)'
         self._lmaxs = lmaxs
 
+        # in one go, we are going to get rad funcs, rad_kerns (sliced), 
+        # the slice/selection tuples (function of rad kern only), and 
+        # kernel shapes
         self._rad_funcs = []
+        self._sels = []
         self._rad_kerns = []
         for i, w_ell in enumerate(w_ells):
-            ell = np.arange(w_ell.size)
-
-            # if omega wavelet, want high bound to extend to 1 indefinitely to
-            # catch the corners of fourier space
-            if i == len(w_ells)-1:
-                fill_value = (0., 1.)
-            else:
-                fill_value = (0., 0.)
-
-            # "nearest" ensures kernels are still admissable. if want smooth, 
-            # need to implement the w_ell functions directly (2d kinda hard)
-            rad_func = interp1d(
-                ell, w_ell, kind='nearest', bounds_error=False, fill_value=fill_value
-                )
+            rad_func = get_rad_func(w_ell, len(w_ells), i)
             self._rad_funcs.append(rad_func)
-            self._rad_kerns.append(rad_func(modlmap))
+            unsliced_rad_kern = rad_func(modlmap)
 
-        # get list of w_phi callables
-        # also get full list of n's and unique list of n's to build each
-        # kernel and sufficient phimaps
-        if nforw is None:
-            nforw = []
-        else:
-            nforw = list(nforw)
-        if nback is None:
-            nback = []
-        else:
-            nback = list(nback)[::-1]
-        all_ns = nforw + (len(w_ells)-len(nforw)-len(nback))*[n] + nback
-        self._ns = all_ns
-        unique_ns = np.unique(all_ns)
-
-        self._az_funcs = {}
-        self._az_kerns = {}
-        for unique_n in unique_ns:
-            for j in range(unique_n+1):
-                az_func = get_w_phi(unique_n, j)
-                self._az_funcs[unique_n, j] = az_func
-                self._az_kerns[unique_n, j] = az_func(phimap)
-
-        # build selection tuples which are only a function of radial kernel, ie
-        # all kernels with the same radial index will have the same shape
-        # to ensure the shape is always rfft-compatible by construction
-        self._kern_shapes = []
-        self._sels = []
-        for i, rad_kern in enumerate(self._rad_kerns):
             # get maximal x index
-            x_mask = np.nonzero(rad_kern.astype(bool).sum(axis=0) > 0)[0]
+            x_mask = np.nonzero(unsliced_rad_kern.astype(bool).sum(axis=0) > 0)[0]
             if x_mask.size == nx: # all columns in use
                 x_max = nx
             else:
@@ -226,7 +189,7 @@ class KernelFactory:
                 x_max = x_mask.max() + 1 # for safety
 
             # get maximal y indices in both "positive" and "negative" directions
-            y_mask = rad_kern.astype(bool).sum(axis=1)
+            y_mask = unsliced_rad_kern.astype(bool).sum(axis=1)
             y_mask_pos = np.nonzero(y_mask[:ny//2+1] > 0)[0]
             y_mask_neg = np.nonzero(y_mask[:-(ny//2+1):-1] > 0)[0]
         
@@ -253,7 +216,6 @@ class KernelFactory:
                 np.min([y_max_pos + y_max_neg, ny]),
                 np.min([x_max, nx])
                 )
-            self._kern_shapes.append(kern_shape)
 
             # get everything, insert everything
             if kern_shape == (ny, nx):
@@ -267,16 +229,46 @@ class KernelFactory:
                 sels = [np.s_[..., :y_max_pos, :x_max], np.s_[..., -y_max_neg:, :x_max]]
             self._sels.append(sels)
 
-    def get_kernel(self, rad_idx, az_n, az_idx):
-        az_kern = self._az_kerns[az_n, az_idx]
-        rad_kern = self._rad_kerns[rad_idx]
-        unsliced_kern = az_kern * rad_kern
+            # finally, get this radial kernel
+            rad_kern = np.empty(kern_shape, dtype=unsliced_rad_kern.dtype)
+            for sel in sels:
+                rad_kern[sel] = unsliced_rad_kern[sel]
+            self._rad_kerns.append(rad_kern)
 
-        kern = np.empty(self._kern_shapes[rad_idx], dtype=unsliced_kern.dtype)
-        lmax = self._lmaxs[rad_idx]
+        # get list of w_phi callables
+        # also get full list of n's and unique list of n's to build each
+        # kernel and sufficient phimaps
+        if nforw is None:
+            nforw = []
+        else:
+            nforw = list(nforw)
+        if nback is None:
+            nback = []
+        else:
+            nback = list(nback)[::-1]
+        all_ns = nforw + (len(w_ells)-len(nforw)-len(nback))*[n] + nback
+        self._ns = all_ns
+        unique_ns = np.unique(all_ns)
+
+        self._az_funcs = {}
+        for unique_n in unique_ns:
+            for j in range(unique_n+1):
+                az_func = get_az_func(unique_n, j)
+                self._az_funcs[unique_n, j] = az_func
+
+    def get_kernel(self, rad_idx, az_n, az_idx):
+        rad_kern = self._rad_kerns[rad_idx]
         sels = self._sels[rad_idx]
+        lmax = self._lmaxs[rad_idx]
+
+        # get a sliced phimap, evaluate the az_func on it
+        kern_phimap = np.empty(rad_kern.shape, self._phimap.dtype)
         for sel in sels:
-            kern[sel] = unsliced_kern[sel]
+            kern_phimap[sel] = self._phimap[sel]
+        az_kern = self._az_funcs[az_n, az_idx](kern_phimap)
+        
+        # get this kernel
+        kern = rad_kern * az_kern
 
         # kernels have 2(rkx-1)+1 pixels in map space x direction
         map_shape = (kern.shape[0], 2*(kern.shape[1]-1) + 1)
@@ -290,8 +282,24 @@ class KernelFactory:
         return self._ns
 
 
+def get_rad_func(w_ell, n, j):
+    ell = np.arange(w_ell.size)
+
+    # if omega wavelet, want high bound to extend to 1 indefinitely to
+    # catch the corners of fourier space
+    if j == n - 1:
+        fill_value = (0., 1.)
+    else:
+        fill_value = (0., 0.)
+
+    # "nearest" ensures kernels are still admissable. if want smooth, 
+    # need to implement the w_ell functions directly (2d kinda hard)
+    return interp1d(
+        ell, w_ell, kind='nearest', bounds_error=False, fill_value=fill_value
+        )
+
 # radial kernels are cos^n(phi) from https://doi.org/10.1109/34.93808
-def get_w_phi(n, j):
+def get_az_func(n, j):
     # important! if n is actually an np.int64, e.g., then
     # the following calculations can overflow!
     n = float(n) 
