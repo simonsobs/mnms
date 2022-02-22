@@ -292,6 +292,9 @@ class KernelFactory:
 
 # radial kernels are cos^n(phi) from https://doi.org/10.1109/34.93808
 def get_w_phi(n, j):
+    # important! if n is actually an np.int64, e.g., then
+    # the following calculations can overflow!
+    n = float(n) 
     c = np.sqrt(2**(2*n) / ((n+1) * comb(2*n, n)))
     if n > 0 :
         def w_phi(phis):
