@@ -11,22 +11,20 @@ from time import time
 class FSAWKernels:
 
     def __init__(self, lamb, lmax, lmin, lmax_j, n, full_shape, full_wcs,
-                 dtype=np.float32, iso_low=True, iso_high=True):
+                 dtype=np.float32, nforw=None, nback=None):
         self._kf = KernelFactory(lamb, lmax, lmin, lmax_j, n, full_shape,
-                                 full_wcs, dtype=dtype, iso_low=iso_low,
-                                 iso_high=iso_high)
+                                 full_wcs, dtype=dtype, nforw=nforw,
+                                 nback=nback)
+        self._ns = self._kf.ns
         self._real_shape = (full_shape[-2], full_shape[-1]//2 + 1)
         self._full_wcs = full_wcs
         self._dtype = dtype
 
         # get all my kernels -- radial ordering
         self._kernels = {}
-        for i in range(len(self._kf._rad_kerns)):
-            if (i == 0 and iso_low) or (i == len(self._kf._rad_kerns)-1 and iso_high):
-                self._kernels[i, 0] = self._kf.get_kernel(i, 0)
-            else:
-                for j in range(n+1):
-                    self._kernels[i, j] = self._kf.get_kernel(i, j)
+        for i, n in enumerate(self._ns):
+            for j in range(n+1):
+                self._kernels[i, j] = self._kf.get_kernel(i, n, j)
         self._num_kernels = len(self._kernels)
 
     def k2wav(self, kmap, from_full=True, nthread=0):
@@ -58,6 +56,10 @@ class FSAWKernels:
     @property
     def kernels(self):
         return self._kernels
+
+    @property
+    def ns(self):
+        return self._ns
 
     @property
     def num_kernels(self):
@@ -144,34 +146,29 @@ class Kernel:
 class KernelFactory:
 
     def __init__(self, lamb, lmax, lmin, lmax_j, n, full_shape, full_wcs,
-                 dtype=np.float32, iso_low=True, iso_high=True):
+                 dtype=np.float32, nforw=None, nback=None):
 
-        # fullshape info
+        # fullshape, map geometry info
         ny, nx = (full_shape[0], full_shape[1]//2+1)
         modlmap = enmap.modlmap(full_shape, full_wcs).astype(dtype, copy=False)[..., :nx]
         phimap = np.arctan2(*enmap.lrmap(full_shape, full_wcs), dtype=dtype)
         assert modlmap.shape == phimap.shape, \
-            'modlmap and phimap have different shapes'
+            'modlmap and phimap have different shapes' 
         self._map_pos = enmap.corners(full_shape, full_wcs, corner=False)
-
-        # whether to keep lowest, highest ell radial bin isotropic
-        self._iso_low = iso_low
-        self._iso_high = iso_high
-
-        w_ells, lmaxs = wlm_utils.get_sd_kernels(lamb, lmax, lmin=lmin, lmax_j=lmax_j)
-        assert w_ells.ndim == 2, f'w_ell must be a 2d array, got {w_ells.ndim}d'
 
         # get list of w_ell callables
         # radial kernels piggyback off of optweight, i.e., the radial kernels from
         # arXiv:1211.1680v2
-        self._rad_funcs = []
-        self._rad_kerns = []
-        self._lmaxs = lmaxs
+        w_ells, lmaxs = wlm_utils.get_sd_kernels(lamb, lmax, lmin=lmin, lmax_j=lmax_j)
+        assert w_ells.ndim == 2, f'w_ell must be a 2d array, got {w_ells.ndim}d'
         # need to test this because we want our radial funcs to extend happily to
         # the corners of fourier space, which are "beyond" lmax
         assert w_ells[-1, -1] == 1, \
             'radial kernels clipped, please adjust inputs (e.g. increase lmax)'
+        self._lmaxs = lmaxs
 
+        self._rad_funcs = []
+        self._rad_kerns = []
         for i, w_ell in enumerate(w_ells):
             ell = np.arange(w_ell.size)
 
@@ -191,18 +188,27 @@ class KernelFactory:
             self._rad_kerns.append(rad_func(modlmap))
 
         # get list of w_phi callables
-        # radial kernels are cos^n(phi) from https://doi.org/10.1109/34.93808
-        self._az_funcs = []
-        self._az_kerns = []
-        c = np.sqrt(2**(2*n) / ((n+1) * comb(2*n, n)))
-        def get_w_phi(j):
-            def w_phi(phis):
-                return c * 1j**n * np.cos(phis - j*np.pi/(n+1))**n
-            return w_phi
-        for j in range(n+1):
-            az_func = get_w_phi(j)
-            self._az_funcs.append(az_func)
-            self._az_kerns.append(az_func(phimap))
+        # also get full list of n's and unique list of n's to build each
+        # kernel and sufficient phimaps
+        if nforw is None:
+            nforw = []
+        else:
+            nforw = list(nforw)
+        if nback is None:
+            nback = []
+        else:
+            nback = list(nback)[::-1]
+        all_ns = nforw + (len(w_ells)-len(nforw)-len(nback))*[n] + nback
+        self._ns = all_ns
+        unique_ns = np.unique(all_ns)
+
+        self._az_funcs = {}
+        self._az_kerns = {}
+        for unique_n in unique_ns:
+            for j in range(unique_n+1):
+                az_func = get_w_phi(unique_n, j)
+                self._az_funcs[unique_n, j] = az_func
+                self._az_kerns[unique_n, j] = az_func(phimap)
 
         # build selection tuples which are only a function of radial kernel, ie
         # all kernels with the same radial index will have the same shape
@@ -261,15 +267,10 @@ class KernelFactory:
                 sels = [np.s_[..., :y_max_pos, :x_max], np.s_[..., -y_max_neg:, :x_max]]
             self._sels.append(sels)
 
-    def get_kernel(self, rad_idx, az_idx):
-        if (rad_idx == 0 and self._iso_low) or \
-            (rad_idx == len(self._rad_funcs)-1 and self._iso_high):
-            assert az_idx == 0, \
-                f'iso_low or iso_high, only az_idx=0 permitted, got {az_idx}'
-            az_kern = 1+0j
-        else:
-            az_kern = self._az_kerns[az_idx]
-        unsliced_kern = self._rad_kerns[rad_idx] * az_kern
+    def get_kernel(self, rad_idx, az_n, az_idx):
+        az_kern = self._az_kerns[az_n, az_idx]
+        rad_kern = self._rad_kerns[rad_idx]
+        unsliced_kern = az_kern * rad_kern
 
         kern = np.empty(self._kern_shapes[rad_idx], dtype=unsliced_kern.dtype)
         lmax = self._lmaxs[rad_idx]
@@ -283,3 +284,21 @@ class KernelFactory:
         kern = enmap.ndmap(kern, map_wcs) 
 
         return Kernel(kern, lmax, sels=sels)
+
+    @property
+    def ns(self):
+        return self._ns
+
+
+# radial kernels are cos^n(phi) from https://doi.org/10.1109/34.93808
+def get_w_phi(n, j):
+    c = np.sqrt(2**(2*n) / ((n+1) * comb(2*n, n)))
+    if n > 0 :
+        def w_phi(phis):
+            return c * 1j**n * np.cos(phis - j*np.pi/(n+1))**n
+    elif n == 0:
+        def w_phi(phis):
+            return 1+0j
+    else:
+        raise ValueError('n must be positive')
+    return w_phi

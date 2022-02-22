@@ -5,7 +5,8 @@ import numpy as np
 def test_wav_reconstruction():
     shape = (1000, 1000)
     _, wcs = enmap.geometry([0,0], shape=shape, res=np.pi/180/30)
-    fk = fsaw_noise.FSAWKernels(1.8, 10_000, 100, 5300, 24, shape, wcs)
+    fk = fsaw_noise.FSAWKernels(1.8, 10_000, 100, 5300, 24, shape, wcs,
+                                nforw=[0,12], nback=[0,12])
     rng = np.random.default_rng(0)
     a = rng.standard_normal(shape, dtype=np.float32)
     fa = utils.rfft(a)
