@@ -114,6 +114,8 @@ class Kernel:
         assert wmap.shape[-1]//2+1 == self._k_kernel.shape[-1], \
             f'wmap must have same shape[-1]//2+1 as k_kernel, got {wmap.shape[-1]//2+1}'
         kmap = utils.rfft(wmap, nthread=nthread) * self._k_kernel_conj
+        # kmap = utils.concurrent_op(np.multiply, kmap, self._k_kernel_conj, nthread=nthread)
+        # NOTE: the above actually has too much overhead, slower
         wcs = self._k_kernel.wcs if use_kernel_wcs else wmap.wcs
         return enmap.ndmap(kmap, wcs)
 

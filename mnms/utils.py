@@ -1185,21 +1185,30 @@ def concurrent_normal(size=1, loc=0., scale=1., nchunks=100, nthread=0,
         # if not concurrent, casting to complex takes 80% of the time for a complex draw.
         # need imag_vec to have same chunk_axis size as the actual draws
         imag_vec = np.full((nchunks, 1), 1j, dtype=np.result_type(dtype, 1j))
-        out_imag = concurrent_op(np.multiply, out_imag, imag_vec, nchunks=nchunks, nthread=nthread)
-        out = concurrent_op(np.add, out, out_imag, nchunks=nchunks, nthread=nthread)
+        out_imag = concurrent_op(
+            np.multiply, out_imag, imag_vec, nchunks=nchunks, nthread=nthread, flatten_axes=[0]
+            )
+        out = concurrent_op(
+            np.add, out, out_imag, nchunks=nchunks, nthread=nthread, flatten_axes=[0]
+            )
 
     # need scale_vec, loc_vec to have same chunk_axis size as the actual draws
     scale_vec = np.full((nchunks, 1), scale, dtype=dtype)
-    out = concurrent_op(np.multiply, out, scale_vec, nchunks=nchunks, nthread=nthread)
+    out = concurrent_op(
+        np.multiply, out, scale_vec, nchunks=nchunks, nthread=nthread, flatten_axes=[0]
+        )
 
     loc_vec = np.full((nchunks, 1), loc, dtype=dtype)
-    out = concurrent_op(np.add, out, loc_vec, nchunks=nchunks, nthread=nthread)
+    out = concurrent_op(
+        np.add, out, loc_vec, nchunks=nchunks, nthread=nthread, flatten_axes=[0]
+        )
 
     # return
     out = out.reshape(-1)[:totalsize]
     return out.reshape(size)
 
-def concurrent_op(op, a, b, *args, chunk_axis_a=0, chunk_axis_b=0, nchunks=100, nthread=0, **kwargs):
+def concurrent_op(op, a, b, *args, flatten_axes=[-2,-1], 
+                  nchunks=100, nthread=0, **kwargs):
     """Perform a numpy operation on two arrays concurrently.
 
     Parameters
@@ -1234,22 +1243,27 @@ def concurrent_op(op, a, b, *args, chunk_axis_a=0, chunk_axis_b=0, nchunks=100, 
     maximum efficiency, they should be long. They must be of equal size in
     a and b.
     """
-    if isinstance(a, (int, float)):
-        a = np.broadcast_to(a, )
+    oshape_axes_a = [a.shape[i] for i in flatten_axes]
+    oshape_axes_b = [b.shape[i] for i in flatten_axes]
+    assert oshape_axes_a == oshape_axes_b, \
+        f'a and b must share shape in {flatten_axes} axes, got\n' \
+        f'{oshape_axes_a} and {oshape_axes_b}'
+    oshape_axes = oshape_axes_a
 
-    # move axes to standard positions
-    a = np.moveaxis(a, chunk_axis_a, 0)
-    b = np.moveaxis(b, chunk_axis_b, 0)
-    assert a.shape[0] == b.shape[0], f'Size of chunk axis must be equal, got {a.shape[0]} and {b.shape[0]}'
-    
+    # move axes to axis -1 position
+    # NOTE: very important to do -1, else broadcasting does not
+    # work in the futures workers
+    a = flatten_axis(a, axis=flatten_axes, pos=-1)
+    b = flatten_axis(b, axis=flatten_axes, pos=-1)
+
     # get size per chunk draw
-    totalsize = a.shape[0]
+    totalsize = a.shape[-1]
     chunksize = np.ceil(totalsize/nchunks).astype(int)
 
     # define working objects
     # in order to get output shape, dtype, must get shape, dtype of op(a[0], b[0])
-    out_test = op(a[0], b[0], *args, **kwargs)
-    out = np.empty((totalsize, *out_test.shape), dtype=out_test.dtype)
+    out_test = op(a[..., 0], b[..., 0], *args, **kwargs)
+    out = np.empty((*out_test.shape, totalsize), dtype=out_test.dtype)
 
     # perform multithreaded execution
     if nthread == 0:
@@ -1257,12 +1271,15 @@ def concurrent_op(op, a, b, *args, chunk_axis_a=0, chunk_axis_b=0, nchunks=100, 
     executor = futures.ThreadPoolExecutor(max_workers=nthread)
 
     def _fill(start, stop):
-        op(a[start:stop], b[start:stop], *args, out=out[start:stop], **kwargs)
+        op(a[..., start:stop], b[..., start:stop], *args, out=out[..., start:stop], **kwargs)
     
     fs = [executor.submit(_fill, i*chunksize, (i+1)*chunksize) for i in range(nchunks)]
     futures.wait(fs)
 
-    # return
+    # reshape and return
+    out = out.reshape(*out_test.shape, *oshape_axes)
+    out = np.moveaxis(out, range(-len(oshape_axes),0), flatten_axes)
+
     return out
 
 def concurrent_einsum(subscripts, a, b, *args, chunk_axis_a=0, chunk_axis_b=0, nchunks=100, nthread=0, **kwargs):
