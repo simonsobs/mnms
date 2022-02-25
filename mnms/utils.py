@@ -1053,7 +1053,7 @@ def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
 
         return mult * omap
 
-def recenter_coords(theta, phi):
+def recenter_coords(theta, phi, return_as_rad=False):
     """Recenters coordinates that have moved into the non-central 
     (mod 180-deg, mod 360-deg) representation of the sky, back 
     into the central representation.
@@ -1065,6 +1065,8 @@ def recenter_coords(theta, phi):
         theta coordinates, in radians.
     phi : Strictly increasing, 1-dimensional, at least size 2 list of
         phi coordinates, in radians.
+    return_as_rad : bool, optional
+        If True, return coordinates in radians instead of degrees.
 
     Returns
     -------
@@ -1085,7 +1087,7 @@ def recenter_coords(theta, phi):
     assert np.all(phi[1:] - phi[:-1] > 0 ), \
         'Can only handle strictly increasing phi arrays'
 
-    # get the bottom left corner
+    # get the center
     center = np.array([theta.mean(), phi.mean()])
 
     # get how many multiples of a full map from the central map we are,
@@ -1093,6 +1095,9 @@ def recenter_coords(theta, phi):
     mult = (center - np.array([-90, -180])) // np.array([180, 360])
     theta -= mult[0] * 180
     phi -= mult[1] * 360
+
+    if return_as_rad:
+        theta, phi = np.deg2rad([theta, phi])
 
     return theta, phi
 

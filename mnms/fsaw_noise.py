@@ -34,9 +34,9 @@ class FSAWKernels:
 
     def wav2k(self, wavs, preshape=None, nthread=0):
         # first get new kmap
-        oshape = self._real_shape
-        if preshape is not None:
-            oshape = (*preshape, *oshape)
+        if preshape is None:
+            preshape = ()
+        oshape = (*preshape, *self._real_shape)
         restype = np.result_type(1j*np.zeros(1, dtype=self._dtype))
         
         # this needs to be zeros not empty because of inplace addition
@@ -47,7 +47,10 @@ class FSAWKernels:
 
         # extract each kernel and insert
         for kern_key, kernel in self._kernels.items():
-            kmap_wav = kernel.wav2k(wavs[kern_key], nthread=nthread)
+            wav = wavs[kern_key]
+            assert wav.shape[:-2] == preshape, \
+                f'wav {kern_key} preshape is {wav.shape[:-2]}, expected {preshape}'
+            kmap_wav = kernel.wav2k(wav, nthread=nthread)
             for sel in kernel._sels:
                 kmap[sel] += kmap_wav[sel]
         return kmap
@@ -128,6 +131,7 @@ class Kernel:
             f'wmap must have same shape[-2] as k_kernel, got {wmap.shape[-2]}'
         assert wmap.shape[-1]//2+1 == self._k_kernel.shape[-1], \
             f'wmap must have same shape[-1]//2+1 as k_kernel, got {wmap.shape[-1]//2+1}'
+        
         kmap = utils.rfft(wmap, nthread=nthread) * self._k_kernel_conj
         # kmap = utils.concurrent_op(np.multiply, kmap, self._k_kernel_conj, nthread=nthread)
         # NOTE: the above actually has too much overhead, slower
@@ -169,7 +173,16 @@ class KernelFactory:
         modlmap = enmap.modlmap(shape, wcs).astype(dtype, copy=False)
         modlmap = modlmap[..., :shape[-1]//2 + 1]
         self._phimap = np.arctan2(*enmap.lrmap(shape, wcs), dtype=dtype)
-        self._map_pos = enmap.corners(shape, wcs, corner=False)
+        corners = enmap.corners(shape, wcs, corner=False)
+
+        # need to make sure corners are centered or else call to 
+        # enmap.geometry in get_kernel may (sometimes) break 
+        # astropy, e.g. if shape, wcs from downgrade_geometry_cc_quad
+        theta, phi = utils.recenter_coords(
+            corners[:, 0], -corners[:, 1], return_as_rad=True
+            )
+        self._corners = np.array([theta, -phi]).T
+
         assert modlmap.shape == self._phimap.shape, \
             'modlmap and phimap have different shapes' 
 
@@ -310,7 +323,7 @@ class KernelFactory:
 
         # kernels have 2(rkx-1)+1 pixels in map space x direction
         map_shape = (kern.shape[0], 2*(kern.shape[1]-1) + 1)
-        _, map_wcs = enmap.geometry(self._map_pos, shape=map_shape)
+        _, map_wcs = enmap.geometry(self._corners, shape=map_shape)
         kern = enmap.ndmap(kern, map_wcs) 
 
         return Kernel(kern, lmax, sels=sels)
