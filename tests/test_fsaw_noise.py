@@ -3,7 +3,7 @@ from mnms import utils, fsaw_noise
 import numpy as np 
 
 def test_wav_reconstruction():
-    shape = (1000, 1000)
+    shape = (2, 700, 700)
     _, wcs = enmap.geometry([0,0], shape=shape, res=np.pi/180/30)
     fk = fsaw_noise.FSAWKernels(1.8, 10_000, 100, 5300, 24, shape, wcs,
                                 nforw=[0,12], nback=[0,12])

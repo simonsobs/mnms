@@ -17,7 +17,7 @@ class FSAWKernels:
         self._ns = self._kf.ns
         self._real_shape = (shape[-2], shape[-1]//2 + 1)
         self._wcs = wcs
-        self._dtype = dtype
+        self._cdtype = np.result_type(1j, dtype)
 
         # get all my kernels -- radial ordering
         self._kernels = {}
@@ -26,23 +26,21 @@ class FSAWKernels:
                 self._kernels[i, j] = self._kf.get_kernel(i, n, j)
         self._num_kernels = len(self._kernels)
 
-    def k2wav(self, kmap, from_full=True, nthread=0):
+    def k2wav(self, kmap, nthread=0):
         wavs = {}
         for kern_key, kernel in self._kernels.items():
-            wavs[kern_key] = kernel.k2wav(kmap, from_full=from_full, nthread=nthread)
+            wavs[kern_key] = kernel.k2wav(kmap, from_full=True, nthread=nthread)
         return wavs
 
-    def wav2k(self, wavs, preshape=None, nthread=0):
-        # first get new kmap
-        if preshape is None:
-            preshape = ()
+    def wav2k(self, wavs, nthread=0):
+        # first get new kmap.
+        preshape = wavs[list(wavs)[0]].shape[:-2]
         oshape = (*preshape, *self._real_shape)
-        restype = np.result_type(1j*np.zeros(1, dtype=self._dtype))
         
         # this needs to be zeros not empty because of inplace addition
         # in next block
         kmap = enmap.zeros(
-            oshape, wcs=self._wcs, dtype=restype
+            oshape, wcs=self._wcs, dtype=self._cdtype
             )
 
         # extract each kernel and insert
@@ -107,7 +105,7 @@ class Kernel:
     def k2wav(self, kmap, use_kernel_wcs=True, inplace=True, from_full=True, nthread=0):
         if from_full:
             _shape = (*kmap.shape[:-2], *self._k_kernel.shape)
-            _kmap = np.empty(_shape, dtype=self._k_kernel.dtype)
+            _kmap = np.empty(_shape, dtype=kmap.dtype)
 
             # need to do this because _kmap, _k_kernel are small res
             # but kmap is not
@@ -132,20 +130,19 @@ class Kernel:
         assert wmap.shape[-1]//2+1 == self._k_kernel.shape[-1], \
             f'wmap must have same shape[-1]//2+1 as k_kernel, got {wmap.shape[-1]//2+1}'
         
-        kmap = utils.rfft(wmap, nthread=nthread) * self._k_kernel_conj
+        kmap = utils.rfft(wmap, nthread=nthread) 
+        kmap *= self._k_kernel_conj
         # kmap = utils.concurrent_op(np.multiply, kmap, self._k_kernel_conj, nthread=nthread)
         # NOTE: the above actually has too much overhead, slower
         wcs = self._k_kernel.wcs if use_kernel_wcs else wmap.wcs
         return enmap.ndmap(kmap, wcs)
 
-    def smooth_gauss(self, wmap, fwhm=None, inplace=True):
+    def smooth_gauss(self, wmap, fwhm, inplace=True):
         assert wmap.shape[-2] == self._k_kernel.shape[-2], \
             f'wmap must have same shape[-2] as k_kernel, got {wmap.shape[-2]}'
         assert wmap.shape[-1]//2+1 == self._k_kernel.shape[-1], \
             f'wmap must have same shape[-1]//2+1 as k_kernel, got {wmap.shape[-1]//2+1}'
 
-        if fwhm is None:
-            fwhm = np.pi / self._lmax
         sigma_rad = fwhm / np.sqrt(2 * np.log(2)) / 2
         rad_per_pix = enmap.extent(wmap.shape, wmap.wcs) / wmap.shape[-2:]
         sigma_pix = sigma_rad / rad_per_pix
@@ -153,6 +150,8 @@ class Kernel:
         if not inplace:
             wmap = wmap.copy()
 
+        # NOTE: 'nearest', 'wrap' only works for full sky maps. for 
+        # maps much smaller than full sky, should be 'nearest', 'nearest'
         for preidx in np.ndindex(wmap.shape[:-2]):
             gaussian_filter(
                 wmap[preidx], sigma_pix, output=wmap[preidx], mode=['nearest', 'wrap']
