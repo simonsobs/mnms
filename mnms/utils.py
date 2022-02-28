@@ -1101,6 +1101,61 @@ def recenter_coords(theta, phi, return_as_rad=False):
 
     return theta, phi
 
+def smooth_gauss(imap, fwhm, inplace=True, method='curvedsky', **method_kwargs):
+    """Smooth a map with a Gaussian profile.
+
+    Parameters
+    ----------
+    imap : (..., ny, nx) enmap.ndmap
+        Map to be smoothed.
+    fwhm : float
+        Full-width half-max (radians) of Gaussian kernel.
+    inplace : bool, optional
+        If possible (depending on method), smooth imap inplace, 
+        by default True.
+    method : str, optional
+        The method used to perform the smoothing, by default 'map.'
+
+    Returns
+    -------
+    (..., ny, nx) enmap.ndmap
+        The smoothed map.
+
+    Notes
+    -----
+    The method 'curvedsky' performs a spherical harmonic transform
+    and multiplies by a Gaussian beam, before inverse-transforming.
+
+    The method 'fft' performs a real DFT and multiplies by an 
+    isotropic Gaussian beam profile in Fourier space, before taking
+    the inverse DFT. 
+
+    The method 'map' performs the Gaussian convolution directly on the
+    map-space buffer. The size of the profile is set by the map 'extents'
+    rather than the pixel size, to be more fair to maps that are far
+    from the equator.
+    """
+    sigma_rad = fwhm / np.sqrt(2 * np.log(2)) / 2
+
+    if method == 'curvedsky':
+        raise NotImplementedError('Curvedsky is not yet implemented')
+    if method == 'fft':
+        raise NotImplementedError('FFT is not yet implemented')
+    if method == 'map':
+        rad_per_pix = enmap.extent(imap.shape, imap.wcs) / imap.shape[-2:]
+        sigma_pix = sigma_rad / rad_per_pix
+
+        if not inplace:
+            imap = imap.copy()
+
+        # NOTE: 'nearest', 'wrap' only works for full sky maps. for 
+        # maps much smaller than full sky, should be 'nearest', 'nearest'
+        for preidx in np.ndindex(imap.shape[:-2]):
+            ndimage.gaussian_filter(
+                imap[preidx], sigma_pix, output=imap[preidx], **method_kwargs
+                )
+        return imap
+
 def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
     lmin = center - width/2
     lmax = center + width/2
