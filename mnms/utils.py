@@ -1279,12 +1279,9 @@ def concurrent_op(op, a, b, *args, flatten_axes=[-2,-1],
         The first array in the operation.
     b : ndarray
         The second array in the operation.
-    chunk_axis_a : int, optional
-        The axis in a over which the operation may be applied
-        concurrently, by default 0.
-    chunk_axis_b : int, optional
-        The axis in b over which the operation may be applied
-        concurrently, by default 0.
+    flatten_axes : iterable of int
+        Axes in a and b to flatten and concurrently apply op over
+        in chunks. These axes must have the same shape in a and b.
     nchunks : int, optional
         The number of chunks to loop over concurrently, by default 100.
     nthread : int, optional
@@ -1294,14 +1291,12 @@ def concurrent_op(op, a, b, *args, flatten_axes=[-2,-1],
     Returns
     -------
     ndarray
-        The result of op(a, b, *args, **kwargs), except with the axis
-        corresponding to the a, b chunk axes located at axis-0.
+        The result of op(a, b, *args, **kwargs).
 
     Notes
     -----
-    The chunk axes are what a user might expect to naively 'loop over'. For
-    maximum efficiency, they should be long. They must be of equal size in
-    a and b.
+    The flatten axes are what a user might expect to naively 'loop over'. For
+    maximum efficiency, they should be have as many elements as possible.
     """
     oshape_axes_a = [a.shape[i] for i in flatten_axes]
     oshape_axes_b = [b.shape[i] for i in flatten_axes]
@@ -1321,7 +1316,7 @@ def concurrent_op(op, a, b, *args, flatten_axes=[-2,-1],
     chunksize = np.ceil(totalsize/nchunks).astype(int)
 
     # define working objects
-    # in order to get output shape, dtype, must get shape, dtype of op(a[0], b[0])
+    # in order to get output shape, dtype, must get shape, dtype of op(a[..., 0], b[..., 0])
     out_test = op(a[..., 0], b[..., 0], *args, **kwargs)
     out = np.empty((*out_test.shape, totalsize), dtype=out_test.dtype)
 
@@ -1338,7 +1333,7 @@ def concurrent_op(op, a, b, *args, flatten_axes=[-2,-1],
 
     # reshape and return
     out = out.reshape(*out_test.shape, *oshape_axes)
-    out = np.moveaxis(out, range(-len(oshape_axes),0), flatten_axes)
+    out = np.moveaxis(out, range(-len(oshape_axes), 0), flatten_axes)
 
     return out
 
@@ -1880,8 +1875,8 @@ def filter_weighted(imap, ivar, filter, tol=1e-4, ref=0.9):
     np.percentile(ivar[::10, ::10], ref*100) * tol
     """
     filter = 1 - filter
-    omap = irfft(filter * rfft(imap * ivar))
-    div = irfft(filter * rfft(ivar))
+    omap = irfft(filter * rfft(imap * ivar), n=imap.shape[-1])
+    div = irfft(filter * rfft(ivar), n=imap.shape[-1])
     filter = None
     # Avoid division by very low values
     div = np.maximum(div, np.percentile(ivar[::10, ::10], ref*100) * tol)

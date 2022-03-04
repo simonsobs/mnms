@@ -1,11 +1,10 @@
-from pixell import enmap
+from pixell import enmap, curvedsky
 from mnms import utils
 from optweight import wlm_utils
 
 import numpy as np 
 from scipy.special import comb 
 from scipy.interpolate import interp1d
-from scipy.ndimage import gaussian_filter
 
 from time import time
 class FSAWKernels:
@@ -70,11 +69,14 @@ class FSAWKernels:
         self._kernels = {}
         self._lmaxs = {}
         self._ns = {}
+        self._mean_sqs = {}
         for i, n in enumerate(self._kf._ns):
             for j in range(n+1):
-                self._kernels[i, j] = self._kf.get_kernel(i, n, j)
+                kern = self._kf.get_kernel(i, n, j)
+                self._kernels[i, j] = kern
                 self._lmaxs[i, j] = self._kf._lmaxs[i]
                 self._ns[i, j] = self._kf._ns[i]
+                self._mean_sqs[i, j] = np.mean(abs(kern._k_kernel)**2)
 
     def k2wav(self, kmap, nthread=0):
         """Analyze a real DFT of a map, producing a set of wavelet-
@@ -179,6 +181,19 @@ class FSAWKernels:
         """
         return self._ns
 
+    @property
+    def mean_sqs(self):
+        """The mean square absolute value of each kernel, evaluated over the
+        reduced-size multiresolution grid.
+
+        Returns
+        -------
+        dict
+            Dictionary of values, indexed by (radial index, azimuthal index)
+            tuple.
+        """
+        return self._mean_sqs
+
 
 class Kernel:
 
@@ -203,9 +218,9 @@ class Kernel:
         TypeError
             If sels is not an iterable.
         """
+        assert k_kernel.ndim == 2, f'k_kernel must have 2 dims, got{k_kernel.ndim}'
         self._k_kernel = k_kernel
         self._k_kernel_conj = np.conj(k_kernel)
-        assert k_kernel.ndim == 2, f'k_kernel must have 2 dims, got{k_kernel.ndim}'
 
         # assume odd nx in orig map (very important)! in principle, we
         # could catch the case that the kernel spans the original map,
@@ -441,6 +456,9 @@ class KernelFactory:
         all_ns = nforw + (len(w_ells)-len(nforw)-len(nback))*[n] + nback
         self._ns = all_ns
         unique_ns = np.unique(all_ns)
+        
+        # TODO: fix this
+        assert np.all(unique_ns%2 == 0), 'only even ns'
 
         self._az_funcs = {}
         for unique_n in unique_ns:
@@ -663,3 +681,110 @@ def get_az_func(n, j):
         def w_phi(phis):
             return 1+0j
     return w_phi
+
+def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1, 
+                           fwhm_fact=2, nthread=0, verbose=True):
+    if verbose:
+        print(
+            f'Map shape: {imap.shape}\n'
+            f'Num kernels: {len(fsaw_kernels.kernels)}\n'
+            f'Smoothing factor: {fwhm_fact}'
+            )
+
+    mask_observed = np.asanyarray(mask_observed, dtype=imap.dtype)
+    mask_est = np.asanyarray(mask_est, dtype=imap.dtype)
+    mask_est = np.broadcast_to(mask_est, imap.shape[-2:], subok=True)
+
+    imap = utils.atleast_nd(imap, 3)
+    kmap = utils.rfft(imap * mask_observed, nthread=nthread)
+    
+    # first measure N_ell and get its square root. because we work in
+    # Fourier space, need to turn this into a callable for non-integer
+    # scales in order to perform flattening. 
+    # 
+    # NOTE: measuring through SHTs is fine, because just need
+    # approximate shape (and it will be a very close approximation
+    # to the shape using DFTs). It is nicer because we don't need to 
+    # use arbitrary bin sizes.
+    lmax_meas = utils.lmax_from_wcs(imap.wcs) 
+    pmap = enmap.pixsizemap(imap.shape, imap.wcs)
+    w2 = np.sum((mask_est**2)*pmap) / np.pi / 4.   
+    sqrt_cov_ell = np.sqrt(
+        curvedsky.alm2cl(
+            utils.map2alm(imap * mask_est, lmax=lmax_meas, spin=0, tweak=True)
+            ) / w2
+    )
+    
+    
+    # get filters over k, apply them
+    sqrt_cov_k = np.empty(kmap.shape, imap.dtype)
+    modlmap = imap.modlmap().astype(imap.dtype, copy=False) # modlmap is np.float64 always...
+    modlmap = modlmap[..., :modlmap.shape[-1]//2+1] # need "real" modlmap
+    assert kmap.shape[-2:] == modlmap.shape, \
+        'kmap map shape and modlmap shape must match'
+
+    for preidx in np.ndindex(imap.shape[:-2]):
+        sqrt_cov_ell_func = interp1d(
+            np.arange(lmax_meas+1), sqrt_cov_ell[preidx], bounds_error=False, 
+            fill_value=(0, sqrt_cov_ell[(*preidx, -1)])
+            )
+        sqrt_cov_k[preidx] = sqrt_cov_ell_func(modlmap)
+    
+    np.multiply(kmap, 0, out=kmap, where=sqrt_cov_k==0)
+    np.divide(kmap, sqrt_cov_k, out=kmap, where=sqrt_cov_k!=0)
+
+    # get model
+    wavs = fsaw_kernels.k2wav(kmap, nthread=nthread)
+    sqrt_cov_wavs = {}
+    for idx, wmap in wavs.items():
+        # get outer prod of wavelet maps with normalization factor
+        ncomp = np.prod(wmap.shape[:-2])
+        wmap = wmap.reshape((ncomp, *wmap.shape[-2:]))
+        wmap2 = np.einsum('ayx, byx -> abyx', wmap, wmap)
+        wmap2 /= fsaw_kernels.mean_sqs[idx]
+        wmap2 = enmap.ndmap(wmap2, wmap.wcs)
+
+        # smooth them
+        fwhm = fwhm_fact * np.pi / fsaw_kernels.lmaxs[idx]
+        utils.smooth_gauss(wmap2, fwhm=fwhm, method='map', mode=['constant', 'wrap'])
+        
+        # raise to 0.5 power
+        sqrt_cov_wavs[idx] = utils.eigpow(wmap2, 0.5, axes=[0, 1])
+
+    return sqrt_cov_wavs, sqrt_cov_k
+
+def get_fsaw_noise_sim(fsaw_kernels, sqrt_cov_wavs, preshape=None,
+                       sqrt_cov_k=None, seed=None, nthread=0, verbose=True):
+    if verbose:
+        print(
+            f'Num kernels: {len(fsaw_kernels.kernels)}\n'
+            f'Radial filtering: {sqrt_cov_k is not None}\n'
+            f'Seed: {seed}'
+            )
+
+    wavs_sim = {}
+    for idx, wmap in sqrt_cov_wavs.items():
+        if seed is not None:
+            seed = list(seed) + list(idx)
+        wmap_sim = utils.concurrent_normal(
+            size=wmap.shape[1:], seed=seed, dtype=wmap.dtype, nthread=nthread
+            )
+        np.einsum('abyx, byx -> ayx', wmap, wmap_sim, out=wmap_sim)
+        wavs_sim[idx] = wmap_sim
+
+    kmap = fsaw_kernels.wav2k(wavs_sim, nthread=nthread)
+    if preshape is not None:
+        kmap = kmap.reshape((*preshape, *kmap.shape[-2:]))
+    preshape = kmap.shape[:-2]
+        
+    # filter kmap directly in Fourier space
+    if sqrt_cov_k is not None:
+        assert sqrt_cov_k.shape[:-2] == preshape, \
+            f'Sqrt_cov_k preshape and passed preshape do not match, got\n'
+        f'{sqrt_cov_k.shape[:-2]} and {preshape}'
+
+        wcs = kmap.wcs # concurrent op clobbers wcs
+        kmap = utils.concurrent_op(np.multiply, kmap, sqrt_cov_k, nthread=nthread)
+        kmap = enmap.ndmap(kmap, wcs)
+
+    return utils.irfft(kmap, nthread=nthread)

@@ -929,6 +929,7 @@ class TiledNoiseModel(NoiseModel):
         sim = self._get_sim(split_num, seed, mask=mask, verbose=verbose)
         return utils.map2alm(sim, lmax=self._lmax)
 
+
 @register()
 class WaveletNoiseModel(NoiseModel):
 
@@ -1128,7 +1129,14 @@ class WaveletNoiseModel(NoiseModel):
         if return_ainfo:
             return alm, ainfo
         else:
-            return alm            
+            return alm      
+
+
+@register()
+class FSAWNoiseModel(NoiseModel):
+
+    pass      
+
 
 class WavFiltTile(NoiseModel):
 

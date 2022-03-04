@@ -3,18 +3,18 @@ import numpy as np
 
 def test_concurrent_add():
     op = np.add
-    a = np.random.randn(500,10,500)
-    b = np.random.randn(3,500,10,500)
+    a = np.random.randn(500,10,500,2)
+    b = np.random.randn(3,500,10,500,2)
     true = op(a, b)
-    conc = utils.concurrent_op(op, a, b, flatten_axes=(-3, -1))
+    conc = utils.concurrent_op(op, a, b, flatten_axes=(-4, -2))
     assert np.all(true == conc)
 
 def test_concurrent_multiply():
     op = np.multiply
-    a = np.random.randn(500,10,500)
-    b = np.random.randn(3,500,10,500)
+    a = np.random.randn(500,10,500,2)
+    b = np.random.randn(3,500,10,500,2)
     true = op(a, b)
-    conc = utils.concurrent_op(op, a, b, flatten_axes=(-3, -1))
+    conc = utils.concurrent_op(op, a, b, flatten_axes=(-4, -2))
     assert np.all(true == conc)
 
 def test_concurrent_normal():
