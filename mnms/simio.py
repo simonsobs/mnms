@@ -28,7 +28,7 @@ def get_sim_mask_fn(qid, data_model, use_default_mask=True, mask_version=None, m
 
 def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=True,
                      mask_name=None, galcut=None, apod_deg=None, calibrated=None,
-                     downgrade=None, union_sources=None, kfilt_lbounds=None):
+                     downgrade=None, union_sources=None, kfilt_lbounds=None, fwhm_ivar=None):
     '''
     '''
     qid = '_'.join(qid)
@@ -65,7 +65,13 @@ def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=True,
         ycut, xcut = kfilt_lbounds
         kfilt_flag = f'lyfilt{ycut}_lxfilt{xcut}_'
 
-    fn = f'{qid}_{data_model.name}_{mask_version}_{mask_flag}cal_{calibrated}_{dg_flag}{inpaint_flag}{kfilt_flag}'
+    if fwhm_ivar is None:
+        fwhm_ivar_flag = ''
+    else:
+        fwhm_ivar_flag = 'fwhm_ivar{:0.3f}_'.format(fwhm_ivar)
+        
+    fn = (f'{qid}_{data_model.name}_{mask_version}_{mask_flag}cal_{calibrated}_{dg_flag}'
+          f'{inpaint_flag}{kfilt_flag}{fwhm_ivar_flag}')
     return fn
 
 def get_tiled_model_fn(qid, split_num, width_deg, height_deg, delta_ell_smooth, lmax, notes=None, **kwargs):

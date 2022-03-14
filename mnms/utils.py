@@ -1837,3 +1837,43 @@ def filter_weighted(imap, ivar, filter, tol=1e-4, ref=0.9):
     omap += imap
     omap *= imap != 0
     return omap
+
+def smooth_gauss_masked(imap, fwhm, mask_bool, inplace=False):
+    """Smooth input map with Gaussian kernel in a way that (partially) 
+    avoids biasing the map amplitude low at the edges of the map and that
+    keeps the sharp edges of the map.
+
+    Parameters
+    ----------
+    imap : enmap.ndmap
+        Input map
+    fwhm : float
+        FWHM of Gaussian kernel in radians.
+    mask_bool : bool array
+        2D boolean mask that broadcasts to input map's shape. True for good pixels.
+    inplace : bool
+        Apply smoothing inplace or not.
+    """
+
+    mask_bool = mask_bool.astype(bool, copy=False)
+
+    if not inplace:
+        imap = imap.copy()
+
+    # Reduce bias at edge by inpainting unobserved pixels with median of observed.
+    imap *= mask_bool
+    median = np.median(imap, axis=(-2, -1))
+    imap[...,~mask_bool] = median
+
+    lmax = lmax_from_wcs(imap.wcs)    
+    ainfo = sharp.alm_info(lmax)
+
+    b_ell = hp.gauss_beam(fwhm, lmax=lmax)
+
+    alm = map2alm(imap, ainfo=ainfo)
+    for preidx in np.ndindex(imap.shape[:-2]):
+        alm[preidx] = alm_c_utils.lmul(alm[preidx], b_ell, ainfo)
+    imap = alm2map(alm, omap=imap, ainfo=ainfo)
+
+    imap *= mask_bool
+    return imap
