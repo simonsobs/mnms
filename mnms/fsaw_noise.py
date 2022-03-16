@@ -453,6 +453,9 @@ class KernelFactory:
             nback = []
         else:
             nback = list(nback)[::-1]
+        assert len(w_ells) - len(nforw) - len(nback) >= 0, \
+            'Must have at least len(w_ells) radial kernels as len(nforw)\n' + \
+            f'+ len(nback), got {len(w_ells)} and {len(nforw)} + {len(nback)}'    
         all_ns = nforw + (len(w_ells)-len(nforw)-len(nback))*[n] + nback
         self._ns = all_ns
         unique_ns = np.unique(all_ns)
@@ -693,7 +696,6 @@ def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1,
 
     mask_observed = np.asanyarray(mask_observed, dtype=imap.dtype)
     mask_est = np.asanyarray(mask_est, dtype=imap.dtype)
-    mask_est = np.broadcast_to(mask_est, imap.shape[-2:], subok=True)
 
     imap = utils.atleast_nd(imap, 3)
     kmap = utils.rfft(imap * mask_observed, nthread=nthread)
@@ -708,13 +710,13 @@ def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1,
     # use arbitrary bin sizes.
     lmax_meas = utils.lmax_from_wcs(imap.wcs) 
     pmap = enmap.pixsizemap(imap.shape, imap.wcs)
+    mask_est = np.broadcast_to(mask_est, imap.shape[-2:], subok=True)
     w2 = np.sum((mask_est**2)*pmap) / np.pi / 4.   
     sqrt_cov_ell = np.sqrt(
         curvedsky.alm2cl(
-            utils.map2alm(imap * mask_est, lmax=lmax_meas, spin=0, tweak=True)
+            utils.map2alm(imap * mask_est, lmax=lmax_meas, spin=0)
             ) / w2
     )
-    
     
     # get filters over k, apply them
     sqrt_cov_k = np.empty(kmap.shape, imap.dtype)
@@ -738,7 +740,7 @@ def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1,
     sqrt_cov_wavs = {}
     for idx, wmap in wavs.items():
         # get outer prod of wavelet maps with normalization factor
-        ncomp = np.prod(wmap.shape[:-2])
+        ncomp = np.prod(wmap.shape[:-2], dtype=int)
         wmap = wmap.reshape((ncomp, *wmap.shape[-2:]))
         wmap2 = np.einsum('ayx, byx -> abyx', wmap, wmap)
         wmap2 /= fsaw_kernels.mean_sqs[idx]
@@ -746,7 +748,7 @@ def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1,
 
         # smooth them
         fwhm = fwhm_fact * np.pi / fsaw_kernels.lmaxs[idx]
-        utils.smooth_gauss(wmap2, fwhm=fwhm, method='map', mode=['constant', 'wrap'])
+        utils.smooth_gauss(wmap2, fwhm, method='map', mode=['constant', 'wrap'])
         
         # raise to 0.5 power
         sqrt_cov_wavs[idx] = utils.eigpow(wmap2, 0.5, axes=[0, 1])

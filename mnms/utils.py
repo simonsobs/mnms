@@ -1101,7 +1101,8 @@ def recenter_coords(theta, phi, return_as_rad=False):
 
     return theta, phi
 
-def smooth_gauss(imap, fwhm, inplace=True, method='curvedsky', **method_kwargs):
+def smooth_gauss(imap, fwhm, mask=None, inplace=True, method='curvedsky',
+                 **method_kwargs):
     """Smooth a map with a Gaussian profile.
 
     Parameters
@@ -1110,11 +1111,18 @@ def smooth_gauss(imap, fwhm, inplace=True, method='curvedsky', **method_kwargs):
         Map to be smoothed.
     fwhm : float
         Full-width half-max (radians) of Gaussian kernel.
+    mask : array-like
+        If provided, apply this mask to imap both before and after
+        smoothing, by default None. Can be any type. Must broadcast
+        with imap.
     inplace : bool, optional
         If possible (depending on method), smooth imap inplace, 
         by default True.
     method : str, optional
         The method used to perform the smoothing, by default 'map.'
+    method_kwargs : dict, optional
+        Any additional kwargs to pass to the function performing the
+        smoothing, by default {}.
 
     Returns
     -------
@@ -1136,17 +1144,30 @@ def smooth_gauss(imap, fwhm, inplace=True, method='curvedsky', **method_kwargs):
     from the equator.
     """
     sigma_rad = fwhm / np.sqrt(2 * np.log(2)) / 2
+    
+    if not inplace:
+        imap = imap.copy()
+
+    if mask is not None:
+        imap *= mask
 
     if method == 'curvedsky':
-        raise NotImplementedError('Curvedsky is not yet implemented')
+        lmax = lmax_from_wcs(imap.wcs)    
+        ainfo = sharp.alm_info(lmax)
+
+        b_ell = hp.gauss_beam(fwhm, lmax=lmax)
+
+        alm = map2alm(imap, ainfo=ainfo)
+        for preidx in np.ndindex(imap.shape[:-2]):
+            alm[preidx] = alm_c_utils.lmul(alm[preidx], b_ell, ainfo)
+        imap = alm2map(alm, omap=imap, ainfo=ainfo)
+
     if method == 'fft':
         raise NotImplementedError('FFT is not yet implemented')
+
     if method == 'map':
         rad_per_pix = enmap.extent(imap.shape, imap.wcs) / imap.shape[-2:]
         sigma_pix = sigma_rad / rad_per_pix
-
-        if not inplace:
-            imap = imap.copy()
 
         # NOTE: 'nearest', 'wrap' only works for full sky maps. for 
         # maps much smaller than full sky, should be 'nearest', 'nearest'
@@ -1154,7 +1175,11 @@ def smooth_gauss(imap, fwhm, inplace=True, method='curvedsky', **method_kwargs):
             ndimage.gaussian_filter(
                 imap[preidx], sigma_pix, output=imap[preidx], **method_kwargs
                 )
-        return imap
+    
+    if mask is not None:
+        imap *= mask
+
+    return imap
 
 def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
     lmin = center - width/2

@@ -1,4 +1,4 @@
-from mnms import simio, tiled_ndmap, utils, soapack_utils as s_utils, tiled_noise, wav_noise, inpaint
+from mnms import simio, tiled_ndmap, utils, soapack_utils as s_utils, tiled_noise, wav_noise, fsaw_noise, inpaint
 from pixell import enmap, wcsutils
 from enlib import bench
 from optweight import wavtrans
@@ -910,7 +910,8 @@ class TiledNoiseModel(NoiseModel):
 
     def _get_sim(self, split_num, seed, mask=None, verbose=False):
         """Return a masked enmap.ndmap sim of split split_num, with seed <sequence of ints>"""
-        # get noise model variables 
+        
+        # Get noise model variables 
         sqrt_cov_mat = self._nm_dict[split_num]['sqrt_cov_mat']
         sqrt_cov_ell = self._nm_dict[split_num]['sqrt_cov_ell']
         
@@ -1135,8 +1136,145 @@ class WaveletNoiseModel(NoiseModel):
 @register()
 class FSAWNoiseModel(NoiseModel):
 
-    pass      
+    def __init__(self, *qids, data_model=None, preload=True, ivar=None, mask_est=None,
+                 calibrated=True, downgrade=1, lmax=None, mask_version=None, mask_name=None,
+                 union_sources=None, kfilt_lbounds=None, notes=None, dtype=None, lamb=1.8, n=24,
+                 fwhm_fact=2, **kwargs):
+        """An FSAWNoiseModel object supports drawing simulations which capture direction- 
+        and scale-dependent, spatially-varying map depth. The simultaneous direction- and
+        scale-sensitivity is achieved through steerable wavelet kernels in Fourier space.
+        They also capture the total noise power spectrum, and array-array correlations.
 
+        Parameters
+        ----------
+        qids : str
+            One or more qids to incorporate in model.
+        data_model : soapack.DataModel, optional
+            DataModel instance to help load raw products, by default None.
+            If None, will load the 'default_data_model' from the 'mnms' config.
+        preload: bool, optional
+            If mask and/or ivar are respectively None, load them, by default True. Setting
+            to False can expedite access to helper methods of this class without waiting
+            for data to load.
+        mask : enmap.ndmap, optional
+            Mask denoting data that will be used to determine the harmonic filter used
+            to whiten the data before estimating its variance, by default None.
+            If None and preload, will load a mask according to the 'mask_version' and
+            'mask_name' kwargs.
+        ivar : array-like, optional
+            Data inverse-variance maps, by default None.
+            If None, will be loaded via DataModel according to 'downgrade' and 'calibrated' kwargs.
+        imap : array-like, optional
+            Data maps, by default None.
+            If None, will be loaded in call to NoiseModel.get_model(...), and may be retained in 
+            memory if keep_data=True is passed to that function.
+        calibrated : bool, optional
+            Whether to load calibrated raw data, by default True.
+        downgrade : int, optional
+            The factor to downgrade map pixels by, by default 1.
+        lmax : int, optional
+            The bandlimit of the maps, by default None.
+            If None, will be set to twice the theoretical CAR limit, ie 180/wcs.wcs.cdelt[1].
+        mask_version : str, optional
+           The mask version folder name, by default None.
+           If None, will first look in config 'mnms' block, then block of default data model.
+        mask_name : str, optional
+            Name of mask file, by default None.
+            If None, a default mask will be loaded from disk.
+        union_sources : str, optional
+            A soapack source catalog, by default None. If given, inpaint data and ivar maps.
+        kfilt_lbounds : size-2 iterable, optional
+            The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
+            If given, filter data before (possibly) downgrading it. 
+        notes : str, optional
+            A descriptor string to differentiate this instance from
+            otherwise identical instances, by default None.
+        dtype : np.dtype, optional
+            The data type used in intermediate calculations and return types, by default None.
+            If None, inferred from data_model.dtype.
+        lamb : float, optional
+            Parameter specifying width of wavelets kernels in log(ell), by default 1.8
+        n : int, optional
+            Azimithul bandlimit (in radians per azimuthal radian) of the
+            directional kernels. In other words, there are n+1 azimuthal 
+            kernels of the form cos^n(phi), by default 24. For speed, the lowest- and
+            highest-ell kernels will override to 0, and the next-lowest- and
+            next-highest-ell kernels will override to n//2. 
+        fwhm_fact : float, optional
+            Factor determining smoothing scale at each wavelet scale:
+            FWHM = fact * pi / lmax, where lmax is the max wavelet ell.
+
+        kwargs : dict, optional
+            Optional keyword arguments to pass to simio.get_sim_mask_fn (currently just
+            'galcut' and 'apod_deg'), by default None.
+
+        Notes
+        -----
+        Unless passed explicitly, the mask and ivar will be loaded at object instantiation time, 
+        and stored as instance attributes.
+
+        Examples
+        --------
+        >>> from mnms import noise_models as nm
+        >>> fsawnm = nm.FSAWNoiseModel('s18_03', 's18_04', downgrade=2, notes='my_model')
+        >>> fsawnm.get_model() # will take several minutes and require a lot of memory
+                            # if running this exact model for the first time, otherwise
+                            # will return None if model exists on-disk already
+        >>> fsawnm = wnm.get_sim(0, 123) # will get a sim of split 1 from the correlated arrays;
+                                       # the map will have "index" 123, which is used in making
+                                       # the random seed whether or not the sim is saved to disk,
+                                       # and will be recorded in the filename if saved to disk.
+        >>> print(imap.shape)
+        >>> (2, 1, 3, 5600, 21600)
+        """
+        super().__init__(
+            *qids, data_model=data_model, preload=preload, ivar=ivar, mask_est=mask_est,
+            calibrated=calibrated, downgrade=downgrade, lmax=lmax, mask_version=mask_version,
+            mask_name=mask_name, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
+            notes=notes, dtype=dtype, **kwargs
+        )
+
+        # save model-specific info
+        self._lamb = lamb
+        self._n = n
+        self._fwhm_fact = fwhm_fact      
+
+        # build the kernels
+        self._fk = fsaw_noise.FSAWKernels(
+            self._lamb, self._lmax, 10, 5300, self._n, self._shape, self._wcs,
+            dtype=self._dtype, nforw=[0, n//2], nback=[0, n//2]
+        )
+
+    def _get_model_fn(self, split_num):
+        """Get a noise model filename for split split_num; return as <str>"""
+        return ''
+
+    def _read_model(self, fn):
+        """Read a noise model with filename fn; return a dictionary of noise model variables"""
+        return {}
+
+    def _get_dmap(self, imap):
+        """Return the required input difference map for a NoiseModel subclass, from split data imap"""
+        return enmap.ndmap
+
+    def _get_model(self, split_num, dmap, verbose=False):
+        """Return a dictionary of noise model variables for this NoiseModel subclass, for split split_num and from difference maps dmap"""
+        return {}
+
+    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
+        """Write sqrt_cov_mat, sqrt_cov_ell, and possibly more noise model variables to filename fn"""
+        pass
+
+    def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
+        """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
+        pass
+
+    def _get_sim(self, split_num, seed, mask=None, verbose=False):
+        """Return a masked enmap.ndmap sim of split split_num, with seed <sequence of ints>"""
+        return enmap.ndmap
+
+    def _get_sim_alm(self, split_num, seed, mask=None, verbose=False):
+        """Return a masked alm sim of split split_num, with seed <sequence of ints>"""
 
 class WavFiltTile(NoiseModel):
 

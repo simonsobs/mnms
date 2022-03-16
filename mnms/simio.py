@@ -237,3 +237,21 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, sim_num, a
     mapalm = 'alm' if alm else 'map'
     fn += f'{mapalm}{str(sim_num).zfill(4)}.fits'
     return fn
+
+def get_fsaw_model_fn(qid, split_num, lamb, n, fwhm_fact, lmax, notes=None, **kwargs):
+    # cast to floating point for consistency
+    lamb = float(lamb)
+    fwhm_fact = float(fwhm_fact)
+
+    # get root fn
+    fn = config['covmat_path']
+    fn += _get_sim_fn_root(qid, **kwargs)
+
+    # allow for possibility of no notes
+    if notes is None:
+        notes = ''
+    else:
+        notes = f'_{notes}'
+        
+    fn += f'lamb{lamb}{fwhm_str}_lmax{lmax}{smooth_loc}{notes}_set{split_num}.hdf5'
+    return fn
