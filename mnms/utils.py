@@ -359,7 +359,7 @@ def get_ivar_eff(ivar, sum_ivar=None, use_inf=False, use_zero=False):
 
     if use_inf:
         out[~mask] = np.inf
-    if use_zero:
+    elif use_zero:
         out[~mask] = 0.0
     else:
         # Fill with largest value allowed by dtype to mimic np.nan_to_num.
@@ -368,7 +368,7 @@ def get_ivar_eff(ivar, sum_ivar=None, use_inf=False, use_zero=False):
     return out
 
 def get_corr_fact(ivar):
-    '''
+    """
     Get correction factor sqrt(ivar_eff / ivar) that converts a draw from 
     split difference d_i to a draw from split noise n_i.
 
@@ -381,14 +381,11 @@ def get_corr_fact(ivar):
     -------
     corr_fact : (..., nsplit, 1, ny, nx) enmap
         Correction factor for each split.
-    '''
-
-    corr_fact = get_ivar_eff(ivar, use_inf=True)
-    corr_fact[~np.isfinite(corr_fact)] = 0
+    """
+    corr_fact = get_ivar_eff(ivar, use_zero=True)
     np.divide(corr_fact, ivar, out=corr_fact, where=ivar!=0)
     corr_fact[ivar==0] = 0
     corr_fact **= 0.5
-
     return corr_fact
 
 def get_noise_map(imap, ivar):
@@ -877,7 +874,7 @@ def empty_downgrade_cc_quad(imap, dg):
     omap = enmap.empty(oshape, owcs, dtype=imap.dtype)
     return omap
 
-def fourier_downgrade_cc_quad(imap, dg, area_pow=-.5, dtype=None):
+def fourier_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None):
     """Downgrade a map by Fourier resampling into a geometry that adheres
     to Clenshaw-Curtis quadrature. This will bandlimit the input signal in 
     Fourier space which may introduce ringing around bright objects, but 
@@ -890,7 +887,7 @@ def fourier_downgrade_cc_quad(imap, dg, area_pow=-.5, dtype=None):
     dg : int or float
         Downgrade factor.
     area_pow : int or float, optional
-        The area scaling of the downgraded signal, by default -0.5. Output map
+        The area scaling of the downgraded signal, by default 0. Output map
         is multiplied by dg^(2*area_pow).
     dtype : np.dtype, optional
         If not None, cast the input map to this data type, by default None.
@@ -929,8 +926,9 @@ def fourier_downgrade_cc_quad(imap, dg, area_pow=-.5, dtype=None):
         for sel in sels:
             okmap[sel] = ikmap[sel]
 
-        # scale values by area factor, e.g. dg^0 if ivar maps
-        mult = dg ** (2*area_pow)
+        # scale values by area factor, e.g. dg^0 if ivar maps.
+        # the -0.5 is because of conventional fft normalization
+        mult = dg ** (2*(area_pow-0.5))
 
         return mult * irfft(okmap, omap=omap)
 
@@ -1026,7 +1024,9 @@ def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
         if preconvolve:
             imap = imap.copy() # you don't want to convolve the input buffer
             for preidx in np.ndindex(imap.shape[:-2]):
-                imap[preidx] = ndimage.uniform_filter(imap[preidx], size=dg, mode='wrap')
+                ndimage.uniform_filter(
+                    imap[preidx], size=dg, output=imap[preidx], mode='wrap'
+                    )
         
         omap = empty_downgrade_cc_quad(imap, dg)
         thetas_in, phis_in = imap.posaxes()

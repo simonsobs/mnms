@@ -8,25 +8,22 @@ parser.add_argument('--qid', dest='qid', nargs='+', type=str, required=True,
                     help='list of soapack array "qids"')
 
 parser.add_argument('--mask-version', dest='mask_version', type=str, 
-                    default=None, help='Look in mnms:mask_path/mask_version/ '
-                    'for mask (default: %(default)s)')
+                    default=None, help='Look in mnms:mask_path/mask_version/ for mask')
 
 parser.add_argument('--mask-name', dest='mask_name', type=str, default=None,
-                    help='Load mnms:mask_path/mask_version/mask_name.fits '
-                    '(default: %(default)s)')
+                    help='Load mnms:mask_path/mask_version/mask_name.fits')
 
 parser.add_argument('--downgrade', dest='downgrade', type=int, default=1,
-                    help='downgrade all data in pixel space by square of this many '
-                    'pixels per side (default: %(default)s)')
+                    help='downgrade all data in pixel space by square of this many pixels per side')
 
 parser.add_argument('--lmax', dest='lmax', type=int, default=None,
                     help='Bandlimit of covariance matrix.')
 
-parser.add_argument('--lambda', dest='lamb', type=float, required=False, default=1.3,
+parser.add_argument('--lambda', dest='lamb', type=float, required=False, default=1.8,
                     help='Parameter specifying width of wavelets kernels in log(ell).')
 
-parser.add_argument('--smooth-loc', dest='smooth_loc', default=False, action='store_true',
-                    help='If passed, use smoothing kernel that varies over the map, smaller along edge of mask.')
+parser.add_argument('--n', dest='n', type=int, default=24,
+                    help='Bandlimit (in radians per azimuthal radian) of the directional kernels.')
 
 parser.add_argument('--fwhm-fact', dest='fwhm_fact', type=float, default=2., 
                     help='Factor determining smoothing scale at each wavelet scale: '
@@ -41,11 +38,10 @@ parser.add_argument('--kfilt-lbounds', dest='kfilt_lbounds', nargs='+', type=flo
                     "'4000 5'. Will be used for kspace filtering.")
 
 parser.add_argument('--notes', dest='notes', type=str, default=None, 
-                    help='a simple notes string to manually distinguish this set of '
-                    'sims (default: %(default)s)')
+                    help='a simple notes string to manually distinguish this set of sims ')
 
 parser.add_argument('--data-model', dest='data_model', type=str, default=None, 
-                    help='soapack DataModel class to use (default: %(default)s)')
+                    help='soapack DataModel class to use')
 
 parser.add_argument('--split', nargs='+', dest='split', type=int, 
                     help='if --no-auto-split, simulate this list of splits '
@@ -81,10 +77,10 @@ if args.data_model:
 else:
     data_model = None
     
-model = nm.WaveletNoiseModel(
+model = nm.FSAWNoiseModel(
     *args.qid, data_model=data_model, downgrade=args.downgrade, lmax=args.lmax, mask_version=args.mask_version,
-    mask_name=args.mask_name, union_sources=args.union_sources, kfilt_lbounds=args.kfilt_lbounds,
-    notes=args.notes, lamb=args.lamb, smooth_loc=args.smooth_loc, fwhm_fact=args.fwhm_fact)
+    mask_name=args.mask_name, union_sources=args.union_sources, kfilt_lbounds=args.kfilt_lbounds, 
+    notes=args.notes, lamb=args.lamb, n=args.n, fwhm_fact=args.fwhm_fact)
 
 # get split nums
 if args.auto_split:

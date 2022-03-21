@@ -239,6 +239,29 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, sim_num, a
     return fn
 
 def get_fsaw_model_fn(qid, split_num, lamb, n, fwhm_fact, lmax, notes=None, **kwargs):
+    """
+    Determine filename for square-root wavelet covariance file.
+
+    Arguments
+    ---------
+    qid : str
+        Array identifier.
+    split_num : int
+        Split index.
+    lamb : float
+        Parameter specifying width of wavelets kernels in log(ell).
+    n : int
+        Bandlimit (in radians per azimuthal radian) of the directional kernels.
+    fwhm_fact : float
+        Factor specifying smoothing FWHM per wavelet.
+    lmax : int
+        Max multipole.
+
+    Returns
+    -------
+    fn : str
+        Absolute path for file.
+    """
     # cast to floating point for consistency
     lamb = float(lamb)
     fwhm_fact = float(fwhm_fact)
@@ -253,5 +276,62 @@ def get_fsaw_model_fn(qid, split_num, lamb, n, fwhm_fact, lmax, notes=None, **kw
     else:
         notes = f'_{notes}'
         
-    fn += f'lamb{lamb}{fwhm_str}_lmax{lmax}{smooth_loc}{notes}_set{split_num}.hdf5'
+    fn += f'lamb{lamb}_n{n}_fwhm_fact{fwhm_fact}_lmax{lmax}{notes}_set{split_num}.hdf5'
+    return fn
+
+def get_fsaw_sim_fn(qid, split_num, lamb, n, fwhm_fact, lmax, sim_num, alm=False,
+                   mask_obs=True, notes=None, **kwargs):
+    """
+    Determine filename for simulated noise map.
+
+    Arguments
+    ---------
+    qid : str
+        Array identifier.
+    split_num : int
+        Split index.
+    lamb : float
+        Parameter specifying width of wavelets kernels in log(ell).
+    n : int
+        Bandlimit (in radians per azimuthal radian) of the directional kernels.
+    fwhm_fact : float
+        Factor specifying smoothing FWHM per wavelet.
+    lmax : int
+        Max multipole.
+    sim_num : int
+        Simulation number.
+    alm : bool
+        Whether filename ends in "map" (False) or "alm" (True)
+    mask_obs : bool
+        Is the sim masked by the mask_observed.
+
+    Returns
+    -------
+    fn : str
+        Absolute path for file.
+    """
+    # cast to floating point for consistency
+    lamb = float(lamb)
+    fwhm_fact = float(fwhm_fact)
+
+    # get root fn
+    fn = config['maps_path']
+    fn += _get_sim_fn_root(qid, **kwargs)
+
+    if mask_obs:
+        mask_obs_str = ''
+    else:
+        mask_obs_str = 'unmasked_'
+
+    # allow for possibility of no notes
+    if notes is None:
+        notes = ''
+    else:
+        notes = f'_{notes}'
+    
+    fn += f'lamb{lamb}_n{n}_fwhm_fact{fwhm_fact}_{mask_obs_str}lmax{lmax}{notes}_set{split_num}_'
+
+    # prepare map num tags
+    mapalm = 'alm' if alm else 'map'
+    fn += f'{mapalm}{str(sim_num).zfill(4)}.fits'
     return fn

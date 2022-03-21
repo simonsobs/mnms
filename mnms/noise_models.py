@@ -20,8 +20,8 @@ def register(registry=REGISTERED_NOISE_MODELS):
         return noise_model_class
     return decorator
 
-# NoiseModel API and concrete NoiseModel classes. 
 
+# NoiseModel API and concrete NoiseModel classes. 
 class NoiseModel(ABC):
 
     def __init__(self, *qids, data_model=None, preload=True, ivar=None, mask_est=None,
@@ -125,6 +125,9 @@ class NoiseModel(ABC):
         # Possibly store input data
         self._mask_est = mask_est
 
+        # initialize unloaded difference maps
+        self._dmap = None
+
         # initialize unloaded noise model dictionary, holds noise model variables for each split
         self._nm_dict = {}
 
@@ -201,7 +204,7 @@ class NoiseModel(ABC):
                     if self._downgrade != 1:
                         # use harmonic instead of interpolated downgrade because it is 
                         # 10x faster
-                        ivar = utils.harmonic_downgrade_cc_quad(
+                        ivar = utils.fourier_downgrade_cc_quad(
                             ivar, self._downgrade, area_pow=1
                             )
                     
@@ -356,11 +359,15 @@ class NoiseModel(ABC):
             does_not_exist = range(self._num_splits)
 
         # models need data split differences as inputs
-        dmap = self._get_data_split_diffs()
-        if keep_data:
-            self._dmap = dmap
+        if self._dmap is None:
+            dmap = self._get_data_split_diffs()
+            if keep_data:
+                self._dmap = dmap
+        else:
+            dmap = self._dmap
 
-        # particular model subclasses may further modify data split differences 
+        # particular model subclasses may further modify data split differences,
+        # e.g. with correction factors or ivar weighting 
         dmap = self._get_dmap(dmap)
 
         # get the conservative mask for estimating the harmonic filter used to whiten
@@ -454,7 +461,7 @@ class NoiseModel(ABC):
                         dmap = utils.filter_weighted(dmap, ivar_eff, filt)
 
                     if self._downgrade != 1:
-                        dmaps[i, j] = utils.harmonic_downgrade_cc_quad(
+                        dmaps[i, j] = utils.fourier_downgrade_cc_quad(
                             dmap, self._downgrade
                         )
                     else:
@@ -937,7 +944,7 @@ class WaveletNoiseModel(NoiseModel):
     def __init__(self, *qids, data_model=None, preload=True, ivar=None, mask_est=None,
                  calibrated=True, downgrade=1, lmax=None, mask_version=None, mask_name=None,
                  union_sources=None, kfilt_lbounds=None, notes=None, dtype=None, lamb=1.3, smooth_loc=False,
-                 fwhm_fact=2, **kwargs):
+                 fwhm_fact=2., **kwargs):
         """A WaveletNoiseModel object supports drawing simulations which capture scale-dependent, 
         spatially-varying map depth. They also capture the total noise power spectrum, and 
         array-array correlations.
@@ -1055,12 +1062,9 @@ class WaveletNoiseModel(NoiseModel):
 
     def _get_dmap(self, imap):
         """Return the required input difference map for a NoiseModel subclass, from split data imap"""
-
         # Correction factor turns split difference d_i to split noise n_i 
         # (which is the quantity we want to simulate in the end).
-        imap *= utils.get_corr_fact(self._ivar)        
-
-        return imap
+        return imap * utils.get_corr_fact(self._ivar)
 
     def _get_model(self, split_num, dmap, verbose=False):
         """
@@ -1139,7 +1143,7 @@ class FSAWNoiseModel(NoiseModel):
     def __init__(self, *qids, data_model=None, preload=True, ivar=None, mask_est=None,
                  calibrated=True, downgrade=1, lmax=None, mask_version=None, mask_name=None,
                  union_sources=None, kfilt_lbounds=None, notes=None, dtype=None, lamb=1.8, n=24,
-                 fwhm_fact=2, **kwargs):
+                 fwhm_fact=2., **kwargs):
         """An FSAWNoiseModel object supports drawing simulations which capture direction- 
         and scale-dependent, spatially-varying map depth. The simultaneous direction- and
         scale-sensitivity is achieved through steerable wavelet kernels in Fourier space.
@@ -1239,42 +1243,93 @@ class FSAWNoiseModel(NoiseModel):
         self._n = n
         self._fwhm_fact = fwhm_fact      
 
-        # build the kernels
+        # build the kernels.
+        # there is no real significance to lmax=10_800 here. it will just be
+        # used to build the kernel generating functions, specifically, to 
+        # check that the last kernel is not "clipped"
         self._fk = fsaw_noise.FSAWKernels(
-            self._lamb, self._lmax, 10, 5300, self._n, self._shape, self._wcs,
+            self._lamb, 10_800, 10, 5300, self._n, self._shape, self._wcs,
             dtype=self._dtype, nforw=[0, n//2], nback=[0, n//2]
         )
 
     def _get_model_fn(self, split_num):
         """Get a noise model filename for split split_num; return as <str>"""
-        return ''
+        return simio.get_fsaw_model_fn(
+            self._qids, split_num, self._lamb, self._n, self._fwhm_fact,
+            self._lmax, notes=self._notes, data_model=self._data_model, 
+            mask_version=self._mask_version, bin_apod=self._use_default_mask,
+            mask_name=self._mask_name, calibrated=self._calibrated,
+            downgrade=self._downgrade, union_sources=self._union_sources,
+            kfilt_lbounds=self._kfilt_lbounds, **self._kwargs
+        )
 
     def _read_model(self, fn):
         """Read a noise model with filename fn; return a dictionary of noise model variables"""
-        return {}
+        sqrt_cov_mat, extra_datasets = fsaw_noise.read_wavs(
+            fn, extra_datasets=['sqrt_cov_k']
+        )
+        sqrt_cov_k = extra_datasets['sqrt_cov_k']
+
+        return {
+            'sqrt_cov_mat': sqrt_cov_mat,
+            'sqrt_cov_k': sqrt_cov_k
+            }
 
     def _get_dmap(self, imap):
         """Return the required input difference map for a NoiseModel subclass, from split data imap"""
-        return enmap.ndmap
+        # Correction factor turns split difference d_i to split noise n_i 
+        # (which is the quantity we want to simulate in the end).
+        return imap * utils.get_corr_fact(self._ivar)
 
     def _get_model(self, split_num, dmap, verbose=False):
         """Return a dictionary of noise model variables for this NoiseModel subclass, for split split_num and from difference maps dmap"""
-        return {}
+        sqrt_cov_mat, sqrt_cov_k = fsaw_noise.get_fsaw_noise_covsqrt(
+            self._fk, dmap[:, split_num], mask_observed=self._mask_observed,
+            mask_est=self._mask_est, fwhm_fact=self._fwhm_fact, nthread=0,
+            verbose=verbose
+        )
 
-    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
-        """Write sqrt_cov_mat, sqrt_cov_ell, and possibly more noise model variables to filename fn"""
-        pass
+        return {
+            'sqrt_cov_mat': sqrt_cov_mat,
+            'sqrt_cov_k': sqrt_cov_k
+            }
+
+    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_k=None, **kwargs):
+        """Write sqrt_cov_mat, sqrt_cov_k, and possibly more noise model variables to filename fn"""
+        fsaw_noise.write_wavs(
+            fn, sqrt_cov_mat, extra_datasets={'sqrt_cov_k': sqrt_cov_k}
+        )
 
     def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
-        pass
+        return simio.get_fsaw_sim_fn(
+            self._qids, split_num, self._lamb, self._n, self._fwhm_fact,
+            self._lmax, sim_num, alm=alm, notes=self._notes, data_model=self._data_model, 
+            mask_version=self._mask_version, bin_apod=self._use_default_mask,
+            mask_name=self._mask_name, calibrated=self._calibrated,
+            downgrade=self._downgrade, union_sources=self._union_sources,
+            kfilt_lbounds=self._kfilt_lbounds, mask_obs=mask_obs, **self._kwargs
+        )
 
     def _get_sim(self, split_num, seed, mask=None, verbose=False):
         """Return a masked enmap.ndmap sim of split split_num, with seed <sequence of ints>"""
-        return enmap.ndmap
+        # Get noise model variables 
+        sqrt_cov_mat = self._nm_dict[split_num]['sqrt_cov_mat']
+        sqrt_cov_k = self._nm_dict[split_num]['sqrt_cov_k']
+
+        sim = fsaw_noise.get_fsaw_noise_sim(
+            self._fk, sqrt_cov_mat, preshape=(self._num_arrays, 1, -1),
+            sqrt_cov_k=sqrt_cov_k, seed=seed, nthread=0, verbose=verbose
+        )
+        if mask is not None:
+            sim *= mask
+        return sim
 
     def _get_sim_alm(self, split_num, seed, mask=None, verbose=False):
         """Return a masked alm sim of split split_num, with seed <sequence of ints>"""
+        sim = self._get_sim(split_num, seed, mask=mask, verbose=verbose)
+        return utils.map2alm(sim, lmax=self._lmax)
+
 
 class WavFiltTile(NoiseModel):
 

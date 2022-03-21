@@ -5,8 +5,11 @@ from optweight import wlm_utils
 import numpy as np 
 from scipy.special import comb 
 from scipy.interpolate import interp1d
+import astropy.io.fits as pyfits
+import astropy.wcs as pywcs
+import h5py
 
-from time import time
+
 class FSAWKernels:
 
     def __init__(self, lamb, lmax, lmin, lmax_j, n, shape, wcs,
@@ -515,7 +518,7 @@ class KernelFactory:
             ), \
             '0-cuts in y-direction of kernel must occur in both +y and -y'
 
-        if y_mask_pos.size == ny//2+1: # all rows in use
+        if y_mask_pos.max()+1 == ny//2+1: # all rows in use
             y_max_pos = ny
             y_max_neg = 0
         else:
@@ -687,6 +690,52 @@ def get_az_func(n, j):
 
 def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1, 
                            fwhm_fact=2, nthread=0, verbose=True):
+    """Generate square-root covariance information for the signal in imap.
+    The covariance matrix is assumed to be block-diagonal in wavelet kernels,
+    neglecting correlations due to their overlap. Kernels are managed by 
+    the 'fsaw_kernels' object passed as the first argument.
+
+    Parameters
+    ----------
+    fsaw_kernels : FSAWKernels
+        A set of Fourier steerable anisotropic wavelets, allowing users to
+        analyze/synthesize maps by simultaneous scale-, direction-, and 
+        location-dependence of information.
+    imap : (..., ny, nx) enmap.ndmap
+        Input signal maps. The outer product of this map with itself will
+        be taken in the wavelet basis to create the covariance matrix.
+    mask_observed : array-like, optional
+        A mask of observed pixels, by default 1. This mask will be applied
+        to imap before taking the initial Fourier transform.
+    mask_est : array-like, optional
+        An analysis mask in which to measure the power spectrum of imap,
+        by default 1.
+    fwhm_fact : int, optional
+        Factor determining smoothing scale at each wavelet scale:
+        FWHM = fact * pi / lmax, where lmax is the max wavelet ell., 
+        by default 2
+    nthread : int, optional
+        Number of concurrent threads, by default 0. If 0, the result
+        of mnms.utils.get_cpu_count()., by default 0.
+    verbose : bool, optional
+        Print possibly helpful messages, by default True.
+
+    Returns
+    -------
+    dict, np.ndarray
+        A dictionary holding wavelet maps of the square-root covariance, 
+        indexed by the wavelet key (radial index, azimuthal index). An
+        array of the same shape as the real Fourier transform of imap 
+        giving the square root signal power spectrum in Fourier space.
+
+    Notes
+    -----
+    All dimensions of imap preceding the last two (i.e. pixel) will be
+    covaried against themselves. For example, if imap has axes corresponding
+    to (arr, pol, y, x), the covariance will have axes corresponding to
+    (arr, pol, arr, pol, y, x) in each wavelet map. This is not exactly true:
+    the preceding axes will be flattened in the output.
+    """
     if verbose:
         print(
             f'Map shape: {imap.shape}\n'
@@ -719,7 +768,7 @@ def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1,
     )
     
     # get filters over k, apply them
-    sqrt_cov_k = np.empty(kmap.shape, imap.dtype)
+    sqrt_cov_k = enmap.empty(kmap.shape, kmap.wcs, kmap.real.dtype)
     modlmap = imap.modlmap().astype(imap.dtype, copy=False) # modlmap is np.float64 always...
     modlmap = modlmap[..., :modlmap.shape[-1]//2+1] # need "real" modlmap
     assert kmap.shape[-2:] == modlmap.shape, \
@@ -750,13 +799,53 @@ def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1,
         fwhm = fwhm_fact * np.pi / fsaw_kernels.lmaxs[idx]
         utils.smooth_gauss(wmap2, fwhm, method='map', mode=['constant', 'wrap'])
         
-        # raise to 0.5 power
-        sqrt_cov_wavs[idx] = utils.eigpow(wmap2, 0.5, axes=[0, 1])
+        # raise to 0.5 power. need to do some reshaping to allow use of
+        # chunked eigpow, along a flattened pixel axis
+        wmap2 = wmap2.reshape((*wmap2.shape[:-2], -1))
+        wmap2 = utils.chunked_eigpow(
+            wmap2, 0.5, axes=[-3, -2], chunk_axis=-1
+            )
+        sqrt_cov_wavs[idx] = wmap2.reshape(
+            (*wmap2.shape[:-1], *wmap.shape[-2:])
+            )
 
     return sqrt_cov_wavs, sqrt_cov_k
 
 def get_fsaw_noise_sim(fsaw_kernels, sqrt_cov_wavs, preshape=None,
                        sqrt_cov_k=None, seed=None, nthread=0, verbose=True):
+    """Draw a Guassian realization from the covariance corresponding to
+    the square-root covariance wavelet maps in sqrt_cov_wavs.
+
+    Parameters
+    ----------
+    fsaw_kernels : FSAWKernels
+        A set of Fourier steerable anisotropic wavelets, allowing users to
+        analyze/synthesize maps by simultaneous scale-, direction-, and 
+        location-dependence of information.
+    sqrt_cov_wavs : dict
+        A dictionary holding wavelet maps of the square-root covariance, 
+        indexed by the wavelet key (radial index, azimuthal index).
+    preshape : tuple, optional
+        Reshape preceding dimensions of the sim to preshape, by default None.
+        Preceding dimensions are those before the last two (the pixel axes).
+    sqrt_cov_k : np.ndarray, optional
+        An array of the same shape as the real Fourier transform of imap 
+        giving the square root signal power spectrum in Fourier space,
+        by default None. If provided, will be used to filter the sim in
+        Fourier space before returning. 
+    seed : iterable of ints, optional
+        Seed for random draw, by default None.
+    nthread : int, optional
+        Number of concurrent threads, by default 0. If 0, the result
+        of mnms.utils.get_cpu_count()., by default 0.
+    verbose : bool, optional
+        Print possibly helpful messages, by default True.
+
+    Returns
+    -------
+    (*preshape, ny, nx) enmap.ndmap
+        The simulated draw from the supplied covariance matrix.
+    """
     if verbose:
         print(
             f'Num kernels: {len(fsaw_kernels.kernels)}\n'
@@ -781,12 +870,137 @@ def get_fsaw_noise_sim(fsaw_kernels, sqrt_cov_wavs, preshape=None,
         
     # filter kmap directly in Fourier space
     if sqrt_cov_k is not None:
-        assert sqrt_cov_k.shape[:-2] == preshape, \
-            f'Sqrt_cov_k preshape and passed preshape do not match, got\n'
-        f'{sqrt_cov_k.shape[:-2]} and {preshape}'
-
         wcs = kmap.wcs # concurrent op clobbers wcs
         kmap = utils.concurrent_op(np.multiply, kmap, sqrt_cov_k, nthread=nthread)
         kmap = enmap.ndmap(kmap, wcs)
 
     return utils.irfft(kmap, nthread=nthread)
+
+# follows pixell.enmap.write_hdf recipe for writing wcs information
+def write_wavs(fname, wavs, extra_attrs=None, extra_datasets=None):
+    """Write wavelets and auxiliary information to disk.
+
+    Parameters
+    ----------
+    fname : path-like
+        Destination on-disk for file.
+    wavs : dict
+        A dictionary holding wavelet maps, indexed by the wavelet key (radial 
+        index, azimuthal index).
+    extra_attrs : dict, optional
+        A dictionary holding short, "atomic" information to be stored in the
+        file, by default None.
+    extra_datasets : dict, optional
+        A dictionary holding additional numpy arrays or enmap ndmaps, by
+        default None.
+
+    Notes
+    -----
+    Will overwrite a file at fname if it already exists.
+    """
+    if fname[-5:] != '.hdf5':
+        fname += '.hdf5'
+
+    with h5py.File(fname, 'w') as hfile:
+
+        for kern_key, wmap in wavs.items():
+            
+            # if kern_key is singleton (not tuple)
+            try:
+                dname = '_'.join([str(i) for i in kern_key])
+            except TypeError:
+                dname = '_'.join([str(kern_key)])
+            
+            wset = hfile.create_dataset(dname, data=np.asarray(wmap))
+
+            if hasattr(wmap, 'wcs'):
+                for k, v in wmap.wcs.to_header().items():
+                    wset.attrs[k] = v
+
+        if extra_attrs is not None:
+            for k, v in extra_attrs.items():
+                hfile.attrs[k] = v
+
+        if extra_datasets is not None:
+            for ekey, emap in extra_datasets.items():
+                eset = hfile.create_dataset(ekey, data=np.asarray(emap))
+
+                if hasattr(emap, 'wcs'):
+                    for k, v in emap.wcs.to_header().items():
+                        eset.attrs[k] = v
+
+# follows pixell.enmap.read_hdf recipe for reading wcs information
+def read_wavs(fname, extra_attrs=None, extra_datasets=None):
+    """Read wavelets and auxiliary information from disk.
+
+    Parameters
+    ----------
+    fname : path-like
+        Location on-disk for file.
+    extra_attrs : iterable, optional
+        List of short, "atomic" information expected to be stored in the
+        file, by default None.
+    extra_datasets : iterable, optional
+        List of additional numpy arrays or enmap ndmaps expected to be stored
+        in the file, by default None.
+
+    Returns
+    -------
+    dict, [dict], [dict]
+        Always returns a dictionary  of wavelet maps, indexed by the wavelet 
+        key (radial index, azimuthal index). If extra_attrs supplied, 
+        also returns a dictionary with keys given by the supplied arguments. If
+        extra_datasets supplied, also returns a dictionary with keys given by 
+        the supplied arguments. If both extra_attrs and extra_datasets supplied,
+        extra_attrs will correspond to the second returned object, and
+        extra_datasets to the third.
+    """
+    if fname[-5:] != '.hdf5':
+        fname += '.hdf5'
+    
+    with h5py.File(fname, 'r') as hfile:
+
+        wavs = {}
+        for ikey, iset in hfile.items():
+
+            imap = np.empty(iset.shape, iset.dtype)
+            iset.read_direct(imap)
+                
+            # get possible wcs information
+            if len(iset.attrs) > 0:
+                header = pyfits.Header()
+                for k, v in iset.attrs.items():
+                    header[k] = v
+                wcs = pywcs.WCS(header)
+                imap = enmap.ndmap(imap, wcs)
+
+            try:
+                ikey = tuple([int(i) for i in ikey.split('_')])
+            except ValueError:
+                ikey = str(ikey)
+            # revert scalar keys to singleton (not tuple)
+            if len(ikey) == 1:
+                ikey = ikey[0]
+            wavs[ikey] = imap
+
+        extra_attrs_dict = {}
+        if extra_attrs is not None:
+            for k in extra_attrs:
+                extra_attrs_dict[k] = hfile.attrs[k]
+
+        # any extra maps will have already been loaded into wavs, so 
+        # need to pop them out
+        extra_datasets_dict = {}
+        if extra_datasets is not None:
+            for k in extra_datasets:
+                extra_datasets_dict[k] = wavs.pop(k)
+
+    # return
+    if extra_attrs_dict == {} and extra_datasets_dict == {}:
+        return wavs
+    elif extra_datasets_dict == {}:
+        return wavs, extra_attrs_dict
+    elif extra_attrs_dict == {}:
+        return wavs, extra_datasets_dict
+    else:
+        return wavs, extra_attrs_dict, extra_datasets_dict
