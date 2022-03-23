@@ -386,6 +386,9 @@ class NoiseModel(ABC):
                 fn = self._get_model_fn(s)
                 self._write_model(fn, **nm_dict)
 
+            # remove nm_dict from memory before moving onto next split
+            nm_dict = None
+
     def _get_data_split_diffs(self):
         """Load the raw data split differences according to instance attributes.
 
@@ -1318,9 +1321,14 @@ class FSAWNoiseModel(NoiseModel):
         sqrt_cov_k = self._nm_dict[split_num]['sqrt_cov_k']
 
         sim = fsaw_noise.get_fsaw_noise_sim(
-            self._fk, sqrt_cov_mat, preshape=(self._num_arrays, 1, -1),
+            self._fk, sqrt_cov_mat, preshape=(self._num_arrays, -1),
             sqrt_cov_k=sqrt_cov_k, seed=seed, nthread=0, verbose=verbose
         )
+
+        # We always want shape (num_arrays, num_splits=1, num_pol, ny, nx).
+        assert sim.ndim == 4, 'Sim must have shape (num_arrays, num_pol, ny, nx)'
+        sim = sim.reshape(sim.shape[0], 1, *sim.shape[1:])
+
         if mask is not None:
             sim *= mask
         return sim
