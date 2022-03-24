@@ -91,28 +91,30 @@ Another hyperparameter is the raw data itself. This is pointed to by the `soapac
 An example set of filenames produced by `simio.py` for the tiled noise model are shown here:
 ```
 /scratch/gpfs/zatkins/data/ACTCollaboration/mnms/covmats/
-    pa6a_pa6b_dr6v3_v3_dr6v3_default_union_mask_cal_True_dg4_ip20210209_sncut_10_aggressive_lamb1.3_lmax5400_20211203_set1.hdf5
-    pa6a_pa6b_dr6v3_v3_dr6v3_default_union_mask_cal_True_dg4_ip20210209_sncut_10_aggressive_w4.0_h4.0_lsmooth400_lmax5400_20211203_set1.fits
+    pa4a_pa4b_dr6v3_v3_dr6v3_20220316_baseline_union_mask_cal_True_dg4_ipregular_20220316_w4.0_h4.0_lsmooth400_lmax5400_20220322_set0.fits
+    pa4a_pa4b_dr6v3_v3_dr6v3_20220316_baseline_union_mask_cal_True_dg4_ipregular_20220316_lamb1.3_lmax5400_20220322_set0.hdf5
+    pa4a_pa4b_dr6v3_v3_dr6v3_20220316_baseline_union_mask_cal_True_dg4_ipregular_20220316_lamb1.8_n24_fwhm_fact2.0_lmax5400_20220322_set0.hdf5
     
 /scratch/gpfs/zatkins/data/ACTCollaboration/mnms/maps/
-    pa6a_pa6b_dr6v3_v3_dr6v3_default_union_mask_cal_True_dg4_ip20210209_sncut_10_aggressive_lamb1.3_lmax5400_20211203_set1_{map/alm}0001.fits
-    pa6a_pa6b_dr6v3_v3_dr6v3_default_union_mask_cal_True_dg4_ip20210209_sncut_10_aggressive_w4.0_h4.0_lsmooth400_lmax5400_20211203_set1_{map/alm}0001.fits
+    pa4a_pa4b_dr6v3_v3_dr6v3_20220316_baseline_union_mask_cal_True_dg4_ipregular_20220316_w4.0_h4.0_lsmooth400_lmax5400_20220322_set0_{map/alm}0000.fits
+    pa4a_pa4b_dr6v3_v3_dr6v3_20220316_baseline_union_mask_cal_True_dg4_ipregular_20220316_lamb1.3_lmax5400_20220322_set0_{map/alm}0000.fits
+    pa4a_pa4b_dr6v3_v3_dr6v3_20220316_baseline_union_mask_cal_True_dg4_ipregular_20220316_lamb1.8_n24_fwhm_fact2.0_lmax5400_20220322_set0_{map/alm}0000.fits
 ```
-We show a covariance file for each of the wavelet and tiled noise models, likewise for some simulated maps (alms). You can see common information in the filenames: the detector array is `pa6a_pa6b` -- i.e., the array pa6 f090 and pa6 f150 arrays are correlated in the model and sim. The mask is not the default; it is instead set by passing `use_default_mask=False, mask_version='v3', mask_name='dr6v3_default_union_mask'` to `simio.get_sim_mask_fn` (you could also eliminate the need to pass the `mask_version` kwarg explicitly by adding `default_mask_version: v3` to the `mnms` block, as is done above). The model/sim uses gain calibration factors, is downgraded by a factor of 4, and the model inpainted around a point source catalog (`20210209_sncut_10_aggressive`, included in `soapack` and specified with the `union_sources` argument). A change to any of these hyperparameters (including the `notes`, which here is `20211203`) would result in a need to regenerate any noise models and simulations.
+We show a covariance file for each of the tiled, wavelet, and steerable wavelet noise models, likewise for some simulated maps (alms). You can see common information in the filenames: the detector array is `pa4a_pa4b` -- i.e., the array pa4 f150 and pa4 f220 arrays are correlated in the model and sim. The mask is not the default; it is instead set by passing `use_default_mask=False, mask_version='v3', mask_name='20220316_baseline_union_mask'` to `simio.get_sim_mask_fn` (you could also eliminate the need to pass the `mask_version` kwarg explicitly by adding `default_mask_version: v3` to the `mnms` block, as is done above). The model/sim uses gain calibration factors, is downgraded by a factor of 4, and the model inpainted around a point source catalog (`regular_20220316`, included in `soapack` and specified with the `union_sources` argument). A change to any of these hyperparameters (including the `notes`, which here is `20220322`) would result in a need to regenerate any noise models and simulations.
 
 ## Running Scripts
 
-Each noise model -- tiled, wavelets -- have two scripts, one to generate the covariance-like products, and one to load those products and draw simulations. The command-line options for each script are documented and available as 
+Each noise model -- tiled, wavelets, steerable wavelets -- have two scripts, one to generate the covariance-like products, and one to load those products and draw simulations. The command-line options for each script are documented and available as 
 ```
-python noise_{gen/sim}_{tile/wav}.py --help
+python noise_{gen/sim}_{tile/wav/fsaw}.py --help
 ```
-For example, in the tiled case, a user would first run `noise_gen_tile.py`.  In addition to the array, data model, and mask hyperparameters, users specify whether to downgrade maps (useful for testing, speed/memory performancel e.g. `--downgrade 2` above), tile geometry in degrees (width, height e.g. `--width-deg 4.0 --height-deg 4.0` above), smoothing scale (to reduce sample variance from the small number of input realizations e.g. `--delta-ell-smooth 400`) and an optional `notes` flag (to distinguish otherwise identical hyperparameter sets. e.g. `--notes nm_test_20210728`). Most of these particular hyperparameters are the script defaults, acessible in the help string. All these hyperparameters are recorded in the simulation filenames and the products saved in `covmat_path`.
+For example, in the tiled case, a user would first run `noise_gen_tile.py`.  In addition to the array, data model, and mask hyperparameters, users specify whether to downgrade maps (useful for testing, speed/memory performancel e.g. `--downgrade 4` above), tile geometry in degrees (width, height e.g. `--width-deg 4.0 --height-deg 4.0` above), smoothing scale (to reduce sample variance from the small number of input realizations e.g. `--delta-ell-smooth 400`) and an optional `notes` flag (to distinguish otherwise identical hyperparameter sets. e.g. `--notes 20220322`). Most of these particular hyperparameters are the script defaults, acessible in the help string. All these hyperparameters are recorded in the simulation filenames and the products saved in `covmat_path`.
 
 To draw a simulation, users would run `noise_sim_tile.py`. Specifying the same hyperparameters as before allows `simio` to find the proper products in `covmat_path`. A new set of simulation-specific parameters are then supplied, for example how many maps to generate. Again, these parameters are recorded in the map files saved in `maps_path`. 
 
 ## On-the-fly simulations
 
-Simulations can also be drawn on-the-fly (this is actually what the scripts do, of course, they just automatically save the results to disk). We have the same two steps as before: (1) building a (square-root) covariance matrix (which will save itself to disk by default), and (2) drawing a simulation from that matrix. To do this we must first build a `NoiseModel` object (either a `TiledNoiseModel` or `WaveletNoiseModel`). For instance, from the tiled case:
+Simulations can also be drawn on-the-fly (this is actually what the scripts do, of course, they just automatically save the results to disk). We have the same two steps as before: (1) building a (square-root) covariance matrix (which will save itself to disk by default), and (2) drawing a simulation from that matrix. To do this we must first build a `NoiseModel` object (either a `TiledNoiseModel`, `WaveletNoiseModel`, or `FSAWNoiseModel`). For instance, from the tiled case:
 ```
 from mnms import noise_models as nm
 tnm = nm.TiledNoiseModel('pa6a', 'pa6b', downgrade=2, notes='my_model')
@@ -129,7 +131,7 @@ print(imap.shape)
 
 ## Other Notes
 
-* Both noise models can account for correlated detector-arrays.
+* All noise models can account for correlated detector-arrays.
     * The array correlations can be introduced on top by passing a list of array names to the command-line argument `--qid` of any script instead of just one array name.
 
 * The timing performance in the scientific documentation assumes properly parallelized slurm jobs.
@@ -138,4 +140,6 @@ print(imap.shape)
 * All map products assume the following axis assignment convention: (array, split, polarizaiton, y, x). Because simulations are per-split, the -4 axis always has dimension 1. 
 
 ## Scientific Documentation
-A very brief summary of the two implemented noise models (2D tiled Fourier, 1D wavelets) can be found [here](https://docs.google.com/presentation/d/1VlqeiXAlzX3Ysn8vUebQWVg6hGEme34UQ2tfeqwE8cM/edit#slide=id.ge63fea64de_0_135).
+A very brief summary of the 2D tiled Fourier, 1D wavelets models can be found [here](https://docs.google.com/presentation/d/1VlqeiXAlzX3Ysn8vUebQWVg6hGEme34UQ2tfeqwE8cM/edit#slide=id.ge63fea64de_0_135).
+
+A very brief summary of the 2D "Fourier steerable anisotropic wavelets" (FSAW) can be found [here](https://docs.google.com/presentation/d/1QjKpvBIYoaWuWP2qsChmCbYE7dbNqwyjpUj--nwpy6c/edit#slide=id.ge63fea64de_0_135)
