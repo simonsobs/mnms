@@ -63,7 +63,7 @@ dr6:
     default_mask_version: "masks_20200723"
     
 dr6v3:
-    coadd_input_path: "/projects/ACT/zatkins/sync/20211202/release/"
+    coadd_input_path: "/projects/ACT/zatkins/sync/dr6v3_20211031/release_bestpass/"
     coadd_output_path: "/projects/ACT/zatkins/sync/20201207/synced_maps/imaps_2019/"
     coadd_beam_path: "/projects/ACT/zatkins/sync/20201207/synced_beams/ibeams_2019/"
     planck_path: "/projects/ACT/zatkins/sync/20201207/synced_maps/planck_hybrid/"
