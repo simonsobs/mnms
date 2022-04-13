@@ -493,7 +493,7 @@ class KernelFactory:
             for i in range(unique_n+1):
                 self._az_funcs[unique_n, i] = get_az_func(unique_n, i)
 
-    def _get_sliced_shape_and_sels(self, unsliced_kern, idx=None, force=False,
+    def _get_sliced_shape_and_sels(self, unsliced_kern, idx=None,
                                    unsliced_sels=None):
         """Given a kernel at full Fourier resolution, determine the minimal 
         'bounding box' and associated numpy selection tuples necessary and 
@@ -505,29 +505,39 @@ class KernelFactory:
             A full Fourier resolution kernel.
         idx : int, optional
             The index for this kernel, by default None.
+        unsliced_sels : iterable of iterables
+            The selection tuples associated with unsliced_kern, if
+            unsliced_kern is already sliced out of some higher 
+            resolution space. By default this is a selection tuple
+            that grabs "everything."
 
         Returns
         -------
-        tuple of int, iterable of iterables
+        tuple of int, iterable of iterables, iterable of iterables
             The shape of the minimum bounding box, and the numpy
             selection tuples to go to/from full resolution to
-            multiresolution Fourier space.
+            multiresolution Fourier space. The first set of selection tuples
+            is meant to slice the full Fourier space. The second is meant
+            to insert data into the reduced-size space.
 
         Notes
         -----
         Assumes real DFTs, therefore nkx counts only the "positive" kx modes.
         """
+        # start with everything if nothing passed
         if unsliced_sels is None:
             unsliced_sels = [
                 (Ellipsis, slice(None, None, None), slice(None, None, None)),
             ]
+        else:
+            assert len(unsliced_sels) == 1 or len(unsliced_sels) == 2
 
         assert unsliced_kern.ndim == 2, \
             f'unsliced_kern must be a 2d array, got {unsliced_kern.ndim}d'
         ny, nx = (unsliced_kern.shape[0], unsliced_kern.shape[1])
         
-        # get maximal x index
-        x_mask = np.nonzero(unsliced_kern.astype(bool).sum(axis=0) > 0)[0]
+        # get bounding x indeces
+        x_mask = np.nonzero(unsliced_kern.any(axis=0))[0]
         if x_mask.size == nx: # all columns in use
             x_min = 0
             x_max = nx
@@ -537,86 +547,73 @@ class KernelFactory:
             x_min = max(x_mask.min() - 1, 0)
             x_max = x_mask.max() + 1 # inclusive bounds
 
-        # get maximal y indices in both "positive" and "negative" directions
-        y_mask = unsliced_kern.astype(bool).sum(axis=1)
+        # first check if y in both quadrants or just positive or negative
+        y_mask = unsliced_kern.any(axis=1)
         y_mask_pos = np.nonzero(y_mask[:ny//2+1] > 0)[0]
         y_mask_neg = np.nonzero(y_mask[:-(ny//2+1):-1] > 0)[0]
-    
-        if force:
-            if y_mask_pos.size == 0:
-                y_mask_pos = np.array([-1])
-            if y_mask_neg.size == 0:
-                y_mask_neg = np.array([-1])
 
-        # either both or neither are full
+        if y_mask_pos.size > 0 and y_mask_neg.size > 0:
+            quadrant = 'both'
+        elif y_mask_pos.size > 0:
+            quadrant = 'pos'
+        elif y_mask_neg.size > 0:
+            quadrant = 'neg'
         else:
+            raise ValueError(f'idx {idx} has empty_kernel')
+        
+        # if both, we need a "full array height" span
+        if quadrant == 'both':
+            y_min_pos = 0
+            y_min_neg = 0
+            y_max_pos = min(y_mask_pos.max() + 1, ny//2 + 1)
+            y_max_neg = min(y_mask_neg.max() + 1, ny//2)
             assert not np.logical_xor(
-                y_mask_pos.max()+1 == ny//2+1, y_mask_neg.max()+1 == ny//2
+                y_max_pos == ny//2+1, y_max_neg == ny//2
                 ), \
                 '0-cuts in y-direction of kernel must occur in both +y and -y'
 
-        # y_min_pos = max(y_mask_pos.min() - 1, 0)
-        # y_min_neg = max(y_mask_neg.min() - 1, 0)
-        # if not (y_min_pos == 0 and y_min_neg == 0):
-        #     if y_min_pos > y_min_neg:
-        #         y_min_neg = y_min_pos - 1
-        #     else:
-        #         y_min_pos = y_min_neg + 1
-        # if not (y_min_pos == 0 and y_min_neg == 0):
-        #     assert y_min_pos == y_min_neg + 1, \
-        #         f'y_min_pos and y_min_neg must differ in absval by 1, ' \
-        #         f'got {y_min_pos} and {y_min_neg} for idx {idx}'
-
-        if y_mask_pos.max() + 1 == ny//2+1 or y_mask_neg.max() + 1 == ny//2:
-            # if ny%2 == 0:
-            #     y_max_pos = ny//2
-            #     y_max_neg = ny//2
-            # else:
-            #     y_max_pos = ny//2+1
-            #     y_max_neg = ny//2
-            y_max_pos = ny
-            y_max_neg = 0
-        else:
-            if force:
-                assert y_mask_pos.size > 0 or y_mask_neg.size > 0, \
-                    f'idx {idx} has empty kernel'
+            # check for a "full height" slice (since we know either both
+            # or neither from above assertion, can just check one)
+            if y_max_pos == ny//2+1:
+                if ny%2 == 0:
+                    y_max_neg = ny//2-1 # if even, want to add up to ny
             else:
-                assert y_mask_pos.size > 0, \
-                    f'idx {idx} has empty kernel'
-                assert y_mask_neg.size > 0, \
-                    f'idx {idx} has empty kernel'
-
-            y_max_pos = y_mask_pos.max() + 1 # inclusive bounds
-            y_max_neg = y_mask_neg.max() + 1 # inclusive bounds
-
-            if force:
-                if y_max_pos > y_max_neg:
+                # we did everything right if there is 1 more in y than x
+                # assert y_max_pos == y_max_neg + 1, \
+                #     f'y_max_pos and y_max_neg must differ in absval by 1, ' \
+                #     f'got {y_max_pos} and {y_max_neg} for idx {idx}'
+                if y_max_pos > y_max_neg + 1:
                     y_max_neg = y_max_pos - 1
                 else:
                     y_max_pos = y_max_neg + 1
 
-            # we did everything right if there is 1 more in y than x
-            assert y_max_pos == y_max_neg + 1, \
-                f'y_max_pos and y_max_neg must differ in absval by 1, ' \
-                f'got {y_max_pos} and {y_max_neg} for idx {idx}'
+            kern_shape = (y_max_pos + y_max_neg, x_max - x_min)
 
-        # assert y_max_pos >= y_min_pos
-        # assert y_max_neg >= y_min_neg, \
-        #     print(idx, unsliced_kern.shape, y_max_pos, y_max_neg, y_min_pos, y_min_neg)
+        elif quadrant == 'pos':
+            y_min_neg = 0
+            y_max_neg = 0
+            y_min_pos = max(y_mask_pos.min() - 1, 0)
+            y_max_pos = min(y_mask_pos.max() + 1, ny//2 + 1)
+
+            kern_shape = (y_max_pos - y_min_pos, x_max - x_min)
+
+        elif quadrant == 'neg':
+            y_min_pos= 0
+            y_max_pos = 0
+            y_min_neg = max(y_mask_neg.min() - 1, 0)
+            y_max_neg = min(y_mask_neg.max() + 1, ny//2)
+
+            kern_shape = (y_max_neg - y_min_neg, x_max - x_min)
 
         # we did something wrong if the sliced shape is greater in extent
         # than the unsliced shape
-        assert y_max_pos + y_max_neg <= ny, \
+        assert kern_shape[0] <= ny, \
             print(unsliced_kern.shape, y_max_pos, y_max_neg, \
             f'y_max_pos + y_max_neg > ny for idx {idx}')
-        assert x_max <= nx, \
+        assert kern_shape[1] <= nx, \
             f'x_max > nx for idx {idx}'
 
-        # get the shape of this kernel and selection tuples
-        # kern_shape = (y_max_pos - y_min_pos + y_max_neg - y_min_neg, x_max - x_min)
-        kern_shape = (y_max_pos + y_max_neg, x_max - x_min)
-
-        # get everything, insert everything
+        # get everything, insert everything if no change
         if kern_shape == (ny, nx):
             get_sels = unsliced_sels
             ins_sels = unsliced_sels
@@ -641,29 +638,7 @@ class KernelFactory:
         # if y's are clipped, need to slice in y, and :x_max will work whether
         # clipped or not
         else:
-            if y_max_neg == 0:
-                # get_sels = [np.s_[..., y_min_pos:y_max_pos, x_min:x_max],]
-                # ins_sels = [np.s_[..., :y_max_pos - y_min_pos, :x_max - x_min],]
-                get_sels = [np.s_[..., :y_max_pos, x_min:x_max],]
-                ins_sels = [np.s_[..., :y_max_pos, :x_max - x_min],]
-            # elif y_min_neg == 0:
-            #     get_sels = [
-            #         np.s_[..., y_min_pos:y_max_pos, x_min:x_max],
-            #         np.s_[..., -y_max_neg:, x_min:x_max]
-            #         ]
-            #     ins_sels = [
-            #         np.s_[..., :y_max_pos - y_min_pos, :x_max - x_min],
-            #         np.s_[..., -(y_max_neg - y_min_neg):, :x_max - x_min]
-            #         ]
-            else:
-                # get_sels = [
-                #     np.s_[..., y_min_pos:y_max_pos, x_min:x_max],
-                #     np.s_[..., -y_max_neg:-y_min_neg, x_min:x_max]
-                #     ]
-                # ins_sels = [
-                #     np.s_[..., :y_max_pos - y_min_pos, :x_max - x_min],
-                #     np.s_[..., -(y_max_neg - y_min_neg):, :x_max - x_min]
-                #     ]
+            if quadrant == 'both':
                 get_sels = [
                     np.s_[..., :y_max_pos, x_min:x_max],
                     np.s_[..., -y_max_neg:, x_min:x_max]
@@ -672,6 +647,15 @@ class KernelFactory:
                     np.s_[..., :y_max_pos, :x_max - x_min],
                     np.s_[..., -y_max_neg:, :x_max - x_min]
                     ]
+            elif quadrant == 'pos':
+                get_sels = [np.s_[..., y_min_pos:y_max_pos, x_min:x_max],]
+                ins_sels = [np.s_[..., :y_max_pos - y_min_pos, :x_max - x_min],]
+            elif quadrant == 'neg':
+                if y_min_neg == 0:
+                    get_sels = [np.s_[..., -y_max_neg:, x_min:x_max],]
+                else:
+                    get_sels = [np.s_[..., -y_max_neg:-y_min_neg, x_min:x_max],]
+                ins_sels = [np.s_[..., -y_max_neg + y_min_neg:, :x_max - x_min],]
 
         return kern_shape, get_sels, ins_sels
 
@@ -702,20 +686,18 @@ class KernelFactory:
             kern_phimap[ins_sels[i]] = self._phimap[get_sel]
         az_kern = self._az_funcs[az_n, az_idx](kern_phimap)
         
-        # get this kernel
+        # get this kernel. we start from an initially reduced 
+        # slice of full Fourier space, _kern, which centers on the
+        # "full square" defined by the radial part only. this just
+        # helps speed things up. we then slice again the individual
+        # kernel
         _kern = rad_kern * az_kern
         kern_shape, get_sels, ins_sels = self._get_sliced_shape_and_sels(
-            _kern, idx=(rad_idx, az_idx), force=True, unsliced_sels=get_sels
+            _kern, idx=(rad_idx, az_idx), unsliced_sels=get_sels
             )
         kern = np.empty(kern_shape, dtype=_kern.dtype)
-        try:
-            for i, get_sel in enumerate(get_sels):
-                kern[ins_sels[i]] = _kern[get_sel]
-        except ValueError as e:
-            print(rad_idx, az_idx)
-            print(kern.shape, _kern.shape)
-            print(get_sels, ins_sels)
-            raise e
+        for i, get_sel in enumerate(get_sels):
+            kern[ins_sels[i]] = _kern[get_sel]
 
         # kernels have 2(rkx-1)+1 pixels in map space x direction
         map_shape = (kern.shape[0], 2*(kern.shape[1]-1) + 1)
@@ -775,6 +757,30 @@ def get_rad_func(w_ell, n, j):
         )
 
 def get_az_func(n, j):
+    """Generate a callable for a given "cos-hat" kernel.
+
+    Parameters
+    ----------
+    n : int
+        Azimuthal bandlimit. For a complete basis, one requires
+        n + 1 kernels.
+    j : int
+        The azimuthal kernel index.
+
+    Returns
+    -------
+    callable
+        A 1d function taking an array-like argument of any dimension
+        and returning the wavelet kernel evaluated at each azimuthal
+        angle in the argument.
+
+    Notes
+    -----
+    The kernel is the function cos(np/(2d)*(x - c)), where
+    d = pi/(n+1) and c = pi/(n+1) +/- k*pi where k is any
+    integer. It is positive for the single "bump" around
+    each c, but is 0 otherwise.
+    """
     if n > 0:
         delta = np.pi/(n+1)
         def w_phi(phis):
