@@ -64,6 +64,7 @@ class FSAWKernels:
         """
         self._kf = KernelFactory(lamb, lmax, lmin, lmax_j, n, shape, wcs,
                                  dtype=dtype, nforw=nforw, nback=nback)
+        self._shape = shape
         self._real_shape = (shape[-2], shape[-1]//2 + 1)
         self._wcs = wcs
         self._cdtype = np.result_type(1j, dtype)
@@ -197,6 +198,16 @@ class FSAWKernels:
         """
         return self._mean_sqs
 
+    @property
+    def shape(self):
+        """The supplied shape for the kernel set."""
+        return self._shape
+
+    @property
+    def wcs(self):
+        """The supplied wcs for the kernel set."""
+        return self._wcs
+
 
 class Kernel:
 
@@ -292,7 +303,8 @@ class Kernel:
             kmap *= self._k_kernel
 
         assert kmap.shape[-2:] == self._k_kernel.shape, \
-            f'kmap must have same shape[-2:] as k_kernel, got {kmap.shape}'
+            f'kmap must have same shape[-2:] as k_kernel, got\n' + \
+            f'{kmap.shape} and {self._k_kernel.shape}'
 
         wmap = utils.irfft(kmap, n=self._n, nthread=nthread) # destroys kmap buffer
         wcs = self._k_kernel.wcs if use_kernel_wcs else kmap.wcs
@@ -321,9 +333,11 @@ class Kernel:
             Real DFT of a map to be analyzed.
         """
         assert wmap.shape[-2] == self._k_kernel.shape[-2], \
-            f'wmap must have same shape[-2] as k_kernel, got {wmap.shape[-2]}'
+            f'wmap must have same shape[-2] as k_kernel, got\n' + \
+            f'{wmap.shape[-2]} and {self._k_kernel.shape[-2]}'
         assert wmap.shape[-1]//2+1 == self._k_kernel.shape[-1], \
-            f'wmap must have same shape[-1]//2+1 as k_kernel, got {wmap.shape[-1]//2+1}'
+            f'wmap must have same shape[-1]//2+1 as k_kernel, got\n' + \
+            f'{wmap.shape[-1]//2+1} and {self._k_kernel.shape[-1]}'
         
         kmap = utils.rfft(wmap, nthread=nthread) 
         kmap *= self._k_kernel_conj
@@ -432,7 +446,9 @@ class KernelFactory:
         for i, w_ell in enumerate(w_ells):
             rad_func = get_rad_func(w_ell, len(w_ells), i)
             self._rad_funcs.append(rad_func)
-            unsliced_rad_kern = rad_func(modlmap)
+
+            # interp1d returns as np.float64 always, need to cast
+            unsliced_rad_kern = rad_func(modlmap).astype(modlmap.dtype)
 
             kern_shape, sels = self._get_sliced_shape_and_sels(
                 unsliced_rad_kern, rad_idx=i
@@ -646,8 +662,26 @@ def get_rad_func(w_ell, n, j):
         ell, w_ell, kind='nearest', bounds_error=False, fill_value=fill_value
         )
 
-# radial kernels are cos^n(phi) from https://doi.org/10.1109/34.93808
 def get_az_func(n, j):
+    if n > 0:
+        delta = np.pi/(n+1)
+        def w_phi(phis):
+            out = np.asanyarray(phis) * 0
+            for i in [-2, -1, 0, 1, 2]:
+                center = j*np.pi/(n+1) + i*np.pi
+                cut_low = (center - delta) <= phis
+                cut_high = phis < (center + delta)
+                cond = np.logical_and(cut_low, cut_high)
+                func = np.cos(np.pi/(2*delta)*(phis - center))
+                out += np.where(cond, func, 0)
+            return out + 0j
+    else:
+        def w_phi(phis):
+            return 1+0j
+    return w_phi
+
+# radial kernels are cos^n(phi) from https://doi.org/10.1109/34.93808
+def get_az_func2(n, j):
     """Generate a callable for a given steerable azimuthal wavelet
     kernel (kernels from e.g. https://doi.org/10.1109/34.93808). 
 
@@ -779,6 +813,8 @@ def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1,
             np.arange(lmax_meas+1), sqrt_cov_ell[preidx], bounds_error=False, 
             fill_value=(0, sqrt_cov_ell[(*preidx, -1)])
             )
+        
+        # interp1d returns as float64 always, but this recasts in assignment
         sqrt_cov_k[preidx] = sqrt_cov_ell_func(modlmap)
     
     np.multiply(kmap, 0, out=kmap, where=sqrt_cov_k==0)
@@ -874,7 +910,7 @@ def get_fsaw_noise_sim(fsaw_kernels, sqrt_cov_wavs, preshape=None,
         kmap = utils.concurrent_op(np.multiply, kmap, sqrt_cov_k, nthread=nthread)
         kmap = enmap.ndmap(kmap, wcs)
 
-    return utils.irfft(kmap, nthread=nthread)
+    return utils.irfft(kmap, n=fsaw_kernels.shape[-1], nthread=nthread)
 
 # follows pixell.enmap.write_hdf recipe for writing wcs information
 def write_wavs(fname, wavs, extra_attrs=None, extra_datasets=None):
