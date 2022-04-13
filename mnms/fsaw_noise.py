@@ -144,8 +144,8 @@ class FSAWKernels:
             assert wav.shape[:-2] == preshape, \
                 f'wav {kern_key} preshape is {wav.shape[:-2]}, expected {preshape}'
             kmap_wav = kernel.wav2k(wav, nthread=nthread)
-            for sel in kernel._sels:
-                kmap[sel] += kmap_wav[sel]
+            for i, get_sel in enumerate(kernel._get_sels):
+                kmap[get_sel] += kmap_wav[kernel._ins_sels[i]]
         return kmap
 
     @property
@@ -212,7 +212,7 @@ class FSAWKernels:
 
 class Kernel:
 
-    def __init__(self, k_kernel, sels=None):
+    def __init__(self, k_kernel, get_sels=None, ins_sels=None):
         """One simultaneously scale-, direction-, and location-dependent
         filter. Uses multiresolution partitioning of Fourier space.
 
@@ -243,20 +243,23 @@ class Kernel:
         # difference will be negligible
         self._n = 2*(k_kernel.shape[-1]-1) + 1 
         
-        if sels is None:
-            sels = [(Ellipsis,)] # get everything, insert everything
+        if get_sels is None:
+            get_sels = [(Ellipsis,)] # get everything, insert everything
+            ins_sels = [(Ellipsis,)] # get everything, insert everything
         try:
-            iter(sels)
+            iter(get_sels)
+            iter(ins_sels)
         except TypeError as e:
             raise TypeError('sels must be iterable if supplied') from e
-        for sel in sels:
-            assert sel[0] is Ellipsis, \
+        for i, get_sel in enumerate(get_sels):
+            assert ins_sels[i][0] is Ellipsis and get_sel[0] is Ellipsis, \
                 'first item of each selection must be Ellipsis'
-        self._sels = sels
+        self._get_sels = get_sels
+        self._ins_sels = ins_sels
 
         # check that selection tuples touch each element exactly once
         test_arr = np.zeros(self._k_kernel.shape, dtype=int)
-        for sel in self._sels:
+        for sel in self._ins_sels:
             test_arr[sel] += 1
         assert np.all(test_arr == 1), \
             'Selection tuples do not cover each kernel element exactly once'
@@ -295,8 +298,8 @@ class Kernel:
 
             # need to do this because _kmap, _k_kernel are small res
             # but kmap is not
-            for sel in self._sels:
-                _kmap[sel] = self._k_kernel[sel] * kmap[sel]
+            for i, get_sel in enumerate(self._get_sels):
+                _kmap[self._ins_sels[i]] = self._k_kernel[self._ins_sels[i]] * kmap[get_sel]
             kmap = _kmap
         else:
             if not inplace:
@@ -442,7 +445,8 @@ class KernelFactory:
         # the slice/selection tuples (function of rad kern only), and 
         # kernel shapes
         self._rad_funcs = []
-        self._sels = []
+        self._get_sels = []
+        self._ins_sels = []
         self._rad_kerns = []
         for i, w_ell in enumerate(w_ells):
             rad_func = get_rad_func(w_ell, len(w_ells), i)
@@ -451,15 +455,16 @@ class KernelFactory:
             # interp1d returns as np.float64 always, need to cast
             unsliced_rad_kern = rad_func(modlmap).astype(modlmap.dtype)
 
-            kern_shape, sels = self._get_sliced_shape_and_sels(
+            kern_shape, get_sels, ins_sels = self._get_sliced_shape_and_sels(
                 unsliced_rad_kern, idx=i
                 )
-            self._sels.append(sels)
+            self._get_sels.append(get_sels)
+            self._ins_sels.append(ins_sels)
             
             # finally, get this radial kernel
             rad_kern = np.empty(kern_shape, dtype=unsliced_rad_kern.dtype)
-            for sel in sels:
-                rad_kern[sel] = unsliced_rad_kern[sel]
+            for i, get_sel in enumerate(get_sels):
+                rad_kern[ins_sels[i]] = unsliced_rad_kern[get_sel]
             self._rad_kerns.append(rad_kern)
 
         # get list of w_phi callables
@@ -524,10 +529,12 @@ class KernelFactory:
         # get maximal x index
         x_mask = np.nonzero(unsliced_kern.astype(bool).sum(axis=0) > 0)[0]
         if x_mask.size == nx: # all columns in use
+            x_min = 0
             x_max = nx
         else:
             assert x_mask.size > 0, \
                 f'idx {idx} has empty kernel'
+            x_min = max(x_mask.min() - 1, 0)
             x_max = x_mask.max() + 1 # inclusive bounds
 
         # get maximal y indices in both "positive" and "negative" directions
@@ -548,7 +555,25 @@ class KernelFactory:
                 ), \
                 '0-cuts in y-direction of kernel must occur in both +y and -y'
 
-        if y_mask_pos.max()+1 == ny//2+1 or y_mask_neg.max()+1 == ny//2: 
+        # y_min_pos = max(y_mask_pos.min() - 1, 0)
+        # y_min_neg = max(y_mask_neg.min() - 1, 0)
+        # if not (y_min_pos == 0 and y_min_neg == 0):
+        #     if y_min_pos > y_min_neg:
+        #         y_min_neg = y_min_pos - 1
+        #     else:
+        #         y_min_pos = y_min_neg + 1
+        # if not (y_min_pos == 0 and y_min_neg == 0):
+        #     assert y_min_pos == y_min_neg + 1, \
+        #         f'y_min_pos and y_min_neg must differ in absval by 1, ' \
+        #         f'got {y_min_pos} and {y_min_neg} for idx {idx}'
+
+        if y_mask_pos.max() + 1 == ny//2+1 or y_mask_neg.max() + 1 == ny//2:
+            # if ny%2 == 0:
+            #     y_max_pos = ny//2
+            #     y_max_neg = ny//2
+            # else:
+            #     y_max_pos = ny//2+1
+            #     y_max_neg = ny//2
             y_max_pos = ny
             y_max_neg = 0
         else:
@@ -575,28 +600,40 @@ class KernelFactory:
                 f'y_max_pos and y_max_neg must differ in absval by 1, ' \
                 f'got {y_max_pos} and {y_max_neg} for idx {idx}'
 
+        # assert y_max_pos >= y_min_pos
+        # assert y_max_neg >= y_min_neg, \
+        #     print(idx, unsliced_kern.shape, y_max_pos, y_max_neg, y_min_pos, y_min_neg)
+
         # we did something wrong if the sliced shape is greater in extent
         # than the unsliced shape
         assert y_max_pos + y_max_neg <= ny, \
-            f'y_max_pos + y_max_neg > ny for idx {idx}'
+            print(unsliced_kern.shape, y_max_pos, y_max_neg, \
+            f'y_max_pos + y_max_neg > ny for idx {idx}')
         assert x_max <= nx, \
             f'x_max > nx for idx {idx}'
 
         # get the shape of this kernel and selection tuples
-        kern_shape = (y_max_pos + y_max_neg, x_max)
+        # kern_shape = (y_max_pos - y_min_pos + y_max_neg - y_min_neg, x_max - x_min)
+        kern_shape = (y_max_pos + y_max_neg, x_max - x_min)
 
         # get everything, insert everything
         if kern_shape == (ny, nx):
-            sels = unsliced_sels
+            get_sels = unsliced_sels
+            ins_sels = unsliced_sels
         
         # if y's are full but x's are clipped, then only need to slice in x
         elif (kern_shape[0] == ny) and (kern_shape[1] != nx):
             if len(unsliced_sels) == 1:
-                sels = [(*unsliced_sels[0][:2], np.s_[:x_max]),]
+                get_sels = [(*unsliced_sels[0][:2], np.s_[x_min:x_max]),]
+                ins_sels = [(*unsliced_sels[0][:2], np.s_[:x_max - x_min]),]
             elif len(unsliced_sels) == 2:
-                sels = [
-                    (*unsliced_sels[0][:2], np.s_[:x_max]),
-                    (*unsliced_sels[1][:2], np.s_[:x_max])
+                get_sels = [
+                    (*unsliced_sels[0][:2], np.s_[x_min:x_max]),
+                    (*unsliced_sels[1][:2], np.s_[x_min:x_max])
+                    ]
+                ins_sels = [
+                    (*unsliced_sels[0][:2], np.s_[:x_max - x_min]),
+                    (*unsliced_sels[1][:2], np.s_[:x_max - x_min])
                     ]
             else:
                 raise ValueError('Only 1 or 2 sels allowed')
@@ -605,14 +642,38 @@ class KernelFactory:
         # clipped or not
         else:
             if y_max_neg == 0:
-                sels = [np.s_[..., :y_max_pos, :x_max],]
+                # get_sels = [np.s_[..., y_min_pos:y_max_pos, x_min:x_max],]
+                # ins_sels = [np.s_[..., :y_max_pos - y_min_pos, :x_max - x_min],]
+                get_sels = [np.s_[..., :y_max_pos, x_min:x_max],]
+                ins_sels = [np.s_[..., :y_max_pos, :x_max - x_min],]
+            # elif y_min_neg == 0:
+            #     get_sels = [
+            #         np.s_[..., y_min_pos:y_max_pos, x_min:x_max],
+            #         np.s_[..., -y_max_neg:, x_min:x_max]
+            #         ]
+            #     ins_sels = [
+            #         np.s_[..., :y_max_pos - y_min_pos, :x_max - x_min],
+            #         np.s_[..., -(y_max_neg - y_min_neg):, :x_max - x_min]
+            #         ]
             else:
-                sels = [
-                    np.s_[..., :y_max_pos, :x_max],
-                    np.s_[..., -y_max_neg:, :x_max]
+                # get_sels = [
+                #     np.s_[..., y_min_pos:y_max_pos, x_min:x_max],
+                #     np.s_[..., -y_max_neg:-y_min_neg, x_min:x_max]
+                #     ]
+                # ins_sels = [
+                #     np.s_[..., :y_max_pos - y_min_pos, :x_max - x_min],
+                #     np.s_[..., -(y_max_neg - y_min_neg):, :x_max - x_min]
+                #     ]
+                get_sels = [
+                    np.s_[..., :y_max_pos, x_min:x_max],
+                    np.s_[..., -y_max_neg:, x_min:x_max]
+                    ]
+                ins_sels = [
+                    np.s_[..., :y_max_pos, :x_max - x_min],
+                    np.s_[..., -y_max_neg:, :x_max - x_min]
                     ]
 
-        return kern_shape, sels
+        return kern_shape, get_sels, ins_sels
 
     def get_kernel(self, rad_idx, az_n, az_idx):
         """Generate the specified kernel.
@@ -632,34 +693,36 @@ class KernelFactory:
             A Kernel class instance.
         """
         rad_kern = self._rad_kerns[rad_idx]
-        sels = self._sels[rad_idx]
+        get_sels = self._get_sels[rad_idx]
+        ins_sels = self._ins_sels[rad_idx]
 
         # get a sliced phimap, evaluate the az_func on it
         kern_phimap = np.empty(rad_kern.shape, self._phimap.dtype)
-        for sel in sels:
-            kern_phimap[sel] = self._phimap[sel]
+        for i, get_sel in enumerate(get_sels):
+            kern_phimap[ins_sels[i]] = self._phimap[get_sel]
         az_kern = self._az_funcs[az_n, az_idx](kern_phimap)
         
         # get this kernel
         _kern = rad_kern * az_kern
-        kern_shape, sels = self._get_sliced_shape_and_sels(
-            _kern, idx=(rad_idx, az_idx), force=True, unsliced_sels=sels
+        kern_shape, get_sels, ins_sels = self._get_sliced_shape_and_sels(
+            _kern, idx=(rad_idx, az_idx), force=True, unsliced_sels=get_sels
             )
         kern = np.empty(kern_shape, dtype=_kern.dtype)
         try:
-            for sel in sels:
-                kern[sel] = _kern[sel]
-        except ValueError:
+            for i, get_sel in enumerate(get_sels):
+                kern[ins_sels[i]] = _kern[get_sel]
+        except ValueError as e:
             print(rad_idx, az_idx)
             print(kern.shape, _kern.shape)
-            print(sels)
+            print(get_sels, ins_sels)
+            raise e
 
         # kernels have 2(rkx-1)+1 pixels in map space x direction
         map_shape = (kern.shape[0], 2*(kern.shape[1]-1) + 1)
         _, map_wcs = enmap.geometry(self._corners, shape=map_shape)
         kern = enmap.ndmap(kern, map_wcs) 
 
-        return Kernel(kern, sels=sels)
+        return Kernel(kern, get_sels=get_sels, ins_sels=ins_sels)
 
 
 def get_rad_func(w_ell, n, j):
