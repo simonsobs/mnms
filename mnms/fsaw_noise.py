@@ -1,3 +1,4 @@
+from ast import Pass
 from pixell import enmap, curvedsky
 from mnms import utils
 from optweight import wlm_utils
@@ -451,7 +452,7 @@ class KernelFactory:
             unsliced_rad_kern = rad_func(modlmap).astype(modlmap.dtype)
 
             kern_shape, sels = self._get_sliced_shape_and_sels(
-                unsliced_rad_kern, rad_idx=i
+                unsliced_rad_kern, idx=i
                 )
             self._sels.append(sels)
             
@@ -487,17 +488,18 @@ class KernelFactory:
             for i in range(unique_n+1):
                 self._az_funcs[unique_n, i] = get_az_func(unique_n, i)
 
-    def _get_sliced_shape_and_sels(self, unsliced_rad_kern, rad_idx=None):
-        """Given a radial kernel at full Fourier resolution, determine
-        the minimal 'bounding box' and associated numpy selection tuples
-        necessary and sufficient to admit lossless analysis and synthesis.
+    def _get_sliced_shape_and_sels(self, unsliced_kern, idx=None, force=False,
+                                   unsliced_sels=None):
+        """Given a kernel at full Fourier resolution, determine the minimal 
+        'bounding box' and associated numpy selection tuples necessary and 
+        sufficient to admit lossless analysis and synthesis.
 
         Parameters
         ----------
-        unsliced_rad_kern : (..., nky, nkx) enmap.ndmap
-            A full Fourier resolution radial kernel.
-        rad_idx : int, optional
-            The radial index for this kernel, by default None.
+        unsliced_kern : (..., nky, nkx) enmap.ndmap
+            A full Fourier resolution kernel.
+        idx : int, optional
+            The index for this kernel, by default None.
 
         Returns
         -------
@@ -510,69 +512,105 @@ class KernelFactory:
         -----
         Assumes real DFTs, therefore nkx counts only the "positive" kx modes.
         """
-        assert unsliced_rad_kern.ndim == 2, \
-            f'unsliced_rad_kern must be a 2d array, got {unsliced_rad_kern.ndim}d'
-        ny, nx = (unsliced_rad_kern.shape[0], unsliced_rad_kern.shape[1])
+        if unsliced_sels is None:
+            unsliced_sels = [
+                (Ellipsis, slice(None, None, None), slice(None, None, None)),
+            ]
+
+        assert unsliced_kern.ndim == 2, \
+            f'unsliced_kern must be a 2d array, got {unsliced_kern.ndim}d'
+        ny, nx = (unsliced_kern.shape[0], unsliced_kern.shape[1])
         
         # get maximal x index
-        x_mask = np.nonzero(unsliced_rad_kern.astype(bool).sum(axis=0) > 0)[0]
+        x_mask = np.nonzero(unsliced_kern.astype(bool).sum(axis=0) > 0)[0]
         if x_mask.size == nx: # all columns in use
             x_max = nx
         else:
             assert x_mask.size > 0, \
-                f'rad_idx {rad_idx} has empty kernel'
+                f'idx {idx} has empty kernel'
             x_max = x_mask.max() + 1 # inclusive bounds
 
         # get maximal y indices in both "positive" and "negative" directions
-        y_mask = unsliced_rad_kern.astype(bool).sum(axis=1)
+        y_mask = unsliced_kern.astype(bool).sum(axis=1)
         y_mask_pos = np.nonzero(y_mask[:ny//2+1] > 0)[0]
         y_mask_neg = np.nonzero(y_mask[:-(ny//2+1):-1] > 0)[0]
     
-        # either both or neither are full
-        assert not np.logical_xor(
-            y_mask_pos.size == ny//2+1, y_mask_neg.size == ny//2
-            ), \
-            '0-cuts in y-direction of kernel must occur in both +y and -y'
+        if force:
+            if y_mask_pos.size == 0:
+                y_mask_pos = np.array([-1])
+            if y_mask_neg.size == 0:
+                y_mask_neg = np.array([-1])
 
-        if y_mask_pos.max()+1 == ny//2+1: # all rows in use
+        # either both or neither are full
+        else:
+            assert not np.logical_xor(
+                y_mask_pos.max()+1 == ny//2+1, y_mask_neg.max()+1 == ny//2
+                ), \
+                '0-cuts in y-direction of kernel must occur in both +y and -y'
+
+        if y_mask_pos.max()+1 == ny//2+1 or y_mask_neg.max()+1 == ny//2: 
             y_max_pos = ny
             y_max_neg = 0
         else:
-            assert y_mask_pos.size > 0, \
-                f'rad_idx {rad_idx} has empty kernel'
-            assert y_mask_neg.size > 0, \
-                f'rad_idx {rad_idx} has empty kernel'
+            if force:
+                assert y_mask_pos.size > 0 or y_mask_neg.size > 0, \
+                    f'idx {idx} has empty kernel'
+            else:
+                assert y_mask_pos.size > 0, \
+                    f'idx {idx} has empty kernel'
+                assert y_mask_neg.size > 0, \
+                    f'idx {idx} has empty kernel'
 
             y_max_pos = y_mask_pos.max() + 1 # inclusive bounds
             y_max_neg = y_mask_neg.max() + 1 # inclusive bounds
 
+            if force:
+                if y_max_pos > y_max_neg:
+                    y_max_neg = y_max_pos - 1
+                else:
+                    y_max_pos = y_max_neg + 1
+
             # we did everything right if there is 1 more in y than x
             assert y_max_pos == y_max_neg + 1, \
                 f'y_max_pos and y_max_neg must differ in absval by 1, ' \
-                f'got {y_max_pos} and {y_max_neg} for rad_idx {rad_idx}'
+                f'got {y_max_pos} and {y_max_neg} for idx {idx}'
 
         # we did something wrong if the sliced shape is greater in extent
         # than the unsliced shape
         assert y_max_pos + y_max_neg <= ny, \
-            f'y_max_pos + y_max_neg > ny for rad_idx {rad_idx}'
+            f'y_max_pos + y_max_neg > ny for idx {idx}'
         assert x_max <= nx, \
-            f'x_max > nx for rad_idx {rad_idx}'
+            f'x_max > nx for idx {idx}'
 
         # get the shape of this kernel and selection tuples
         kern_shape = (y_max_pos + y_max_neg, x_max)
 
         # get everything, insert everything
         if kern_shape == (ny, nx):
-            sels= [(Ellipsis,)]
+            sels = unsliced_sels
         
         # if y's are full but x's are clipped, then only need to slice in x
         elif (kern_shape[0] == ny) and (kern_shape[1] != nx):
-            sels = [np.s_[..., :x_max],]
+            if len(unsliced_sels) == 1:
+                sels = [(*unsliced_sels[0][:2], np.s_[:x_max]),]
+            elif len(unsliced_sels) == 2:
+                sels = [
+                    (*unsliced_sels[0][:2], np.s_[:x_max]),
+                    (*unsliced_sels[1][:2], np.s_[:x_max])
+                    ]
+            else:
+                raise ValueError('Only 1 or 2 sels allowed')
         
         # if y's are clipped, need to slice in y, and :x_max will work whether
         # clipped or not
         else:
-            sels = [np.s_[..., :y_max_pos, :x_max], np.s_[..., -y_max_neg:, :x_max]]
+            if y_max_neg == 0:
+                sels = [np.s_[..., :y_max_pos, :x_max],]
+            else:
+                sels = [
+                    np.s_[..., :y_max_pos, :x_max],
+                    np.s_[..., -y_max_neg:, :x_max]
+                    ]
 
         return kern_shape, sels
 
@@ -603,7 +641,18 @@ class KernelFactory:
         az_kern = self._az_funcs[az_n, az_idx](kern_phimap)
         
         # get this kernel
-        kern = rad_kern * az_kern
+        _kern = rad_kern * az_kern
+        kern_shape, sels = self._get_sliced_shape_and_sels(
+            _kern, idx=(rad_idx, az_idx), force=True, unsliced_sels=sels
+            )
+        kern = np.empty(kern_shape, dtype=_kern.dtype)
+        try:
+            for sel in sels:
+                kern[sel] = _kern[sel]
+        except ValueError:
+            print(rad_idx, az_idx)
+            print(kern.shape, _kern.shape)
+            print(sels)
 
         # kernels have 2(rkx-1)+1 pixels in map space x direction
         map_shape = (kern.shape[0], 2*(kern.shape[1]-1) + 1)
