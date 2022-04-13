@@ -2,11 +2,6 @@ from mnms import noise_models as nm
 from soapack import interfaces as sints
 import argparse
 
-# This script generates a 2D tiled square-root smoothed covariance matrix and a simple smoothed, global, 1D isotropic covariance matrix
-# Each tile is like a distinct "patch" for which an independent realization of the noise will be drawn
-# Only sufficiently "exposed" tiles under the passed mask are calculated/stored; masked tiles are skipped
-# Supports MPI parallelization
-
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--qid', dest='qid',nargs='+',type=str,required=True,help='list of soapack array "qids"')
 parser.add_argument('--mask-version',dest='mask_version',type=str,default=None,help='look in mnms:mask_path/mask_version/ for mask (default: %(default)s)')

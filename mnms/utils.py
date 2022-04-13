@@ -359,7 +359,7 @@ def get_ivar_eff(ivar, sum_ivar=None, use_inf=False, use_zero=False):
 
     if use_inf:
         out[~mask] = np.inf
-    if use_zero:
+    elif use_zero:
         out[~mask] = 0.0
     else:
         # Fill with largest value allowed by dtype to mimic np.nan_to_num.
@@ -368,7 +368,7 @@ def get_ivar_eff(ivar, sum_ivar=None, use_inf=False, use_zero=False):
     return out
 
 def get_corr_fact(ivar):
-    '''
+    """
     Get correction factor sqrt(ivar_eff / ivar) that converts a draw from 
     split difference d_i to a draw from split noise n_i.
 
@@ -381,14 +381,11 @@ def get_corr_fact(ivar):
     -------
     corr_fact : (..., nsplit, 1, ny, nx) enmap
         Correction factor for each split.
-    '''
-
-    corr_fact = get_ivar_eff(ivar, use_inf=True)
-    corr_fact[~np.isfinite(corr_fact)] = 0
+    """
+    corr_fact = get_ivar_eff(ivar, use_zero=True)
     np.divide(corr_fact, ivar, out=corr_fact, where=ivar!=0)
     corr_fact[ivar==0] = 0
     corr_fact **= 0.5
-
     return corr_fact
 
 def get_noise_map(imap, ivar):
@@ -877,7 +874,7 @@ def empty_downgrade_cc_quad(imap, dg):
     omap = enmap.empty(oshape, owcs, dtype=imap.dtype)
     return omap
 
-def fourier_downgrade_cc_quad(imap, dg, area_pow=-.5, dtype=None):
+def fourier_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None):
     """Downgrade a map by Fourier resampling into a geometry that adheres
     to Clenshaw-Curtis quadrature. This will bandlimit the input signal in 
     Fourier space which may introduce ringing around bright objects, but 
@@ -890,7 +887,7 @@ def fourier_downgrade_cc_quad(imap, dg, area_pow=-.5, dtype=None):
     dg : int or float
         Downgrade factor.
     area_pow : int or float, optional
-        The area scaling of the downgraded signal, by default -0.5. Output map
+        The area scaling of the downgraded signal, by default 0. Output map
         is multiplied by dg^(2*area_pow).
     dtype : np.dtype, optional
         If not None, cast the input map to this data type, by default None.
@@ -929,8 +926,9 @@ def fourier_downgrade_cc_quad(imap, dg, area_pow=-.5, dtype=None):
         for sel in sels:
             okmap[sel] = ikmap[sel]
 
-        # scale values by area factor, e.g. dg^0 if ivar maps
-        mult = dg ** (2*area_pow)
+        # scale values by area factor, e.g. dg^0 if ivar maps.
+        # the -0.5 is because of conventional fft normalization
+        mult = dg ** (2*(area_pow-0.5))
 
         return mult * irfft(okmap, omap=omap)
 
@@ -1026,7 +1024,9 @@ def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
         if preconvolve:
             imap = imap.copy() # you don't want to convolve the input buffer
             for preidx in np.ndindex(imap.shape[:-2]):
-                imap[preidx] = ndimage.uniform_filter(imap[preidx], size=dg, mode='wrap')
+                ndimage.uniform_filter(
+                    imap[preidx], size=dg, output=imap[preidx], mode='wrap'
+                    )
         
         omap = empty_downgrade_cc_quad(imap, dg)
         thetas_in, phis_in = imap.posaxes()
@@ -1100,6 +1100,86 @@ def recenter_coords(theta, phi, return_as_rad=False):
         theta, phi = np.deg2rad([theta, phi])
 
     return theta, phi
+
+def smooth_gauss(imap, fwhm, mask=None, inplace=True, method='curvedsky',
+                 **method_kwargs):
+    """Smooth a map with a Gaussian profile.
+
+    Parameters
+    ----------
+    imap : (..., ny, nx) enmap.ndmap
+        Map to be smoothed.
+    fwhm : float
+        Full-width half-max (radians) of Gaussian kernel.
+    mask : array-like
+        If provided, apply this mask to imap both before and after
+        smoothing, by default None. Can be any type. Must broadcast
+        with imap.
+    inplace : bool, optional
+        If possible (depending on method), smooth imap inplace, 
+        by default True.
+    method : str, optional
+        The method used to perform the smoothing, by default 'map.'
+    method_kwargs : dict, optional
+        Any additional kwargs to pass to the function performing the
+        smoothing, by default {}.
+
+    Returns
+    -------
+    (..., ny, nx) enmap.ndmap
+        The smoothed map.
+
+    Notes
+    -----
+    The method 'curvedsky' performs a spherical harmonic transform
+    and multiplies by a Gaussian beam, before inverse-transforming.
+
+    The method 'fft' performs a real DFT and multiplies by an 
+    isotropic Gaussian beam profile in Fourier space, before taking
+    the inverse DFT. 
+
+    The method 'map' performs the Gaussian convolution directly on the
+    map-space buffer. The size of the profile is set by the map 'extents'
+    rather than the pixel size, to be more fair to maps that are far
+    from the equator.
+    """
+    sigma_rad = fwhm / np.sqrt(2 * np.log(2)) / 2
+    
+    if not inplace:
+        imap = imap.copy()
+
+    if mask is not None:
+        imap *= mask
+
+    if method == 'curvedsky':
+        lmax = lmax_from_wcs(imap.wcs)    
+        ainfo = sharp.alm_info(lmax)
+
+        b_ell = hp.gauss_beam(fwhm, lmax=lmax)
+
+        alm = map2alm(imap, ainfo=ainfo)
+        for preidx in np.ndindex(imap.shape[:-2]):
+            alm[preidx] = alm_c_utils.lmul(alm[preidx], b_ell, ainfo)
+        imap = alm2map(alm, omap=imap, ainfo=ainfo)
+
+    if method == 'fft':
+        raise NotImplementedError('FFT is not yet implemented')
+
+    if method == 'map':
+        rad_per_pix = enmap.extent(imap.shape, imap.wcs) / imap.shape[-2:]
+        sigma_pix = sigma_rad / rad_per_pix
+
+        # NOTE: 'nearest', 'wrap' only works for full sky maps. for 
+        # maps much smaller than full sky, should be 'nearest', 'nearest'
+        for preidx in np.ndindex(imap.shape[:-2]):
+            ndimage.gaussian_filter(
+                imap[preidx], sigma_pix, output=imap[preidx], **method_kwargs
+                )
+    
+    if mask is not None:
+        imap *= mask
+
+    return imap
 
 def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
     lmin = center - width/2
@@ -1197,16 +1277,17 @@ def concurrent_normal(size=1, loc=0., scale=1., nchunks=100, nthread=0,
             np.add, out, out_imag, nchunks=nchunks, nthread=nthread, flatten_axes=[0]
             )
 
-    # need scale_vec, loc_vec to have same chunk_axis size as the actual draws
-    scale_vec = np.full((nchunks, 1), scale, dtype=dtype)
-    out = concurrent_op(
-        np.multiply, out, scale_vec, nchunks=nchunks, nthread=nthread, flatten_axes=[0]
-        )
-
-    loc_vec = np.full((nchunks, 1), loc, dtype=dtype)
-    out = concurrent_op(
-        np.add, out, loc_vec, nchunks=nchunks, nthread=nthread, flatten_axes=[0]
-        )
+    # need scale_vec, loc_vec to have same flatten_axis size as the actual draws
+    if scale != 1:
+        scale_vec = np.full((nchunks, 1), scale, dtype=dtype)
+        out = concurrent_op(
+            np.multiply, out, scale_vec, nchunks=nchunks, nthread=nthread, flatten_axes=[0]
+            )
+    if loc != 0:
+        loc_vec = np.full((nchunks, 1), loc, dtype=dtype)
+        out = concurrent_op(
+            np.add, out, loc_vec, nchunks=nchunks, nthread=nthread, flatten_axes=[0]
+            )
 
     # return
     out = out.reshape(-1)[:totalsize]
@@ -1224,12 +1305,9 @@ def concurrent_op(op, a, b, *args, flatten_axes=[-2,-1],
         The first array in the operation.
     b : ndarray
         The second array in the operation.
-    chunk_axis_a : int, optional
-        The axis in a over which the operation may be applied
-        concurrently, by default 0.
-    chunk_axis_b : int, optional
-        The axis in b over which the operation may be applied
-        concurrently, by default 0.
+    flatten_axes : iterable of int
+        Axes in a and b to flatten and concurrently apply op over
+        in chunks. These axes must have the same shape in a and b.
     nchunks : int, optional
         The number of chunks to loop over concurrently, by default 100.
     nthread : int, optional
@@ -1239,15 +1317,20 @@ def concurrent_op(op, a, b, *args, flatten_axes=[-2,-1],
     Returns
     -------
     ndarray
-        The result of op(a, b, *args, **kwargs), except with the axis
-        corresponding to the a, b chunk axes located at axis-0.
+        The result of op(a, b, *args, **kwargs).
 
     Notes
     -----
-    The chunk axes are what a user might expect to naively 'loop over'. For
-    maximum efficiency, they should be long. They must be of equal size in
-    a and b.
+    The flatten axes are what a user might expect to naively 'loop over'. For
+    maximum efficiency, they should be have as many elements as possible.
     """
+    # need to make a, b the same length or else broadcasting doesn't work
+    # in the workers
+    maxdim = max(a.ndim, b.ndim)
+    a = atleast_nd(a, maxdim)
+    b = atleast_nd(b, maxdim)
+
+    # now get the shape of the subspace to flatten
     oshape_axes_a = [a.shape[i] for i in flatten_axes]
     oshape_axes_b = [b.shape[i] for i in flatten_axes]
     assert oshape_axes_a == oshape_axes_b, \
@@ -1255,20 +1338,19 @@ def concurrent_op(op, a, b, *args, flatten_axes=[-2,-1],
         f'{oshape_axes_a} and {oshape_axes_b}'
     oshape_axes = oshape_axes_a
 
-    # move axes to axis -1 position
-    # NOTE: very important to do -1, else broadcasting does not
-    # work in the futures workers
-    a = flatten_axis(a, axis=flatten_axes, pos=-1)
-    b = flatten_axis(b, axis=flatten_axes, pos=-1)
+    # move axes to axis 0 position
+    # NOTE: very important to do 0, else the strides slow down the workers
+    a = flatten_axis(a, axis=flatten_axes, pos=0)
+    b = flatten_axis(b, axis=flatten_axes, pos=0)
 
     # get size per chunk draw
-    totalsize = a.shape[-1]
+    totalsize = a.shape[0]
     chunksize = np.ceil(totalsize/nchunks).astype(int)
 
     # define working objects
-    # in order to get output shape, dtype, must get shape, dtype of op(a[0], b[0])
-    out_test = op(a[..., 0], b[..., 0], *args, **kwargs)
-    out = np.empty((*out_test.shape, totalsize), dtype=out_test.dtype)
+    # in order to get output shape, dtype, must get shape, dtype of op(a[..., 0], b[..., 0])
+    out_test = op(a[0], b[0], *args, **kwargs)
+    out = np.empty((totalsize, *out_test.shape), dtype=out_test.dtype)
 
     # perform multithreaded execution
     if nthread == 0:
@@ -1276,14 +1358,14 @@ def concurrent_op(op, a, b, *args, flatten_axes=[-2,-1],
     executor = futures.ThreadPoolExecutor(max_workers=nthread)
 
     def _fill(start, stop):
-        op(a[..., start:stop], b[..., start:stop], *args, out=out[..., start:stop], **kwargs)
+        op(a[start:stop], b[start:stop], *args, out=out[start:stop], **kwargs)
     
     fs = [executor.submit(_fill, i*chunksize, (i+1)*chunksize) for i in range(nchunks)]
     futures.wait(fs)
 
     # reshape and return
-    out = out.reshape(*out_test.shape, *oshape_axes)
-    out = np.moveaxis(out, range(-len(oshape_axes),0), flatten_axes)
+    out = out.reshape(*oshape_axes, *out_test.shape)
+    out = np.moveaxis(out, range(len(oshape_axes)), flatten_axes)
 
     return out
 
@@ -1825,8 +1907,8 @@ def filter_weighted(imap, ivar, filter, tol=1e-4, ref=0.9):
     np.percentile(ivar[::10, ::10], ref*100) * tol
     """
     filter = 1 - filter
-    omap = irfft(filter * rfft(imap * ivar))
-    div = irfft(filter * rfft(ivar))
+    omap = irfft(filter * rfft(imap * ivar), n=imap.shape[-1])
+    div = irfft(filter * rfft(ivar), n=imap.shape[-1])
     filter = None
     # Avoid division by very low values
     div = np.maximum(div, np.percentile(ivar[::10, ::10], ref*100) * tol)
