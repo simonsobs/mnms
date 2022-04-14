@@ -488,3 +488,33 @@ def insert_thumbnail(thumbnail, imap, pix_y, pix_x):
     slice_safe_thumb = np.s_[...,ymin_safe-shift_y:ymax_safe-shift_y,
                              xmin_safe-shift_x:xmax_safe-shift_x]
     imap[slice_safe] = thumbnail[slice_safe_thumb]
+
+def inpaint_median(imap, mask_bool, inplace=False):
+    """
+    Inpaint masked part of map with median of unmasked pixels.
+
+    Parameters
+    ----------
+    imap : enmap.ndmap
+        Input map
+    mask_bool : bool array
+        2D boolean mask that broadcasts to input map's shape. True for good pixels.
+    inplace : bool
+        Apply inpainting inplace or not.
+
+    Returns
+    -------
+    omap : enmap.ndmap
+        Inpainted copy of input map.
+    """
+
+    mask_bool = mask_bool.astype(bool, copy=False)
+
+    if not inplace:
+        imap = imap.copy()
+
+    imap *= mask_bool
+    median = np.median(imap, axis=(-2, -1))
+    imap[...,~mask_bool] = median
+
+    return imap

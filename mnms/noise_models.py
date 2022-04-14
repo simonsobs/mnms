@@ -217,9 +217,10 @@ class NoiseModel(ABC):
                     ivar[ivar < 0] = 0                    
                     
                     if self._fwhm_ivar:
-                        self._ivar = utils.smooth_gauss_masked(
-                            ivar, np.radians(self._fwhm_ivar), ivar != 0, inplace=True
-                        )
+                        mask_good = ivar != 0
+                        inpaint.inpaint_median(ivar, mask_good, inplace=True)
+                        utils.smooth_gauss(ivar, np.radians(self._fwhm_ivar), inplace=True)
+                        ivar *= mask_good
 
                     ivars[i,j] = ivar
 
