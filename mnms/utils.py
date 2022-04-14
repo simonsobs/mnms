@@ -367,7 +367,7 @@ def get_ivar_eff(ivar, sum_ivar=None, use_inf=False, use_zero=False):
 
     return out
 
-def get_corr_fact(ivar):
+def get_corr_fact(ivar, sum_ivar=None):
     """
     Get correction factor sqrt(ivar_eff / ivar) that converts a draw from 
     split difference d_i to a draw from split noise n_i.
@@ -377,12 +377,15 @@ def get_corr_fact(ivar):
     ivar : (..., nsplit, 1, ny, nx) enmap
         Inverse variance maps for N splits.
 
+    sum_ivar : (..., nsplit, 1, ny, nx) ndmap, optional
+        Sum of the inverse variance maps for N splits.
+
     Returns
     -------
     corr_fact : (..., nsplit, 1, ny, nx) enmap
         Correction factor for each split.
     """
-    corr_fact = get_ivar_eff(ivar, use_zero=True)
+    corr_fact = get_ivar_eff(ivar, sum_ivar=sum_ivar, use_zero=True)
     np.divide(corr_fact, ivar, out=corr_fact, where=ivar!=0)
     corr_fact[ivar==0] = 0
     corr_fact **= 0.5

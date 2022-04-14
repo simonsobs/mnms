@@ -856,9 +856,9 @@ def get_fsaw_noise_sim(fsaw_kernels, sqrt_cov_wavs, preshape=None,
     wavs_sim = {}
     for idx, wmap in sqrt_cov_wavs.items():
         if seed is not None:
-            seed = list(seed) + list(idx)
+            wseed = list(seed) + list(idx)
         wmap_sim = utils.concurrent_normal(
-            size=wmap.shape[1:], seed=seed, dtype=wmap.dtype, nthread=nthread
+            size=wmap.shape[1:], seed=wseed, dtype=wmap.dtype, nthread=nthread
             )
         np.einsum('abyx, byx -> ayx', wmap, wmap_sim, out=wmap_sim)
         wavs_sim[idx] = wmap_sim
