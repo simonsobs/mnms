@@ -26,7 +26,8 @@ class NoiseModel(ABC):
 
     def __init__(self, *qids, data_model=None, preload=True, ivar=None, mask_est=None,
                 calibrated=True, downgrade=1, lmax=None, mask_version=None, mask_name=None,
-                union_sources=None, kfilt_lbounds=None, notes=None, dtype=None, **kwargs):
+                union_sources=None, kfilt_lbounds=None, fwhm_ivar=None, notes=None, dtype=None,
+                **kwargs):
         """Base class for all NoiseModel subclasses. Supports loading raw data necessary for all 
         subclasses, such as masks and ivars. Also defines some class methods usable in subclasses.
 
@@ -70,6 +71,9 @@ class NoiseModel(ABC):
         kfilt_lbounds : size-2 iterable, optional
             The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
             If given, filter data before (possibly) downgrading it. 
+        fwhm_ivar : float, optional
+            FWHM in degrees of Gaussian smoothing applied to ivar maps. Not applied if ivar
+            maps are provided manually.
         notes : str, optional
             A descriptor string to differentiate this instance from
             otherwise identical instances, by default None.
@@ -100,6 +104,7 @@ class NoiseModel(ABC):
         if kfilt_lbounds is not None:
             kfilt_lbounds = np.array(kfilt_lbounds).reshape(2)
         self._kfilt_lbounds = kfilt_lbounds
+        self._fwhm_ivar = fwhm_ivar
         self._kwargs = kwargs
         self._dtype = dtype if dtype is not None else self._data_model.dtype
 
@@ -117,7 +122,7 @@ class NoiseModel(ABC):
         if ivar is not None:
             self._ivar = ivar
             self._mask_observed = utils.get_bool_mask_from_ivar(self._ivar)
-        elif preload:
+        elif preload:            
             self._ivar, self._mask_observed = self._get_ivar_and_mask_observed()
         else:
             raise ValueError('Models require ivar, please preload or supply manually')
@@ -210,6 +215,13 @@ class NoiseModel(ABC):
                     
                     # zero-out any numerical negative ivar
                     ivar[ivar < 0] = 0                    
+                    
+                    if self._fwhm_ivar:
+                        mask_good = ivar != 0
+                        inpaint.inpaint_median(ivar, mask_good, inplace=True)
+                        utils.smooth_gauss(ivar, np.radians(self._fwhm_ivar), inplace=True)
+                        ivar *= mask_good
+
                     ivars[i,j] = ivar
 
         with bench.show('Generating observed-pixels mask'):
@@ -765,8 +777,8 @@ class TiledNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, preload=True, ivar=None, mask_est=None,
                 calibrated=True, downgrade=1, lmax=None, mask_version=None, mask_name=None,
-                union_sources=None, kfilt_lbounds=None, notes=None, dtype=None, width_deg=4., height_deg=4.,
-                delta_ell_smooth=400, **kwargs):
+                union_sources=None, kfilt_lbounds=None, fwhm_ivar=None, notes=None, dtype=None,
+                width_deg=4., height_deg=4., delta_ell_smooth=400, **kwargs):
         """A TiledNoiseModel object supports drawing simulations which capture spatially-varying
         noise correlation directions in map-domain data. They also capture the total noise power
         spectrum, spatially-varying map depth, and array-array correlations.
@@ -816,6 +828,9 @@ class TiledNoiseModel(NoiseModel):
         kfilt_lbounds : size-2 iterable, optional
             The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
             If given, filter data before (possibly) downgrading it. 
+        fwhm_ivar : float, optional
+            FWHM in degrees of Gaussian smoothing applied to ivar maps. Not applied if ivar
+            maps are provided manually.
         notes : str, optional
             A descriptor string to differentiate this instance from
             otherwise identical instances, by default None.
@@ -856,7 +871,7 @@ class TiledNoiseModel(NoiseModel):
             *qids, data_model=data_model, preload=preload, ivar=ivar, mask_est=mask_est,
             calibrated=calibrated, downgrade=downgrade, lmax=lmax, mask_version=mask_version,
             mask_name=mask_name, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
-            notes=notes, dtype=dtype, **kwargs
+            fwhm_ivar=fwhm_ivar, notes=notes, dtype=dtype, **kwargs
         )
 
         # save model-specific info
@@ -870,7 +885,7 @@ class TiledNoiseModel(NoiseModel):
             self._qids, split_num, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, notes=self._notes,
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
             calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
-            kfilt_lbounds=self._kfilt_lbounds, **self._kwargs
+            kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
         )
 
     def _read_model(self, fn):
@@ -914,7 +929,7 @@ class TiledNoiseModel(NoiseModel):
         return simio.get_tiled_sim_fn(
             self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, split_num, sim_num, alm=alm, notes=self._notes,
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
-            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, kfilt_lbounds=self._kfilt_lbounds,
+            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar,
             mask_obs=mask_obs, **self._kwargs
         )
 
@@ -946,8 +961,8 @@ class WaveletNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, preload=True, ivar=None, mask_est=None,
                  calibrated=True, downgrade=1, lmax=None, mask_version=None, mask_name=None,
-                 union_sources=None, kfilt_lbounds=None, notes=None, dtype=None, lamb=1.3, smooth_loc=False,
-                 fwhm_fact=2., **kwargs):
+                 union_sources=None, kfilt_lbounds=None, fwhm_ivar=None, notes=None, dtype=None,
+                 lamb=1.3, smooth_loc=False, fwhm_fact=2, **kwargs):
         """A WaveletNoiseModel object supports drawing simulations which capture scale-dependent, 
         spatially-varying map depth. They also capture the total noise power spectrum, and 
         array-array correlations.
@@ -993,6 +1008,9 @@ class WaveletNoiseModel(NoiseModel):
         kfilt_lbounds : size-2 iterable, optional
             The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
             If given, filter data before (possibly) downgrading it. 
+        fwhm_ivar : float, optional
+            FWHM in degrees of Gaussian smoothing applied to ivar maps. Not applied if ivar
+            maps are provided manually.
         notes : str, optional
             A descriptor string to differentiate this instance from
             otherwise identical instances, by default None.
@@ -1035,7 +1053,7 @@ class WaveletNoiseModel(NoiseModel):
             *qids, data_model=data_model, preload=preload, ivar=ivar, mask_est=mask_est,
             calibrated=calibrated, downgrade=downgrade, lmax=lmax, mask_version=mask_version,
             mask_name=mask_name, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
-            notes=notes, dtype=dtype, **kwargs
+            fwhm_ivar=fwhm_ivar, notes=notes, dtype=dtype, **kwargs
         )
 
         # save model-specific info
@@ -1050,7 +1068,7 @@ class WaveletNoiseModel(NoiseModel):
             notes=self._notes, data_model=self._data_model, mask_version=self._mask_version,
             bin_apod=self._use_default_mask, mask_name=self._mask_name, calibrated=self._calibrated,
             downgrade=self._downgrade, union_sources=self._union_sources, kfilt_lbounds=self._kfilt_lbounds,
-            **self._kwargs
+            fwhm_ivar=self._fwhm_ivar, **self._kwargs
         )
 
     def _read_model(self, fn):
@@ -1100,7 +1118,7 @@ class WaveletNoiseModel(NoiseModel):
             sim_num, alm=alm, notes=self._notes, data_model=self._data_model,
             mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
             calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
-            kfilt_lbounds=self._kfilt_lbounds, mask_obs=mask_obs, **self._kwargs
+            kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, mask_obs=mask_obs, **self._kwargs
         )
 
     def _get_sim(self, split_num, seed, mask=None, verbose=False):
@@ -1145,8 +1163,8 @@ class FSAWNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, preload=True, ivar=None, mask_est=None,
                  calibrated=True, downgrade=1, lmax=None, mask_version=None, mask_name=None,
-                 union_sources=None, kfilt_lbounds=None, notes=None, dtype=None, lamb=1.8, n=24,
-                 fwhm_fact=2., **kwargs):
+                 union_sources=None, kfilt_lbounds=None, fwhm_ivar=None, notes=None, 
+                 dtype=None, lamb=1.8, n=24, fwhm_fact=2., **kwargs):
         """An FSAWNoiseModel object supports drawing simulations which capture direction- 
         and scale-dependent, spatially-varying map depth. The simultaneous direction- and
         scale-sensitivity is achieved through steerable wavelet kernels in Fourier space.
@@ -1193,6 +1211,9 @@ class FSAWNoiseModel(NoiseModel):
         kfilt_lbounds : size-2 iterable, optional
             The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
             If given, filter data before (possibly) downgrading it. 
+        fwhm_ivar : float, optional
+            FWHM in degrees of Gaussian smoothing applied to ivar maps. Not applied if ivar
+            maps are provided manually.
         notes : str, optional
             A descriptor string to differentiate this instance from
             otherwise identical instances, by default None.
@@ -1238,7 +1259,7 @@ class FSAWNoiseModel(NoiseModel):
             *qids, data_model=data_model, preload=preload, ivar=ivar, mask_est=mask_est,
             calibrated=calibrated, downgrade=downgrade, lmax=lmax, mask_version=mask_version,
             mask_name=mask_name, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
-            notes=notes, dtype=dtype, **kwargs
+            fwhm_ivar=fwhm_ivar, notes=notes, dtype=dtype, **kwargs
         )
 
         # save model-specific info
@@ -1263,7 +1284,7 @@ class FSAWNoiseModel(NoiseModel):
             mask_version=self._mask_version, bin_apod=self._use_default_mask,
             mask_name=self._mask_name, calibrated=self._calibrated,
             downgrade=self._downgrade, union_sources=self._union_sources,
-            kfilt_lbounds=self._kfilt_lbounds, **self._kwargs
+            kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
         )
 
     def _read_model(self, fn):
@@ -1311,7 +1332,8 @@ class FSAWNoiseModel(NoiseModel):
             mask_version=self._mask_version, bin_apod=self._use_default_mask,
             mask_name=self._mask_name, calibrated=self._calibrated,
             downgrade=self._downgrade, union_sources=self._union_sources,
-            kfilt_lbounds=self._kfilt_lbounds, mask_obs=mask_obs, **self._kwargs
+            kfilt_lbounds=self._kfilt_lbounds, mask_obs=mask_obs, fwhm_ivar=self._fwhm_ivar, 
+            **self._kwargs
         )
 
     def _get_sim(self, split_num, seed, mask=None, verbose=False):
