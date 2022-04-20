@@ -1,4 +1,3 @@
-from ast import Pass
 from pixell import enmap, curvedsky
 from mnms import utils
 from optweight import wlm_utils
@@ -13,8 +12,9 @@ import h5py
 
 class FSAWKernels:
 
-    def __init__(self, lamb, lmax, lmin, lmax_j, n, shape, wcs,
-                 dtype=np.float32, nforw=None, nback=None):
+    def __init__(self, lamb, lmax, lmin, lmax_j, n, p, shape, wcs,
+                 dtype=np.float32, nforw=None, nback=None, pforw=None, 
+                 pback=None):
         """A set of Fourier steerable anisotropic wavelets, allowing users to
         analyze maps by simultaneous scale-, direction-, and location-dependence
         of information. Also supports map synthesis. The wavelet transform (both
@@ -39,9 +39,12 @@ class FSAWKernels:
         lmax_j : int
             Multipole after which the second to last multipole ends.
         n : int
-            Azimithul bandlimit (in radians per azimuthal radian) of the
+            Approximate azimuthal bandlimit (in rads per azimuthal rad) of the
             directional kernels. In other words, there are n+1 azimuthal 
-            kernels of the form cos^n(phi).
+            kernels.
+        p : int
+            The locality parameter of each azimuthal kernel. In other words,
+            each kernel is of the form cos^p((n+1)/(p+1)*phi).
         shape : (..., ny, nx) iterable
             The shape of maps to transformed. Necessary because kernels 
             are defined in the Fourier plane, whose dimensions are
@@ -61,10 +64,21 @@ class FSAWKernels:
             Force high-ell azimuthal bandlimits to nback, by default None.
             For example, if n is 4 but nback is [0, 2], then the highest-
             ell kernel be directionally isotropic, and the next highest-
-            ell kernel will have a bandlimit of 2 rad/rad. 
+            ell kernel will have a bandlimit of 2 rad/rad.
+        pforw : iterable of int, optional
+            Force low-ell azimuthal locality parameters to pforw, by default
+            None. For example, if p is 4 but pforw is [1, 2], then the lowest-
+            ell kernel have a locality paramater of 1, and the next lowest-
+            ell kernel will have a locality parameter of 2, and 4 thereafter. 
+        pback : iterable of int, optional
+            Force high-ell azimuthal locality parameters to pback, by default
+            None. For example, if p is 4 but pback is [1, 2], then the highest-
+            ell kernel have a locality paramater of 1, and the next highest-
+            ell kernel will have a locality parameter of 2, and 4 thereafter. 
         """
-        self._kf = KernelFactory(lamb, lmax, lmin, lmax_j, n, shape, wcs,
-                                 dtype=dtype, nforw=nforw, nback=nback)
+        self._kf = KernelFactory(lamb, lmax, lmin, lmax_j, n, p, shape, wcs,
+                                 dtype=dtype, nforw=nforw, nback=nback, 
+                                 pforw=pforw, pback=pback)
         self._shape = shape
         self._real_shape = (shape[-2], shape[-1]//2 + 1)
         self._wcs = wcs
@@ -75,9 +89,11 @@ class FSAWKernels:
         self._lmaxs = {}
         self._ns = {}
         self._mean_sqs = {}
-        for i, n in enumerate(self._kf._ns):
-            for j in range(n+1):
-                kern = self._kf.get_kernel(i, n, j)
+        for i in range(len(self._kf._rad_funcs)):
+            _n = self._kf._ns[i]
+            _p = self._kf._ps[i]
+            for j in range(_n+1):
+                kern = self._kf.get_kernel(i, _n, _p, j)
                 self._kernels[i, j] = kern
                 self._lmaxs[i, j] = self._kf._lmaxs[i]
                 self._ns[i, j] = self._kf._ns[i]
@@ -226,7 +242,7 @@ class Kernel:
             Selection tuples for the multiresolution partitioning, by 
             default None. If None, set to [(Ellipsis,)]. The application
             of each selection tuple to the full resolution Fourier space
-            should extract the appropriate "corners" for this Kernel.
+            should extract the appropriate "box" for this Kernel.
 
         Raises
         ------
@@ -353,8 +369,9 @@ class Kernel:
 
 class KernelFactory:
 
-    def __init__(self, lamb, lmax, lmin, lmax_j, n, shape, wcs,
-                 dtype=np.float32, nforw=None, nback=None):
+    def __init__(self, lamb, lmax, lmin, lmax_j, n, p, shape, wcs,
+                 dtype=np.float32, nforw=None, nback=None, pforw=None,
+                 pback=None):
         """A helper class to build Kernel objects.
 
         Parameters
@@ -372,9 +389,12 @@ class KernelFactory:
         lmax_j : int
             Multipole after which the second to last multipole ends.
         n : int
-            Azimithul bandlimit (in radians per azimuthal radian) of the
+            Approximate azimuthal bandlimit (in rads per azimuthal rad) of the
             directional kernels. In other words, there are n+1 azimuthal 
-            kernels of the form cos^n(phi).
+            kernels.
+        p : int
+            The locality parameter of each azimuthal kernel. In other words,
+            each kernel is of the form cos^p((n+1)/(p+1)*phi).
         shape : (..., ny, nx) iterable
             The shape of maps to transformed. Necessary because kernels 
             are defined in the Fourier plane, whose dimensions are
@@ -394,7 +414,17 @@ class KernelFactory:
             Force high-ell azimuthal bandlimits to nback, by default None.
             For example, if n is 4 but nback is [0, 2], then the highest-
             ell kernel be directionally isotropic, and the next highest-
-            ell kernel will have a bandlimit of 2 rad/rad. 
+            ell kernel will have a bandlimit of 2 rad/rad.
+        pforw : iterable of int, optional
+            Force low-ell azimuthal locality parameters to pforw, by default
+            None. For example, if p is 4 but pforw is [1, 2], then the lowest-
+            ell kernel have a locality paramater of 1, and the next lowest-
+            ell kernel will have a locality parameter of 2, and 4 thereafter. 
+        pback : iterable of int, optional
+            Force high-ell azimuthal locality parameters to pback, by default
+            None. For example, if p is 4 but pback is [1, 2], then the highest-
+            ell kernel have a locality paramater of 1, and the next highest-
+            ell kernel will have a locality parameter of 2, and 4 thereafter. 
 
         Notes
         -----
@@ -467,9 +497,8 @@ class KernelFactory:
                 rad_kern[ins_sels[i]] = unsliced_rad_kern[get_sel]
             self._rad_kerns.append(rad_kern)
 
-        # get list of w_phi callables
-        # also get full list of n's and unique list of n's to build each
-        # kernel and sufficient phimaps
+        # get full list of n's, p's and unique list of n's, p's
+        # to build each kernel and sufficient phimaps
         if nforw is None:
             nforw = []
         else:
@@ -478,20 +507,39 @@ class KernelFactory:
             nback = []
         else:
             nback = list(nback)[::-1]
+
+        if pforw is None:
+            pforw = []
+        else:
+            pforw = list(pforw)
+        if pback is None:
+            pback = []
+        else:
+            pback = list(pback)
+
         assert len(w_ells) - len(nforw) - len(nback) >= 0, \
             'Must have at least len(w_ells) radial kernels as len(nforw)\n' + \
             f'+ len(nback), got {len(w_ells)} and {len(nforw)} + {len(nback)}'    
-        all_ns = nforw + (len(w_ells)-len(nforw)-len(nback))*[n] + nback
-        self._ns = all_ns
-        unique_ns = np.unique(all_ns)
-        
+        assert len(w_ells) - len(pforw) - len(pback) >= 0, \
+            'Must have at least len(w_ells) radial kernels as len(pforw)\n' + \
+            f'+ len(pback), got {len(w_ells)} and {len(pforw)} + {len(pback)}'
+
+        self._ns = np.array(
+            nforw + (len(w_ells) - len(nforw) - len(nback)) * [n] + nback
+            )
+        self._ps = np.array(
+            pforw + (len(w_ells) - len(pforw) - len(pback)) * [p] + pback
+        )
+
         # TODO: fix this
-        assert np.all(unique_ns%2 == 0), 'only even ns'
+        assert np.all(self._ns%2 == 0), 'only even ns'
 
         self._az_funcs = {}
-        for unique_n in unique_ns:
-            for i in range(unique_n+1):
-                self._az_funcs[unique_n, i] = get_az_func(unique_n, i)
+        for i in range(len(w_ells)):
+            _n = self._ns[i]
+            _p = self._ps[i]
+            for j in range(_n+1):
+                self._az_funcs[_n, _p, j] = get_az_func(_n, _p, j)
 
     def _get_sliced_shape_and_sels(self, unsliced_kern, idx=None,
                                    unsliced_sels=None):
@@ -567,14 +615,17 @@ class KernelFactory:
             y_min_neg = 0
             y_max_pos = min(y_mask_pos.max() + 1, ny//2 + 1)
             y_max_neg = min(y_mask_neg.max() + 1, ny//2)
-            assert not np.logical_xor(
-                y_max_pos == ny//2+1, y_max_neg == ny//2
-                ), \
-                '0-cuts in y-direction of kernel must occur in both +y and -y'
+            # assert not np.logical_xor(
+            #     y_max_pos == ny//2+1, y_max_neg == ny//2
+            #     ), \
+            #     '0-cuts in y-direction of kernel must occur in both +y and -y\n' + \
+            #     f'{idx, unsliced_kern.shape, unsliced_sels, ny, y_mask.size, y_max_pos, y_max_neg}'
 
-            # check for a "full height" slice (since we know either both
-            # or neither from above assertion, can just check one)
-            if y_max_pos == ny//2+1:
+            # check for a "full height" slice in any direction and
+            # make it full height in both
+            if y_max_pos == ny//2+1 or y_max_neg == ny//2:
+                y_max_pos = ny//2+1
+                y_max_neg = ny//2
                 if ny%2 == 0:
                     y_max_neg = ny//2-1 # if even, want to add up to ny
             else:
@@ -659,7 +710,7 @@ class KernelFactory:
 
         return kern_shape, get_sels, ins_sels
 
-    def get_kernel(self, rad_idx, az_n, az_idx):
+    def get_kernel(self, rad_idx, az_n, az_p, az_idx):
         """Generate the specified kernel.
 
         Parameters
@@ -668,6 +719,8 @@ class KernelFactory:
             The radial kernel index.
         az_n : int
             The azimuthal kernel bandlimit.
+        az_p : int
+            The azimuthal kernel shape parameter.
         az_idx : int
             The azimuthal kernel index.
 
@@ -684,7 +737,7 @@ class KernelFactory:
         kern_phimap = np.empty(rad_kern.shape, self._phimap.dtype)
         for i, get_sel in enumerate(get_sels):
             kern_phimap[ins_sels[i]] = self._phimap[get_sel]
-        az_kern = self._az_funcs[az_n, az_idx](kern_phimap)
+        az_kern = self._az_funcs[az_n, az_p, az_idx](kern_phimap)
         
         # get this kernel. we start from an initially reduced 
         # slice of full Fourier space, _kern, which centers on the
@@ -756,16 +809,18 @@ def get_rad_func(w_ell, n, j):
         ell, w_ell, kind='nearest', bounds_error=False, fill_value=fill_value
         )
 
-def get_az_func(n, j):
-    """Generate a callable for a given "cos-hat" kernel.
+def get_az_func(n, p, j):
+    """Generate a callable for a given "cos-power" kernel.
 
     Parameters
     ----------
     n : int
         Azimuthal bandlimit. For a complete basis, one requires
         n + 1 kernels.
+    p : int
+        Power to raise each cosine kernel to. Must be in [0..n]
     j : int
-        The azimuthal kernel index.
+        The azimuthal kernel index. Must be in [0..n]
 
     Returns
     -------
@@ -776,65 +831,42 @@ def get_az_func(n, j):
 
     Notes
     -----
-    The kernel is the function cos(np/(2d)*(x - c)), where
-    d = pi/(n+1) and c = pi/(n+1) +/- k*pi where k is any
-    integer. It is positive for the single "bump" around
-    each c, but is 0 otherwise.
+    The kernel is the function c * cos(w * (x - x0)) ** p, where:
+    c is chosen so that (a) the sum (over j) of the squared magnitude 
+    of the kernels is 1 for all x, and (b) so that multiplying by a 
+    real DFT returns an array still corresponding to a real map; w is
+    (n+1)/(p+1) and x0 = pi/(n+1) +/- k*pi where k is any integer. It 
+    is given by this fucntion for the single "bump" around each x0,
+    but is 0 otherwise.
+
+    The case n = p corresponds to a steerable basis, see e.g.
+    https://doi.org/10.1109/34.93808
+
+    The case p = 0 corresponds to n + 1 evenly spaced tophats.
     """
+    # important! if n is actually an np.int64, e.g., then
+    # the following calculations can overflow!
+    assert n >= 0, 'n must be non-negative'
+    assert p >= 0, 'p must be non-negative'
+    assert p <= n, 'p must be less than or equal to n'
+    assert j >= 0, 'j must be non-negative'
+    assert j <= n, 'j must be less than or equal to n'
+    p = float(p) 
+    c = np.sqrt(2**(2*p) / ((p+1) * comb(2*p, p)))
+
     if n > 0:
-        delta = np.pi/(n+1)
+        delta = np.pi/2*(p+1)/(n+1)
+        freq = np.pi/(2*delta)
         def w_phi(phis):
-            out = np.asanyarray(phis) * 0
+            out = np.asanyarray(phis) * 0j
             for i in [-2, -1, 0, 1, 2]:
                 center = j*np.pi/(n+1) + i*np.pi
                 cut_low = (center - delta) <= phis
                 cut_high = phis < (center + delta)
                 cond = np.logical_and(cut_low, cut_high)
-                func = np.cos(np.pi/(2*delta)*(phis - center))
+                func = c*1j**p*(-1)**(p*i)*np.cos(freq*(phis - center))**p
                 out += np.where(cond, func, 0)
-            return out + 0j
-    else:
-        def w_phi(phis):
-            return 1+0j
-    return w_phi
-
-# radial kernels are cos^n(phi) from https://doi.org/10.1109/34.93808
-def get_az_func2(n, j):
-    """Generate a callable for a given steerable azimuthal wavelet
-    kernel (kernels from e.g. https://doi.org/10.1109/34.93808). 
-
-    Parameters
-    ----------
-    n : int
-        Azimuthal bandlimit. For a complete basis, one requires
-        n + 1 kernels.
-    j : int
-        The azimuthal kernel index.
-
-    Returns
-    -------
-    callable
-        A 1d function taking an array-like argument of any dimension
-        and returning the wavelet kernel evaluated at each azimuthal
-        angle in the argument.
-
-    Notes
-    -----
-    The kernel is the function c*cos(x - j*pi/(n+1))**n. The constant
-    c is chosen so that (a) the sum (over j) of the squared magnitude 
-    of the kernels is 1 for all x, and (b) so that multiplying by a 
-    real DFT returns an array still corresponding to a real map.
-    """
-    # important! if n is actually an np.int64, e.g., then
-    # the following calculations can overflow!
-    assert n >= 0, 'n must be non-negative'
-    assert j >= 0, 'j must be non-negative'
-    assert j <= n, 'j must be less than or equal to n'
-    n = float(n) 
-    c = np.sqrt(2**(2*n) / ((n+1) * comb(2*n, n)))
-    if n > 0:
-        def w_phi(phis):
-            return c * 1j**n * np.cos(phis - j*np.pi/(n+1))**n
+            return out
     else:
         def w_phi(phis):
             return 1+0j
@@ -956,9 +988,10 @@ def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1,
         # raise to 0.5 power. need to do some reshaping to allow use of
         # chunked eigpow, along a flattened pixel axis
         wmap2 = wmap2.reshape((*wmap2.shape[:-2], -1))
-        wmap2 = utils.chunked_eigpow(
-            wmap2, 0.5, axes=[-3, -2], chunk_axis=-1
-            )
+        wmap2 = np.sqrt(wmap2)
+        # utils.chunked_eigpow(
+        #     wmap2, 0.5, axes=[-3, -2], chunk_axis=-1
+        #     )
         sqrt_cov_wavs[idx] = wmap2.reshape(
             (*wmap2.shape[:-1], *wmap.shape[-2:])
             )
