@@ -228,7 +228,7 @@ class FSAWKernels:
 
 class Kernel:
 
-    def __init__(self, k_kernel, get_sels=None, ins_sels=None):
+    def __init__(self, k_kernel, index=None, get_sels=None, ins_sels=None):
         """One simultaneously scale-, direction-, and location-dependent
         filter. Uses multiresolution partitioning of Fourier space.
 
@@ -252,6 +252,7 @@ class Kernel:
         assert k_kernel.ndim == 2, f'k_kernel must have 2 dims, got{k_kernel.ndim}'
         self._k_kernel = k_kernel
         self._k_kernel_conj = np.conj(k_kernel)
+        self._index = index
 
         # assume odd nx in orig map (very important)! in principle, we
         # could catch the case that the kernel spans the original map,
@@ -279,6 +280,20 @@ class Kernel:
             test_arr[sel] += 1
         assert np.all(test_arr == 1), \
             'Selection tuples do not cover each kernel element exactly once'
+        
+        # check that kernel is compatible with rfft.
+        # (a) only the symmetry of the first column excl. the first item 
+        # matters for odd self._n
+        # (b) the below thresholds seemed to work for common kernel sets
+        if k_kernel.shape[-2] > 2:
+            rel_diff = np.abs(k_kernel[1:, 0] - np.conj(k_kernel[:0:-1, 0]))
+            rel_diff /= np.abs(k_kernel).max()
+            assert np.max(rel_diff) < 1e-5, \
+                f'Kernel {index} does not correspond to real fft:\n' + \
+                f'max rel_diff={np.max(rel_diff)}, expected < 1e-5'
+            assert np.mean(rel_diff) < 5e-6, \
+                f'Kernel {index} does not correspond to real fft:\n' + \
+                f'mean rel_diff={np.mean(rel_diff)}, expected < 5e-6'
 
     def k2wav(self, kmap, use_kernel_wcs=True, inplace=True, from_full=True, nthread=0):
         """Generate the wavelet map for this kernel from a real DFT of a map. 
@@ -366,6 +381,9 @@ class Kernel:
         wcs = self._k_kernel.wcs if use_kernel_wcs else wmap.wcs
         return enmap.ndmap(kmap, wcs)
 
+    @property
+    def index(self):
+        return self._index
 
 class KernelFactory:
 
@@ -539,7 +557,7 @@ class KernelFactory:
             _n = self._ns[i]
             _p = self._ps[i]
             for j in range(_n+1):
-                self._az_funcs[_n, _p, j] = get_az_func(_n, _p, j)
+                self._az_funcs[i, j] = get_az_func(_n, _p, j)
 
     def _get_sliced_shape_and_sels(self, unsliced_kern, idx=None,
                                    unsliced_sels=None):
@@ -710,17 +728,13 @@ class KernelFactory:
 
         return kern_shape, get_sels, ins_sels
 
-    def get_kernel(self, rad_idx, az_n, az_p, az_idx):
+    def get_kernel(self, rad_idx, az_idx):
         """Generate the specified kernel.
 
         Parameters
         ----------
         rad_idx : int
             The radial kernel index.
-        az_n : int
-            The azimuthal kernel bandlimit.
-        az_p : int
-            The azimuthal kernel shape parameter.
         az_idx : int
             The azimuthal kernel index.
 
@@ -737,7 +751,7 @@ class KernelFactory:
         kern_phimap = np.empty(rad_kern.shape, self._phimap.dtype)
         for i, get_sel in enumerate(get_sels):
             kern_phimap[ins_sels[i]] = self._phimap[get_sel]
-        az_kern = self._az_funcs[az_n, az_p, az_idx](kern_phimap)
+        az_kern = self._az_funcs[rad_idx, az_idx](kern_phimap)
         
         # get this kernel. we start from an initially reduced 
         # slice of full Fourier space, _kern, which centers on the
@@ -757,7 +771,9 @@ class KernelFactory:
         _, map_wcs = enmap.geometry(self._corners, shape=map_shape)
         kern = enmap.ndmap(kern, map_wcs) 
 
-        return Kernel(kern, get_sels=get_sels, ins_sels=ins_sels)
+        return Kernel(
+            kern, index=(rad_idx, az_idx), get_sels=get_sels, ins_sels=ins_sels
+            )
 
 
 def get_rad_func(w_ell, n, j):
