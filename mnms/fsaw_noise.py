@@ -459,7 +459,16 @@ class KernelFactory:
         # fullshape, map geometry info
         modlmap = enmap.modlmap(shape, wcs).astype(dtype, copy=False)
         modlmap = modlmap[..., :shape[-1]//2 + 1]
-        self._phimap = np.arctan2(*enmap.lrmap(shape, wcs), dtype=dtype)
+        ly, lx = enmap.lrmap(shape, wcs)
+
+        # because np.fft.fftfreq gives negative Nyquist freq when even,
+        # making the x freqs continuous instead will cause phimap to 
+        # be continuous from the second-to-last, to the last column, rather
+        # than jumping weirdly
+        if shape[-1]%2 == 0:
+            lx[:, -1] *= -1
+        self._phimap = np.arctan2(ly, lx, dtype=dtype)
+
         corners = enmap.corners(shape, wcs, corner=False)
 
         # need to make sure corners are centered or else call to 
