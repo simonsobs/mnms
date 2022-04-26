@@ -13,9 +13,8 @@ def test_wav_admissibility():
     
     a = np.zeros((shape[-2], shape[-1]//2+1), dtype=fk._cdtype)
     for kern in fk.kernels.values():
-        for i, get_sel in enumerate(kern._get_sels):
-            ins_sel = kern._ins_sels[i]
-            a[get_sel] += kern._k_kernel[ins_sel]*kern._k_kernel_conj[ins_sel]
+        for sel in kern._sels:
+            a[sel] += kern._k_kernel[sel]*kern._k_kernel_conj[sel]
     assert np.max(np.abs(a-1) < 5e-6)
     assert np.mean(np.abs(a-1) < 5e-7)
 

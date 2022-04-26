@@ -91,9 +91,8 @@ class FSAWKernels:
         self._mean_sqs = {}
         for i in range(len(self._kf._rad_funcs)):
             _n = self._kf._ns[i]
-            _p = self._kf._ps[i]
             for j in range(_n+1):
-                kern = self._kf.get_kernel(i, _n, _p, j)
+                kern = self._kf.get_kernel(i, j)
                 self._kernels[i, j] = kern
                 self._lmaxs[i, j] = self._kf._lmaxs[i]
                 self._ns[i, j] = self._kf._ns[i]
@@ -160,8 +159,8 @@ class FSAWKernels:
             assert wav.shape[:-2] == preshape, \
                 f'wav {kern_key} preshape is {wav.shape[:-2]}, expected {preshape}'
             kmap_wav = kernel.wav2k(wav, nthread=nthread)
-            for i, get_sel in enumerate(kernel._get_sels):
-                kmap[get_sel] += kmap_wav[kernel._ins_sels[i]]
+            for sel in kernel._sels:
+                kmap[sel] += kmap_wav[sel]
         return kmap
 
     @property
@@ -228,7 +227,7 @@ class FSAWKernels:
 
 class Kernel:
 
-    def __init__(self, k_kernel, index=None, get_sels=None, ins_sels=None):
+    def __init__(self, k_kernel, index=None, sels=None):
         """One simultaneously scale-, direction-, and location-dependent
         filter. Uses multiresolution partitioning of Fourier space.
 
@@ -238,6 +237,8 @@ class Kernel:
             Complex kernel defined in Fourier space. Because all
             operations use the real DFT, only the "positive" kx 
             modes are included.
+        index : any
+            Any value to name this Kernel. 
         sels : iterable of (Ellipsis, [slice,]) iterables, optional
             Selection tuples for the multiresolution partitioning, by 
             default None. If None, set to [(Ellipsis,)]. The application
@@ -260,23 +261,20 @@ class Kernel:
         # difference will be negligible
         self._n = 2*(k_kernel.shape[-1]-1) + 1 
         
-        if get_sels is None:
-            get_sels = [(Ellipsis,)] # get everything, insert everything
-            ins_sels = [(Ellipsis,)] # get everything, insert everything
+        if sels is None:
+            sels = [(Ellipsis,)] # get everything, insert everything
         try:
-            iter(get_sels)
-            iter(ins_sels)
+            iter(sels)
         except TypeError as e:
             raise TypeError('sels must be iterable if supplied') from e
-        for i, get_sel in enumerate(get_sels):
-            assert ins_sels[i][0] is Ellipsis and get_sel[0] is Ellipsis, \
+        for sel in sels:
+            assert sel[0] is Ellipsis, \
                 'first item of each selection must be Ellipsis'
-        self._get_sels = get_sels
-        self._ins_sels = ins_sels
+        self._sels = sels
 
         # check that selection tuples touch each element exactly once
         test_arr = np.zeros(self._k_kernel.shape, dtype=int)
-        for sel in self._ins_sels:
+        for sel in self._sels:
             test_arr[sel] += 1
         assert np.all(test_arr == 1), \
             'Selection tuples do not cover each kernel element exactly once'
@@ -329,8 +327,8 @@ class Kernel:
 
             # need to do this because _kmap, _k_kernel are small res
             # but kmap is not
-            for i, get_sel in enumerate(self._get_sels):
-                _kmap[self._ins_sels[i]] = self._k_kernel[self._ins_sels[i]] * kmap[get_sel]
+            for sel in self._sels:
+                _kmap[sel] = self._k_kernel[sel] * kmap[sel]
             kmap = _kmap
         else:
             if not inplace:
@@ -502,8 +500,7 @@ class KernelFactory:
         # the slice/selection tuples (function of rad kern only), and 
         # kernel shapes
         self._rad_funcs = []
-        self._get_sels = []
-        self._ins_sels = []
+        self._sels = []
         self._rad_kerns = []
         for i, w_ell in enumerate(w_ells):
             rad_func = get_rad_func(w_ell, len(w_ells), i)
@@ -512,20 +509,18 @@ class KernelFactory:
             # interp1d returns as np.float64 always, need to cast
             unsliced_rad_kern = rad_func(modlmap).astype(modlmap.dtype)
 
-            kern_shape, get_sels, ins_sels = self._get_sliced_shape_and_sels(
+            kern_shape, sels = self._get_sliced_shape_and_sels(
                 unsliced_rad_kern, idx=i
                 )
-            self._get_sels.append(get_sels)
-            self._ins_sels.append(ins_sels)
+            self._sels.append(sels)
             
             # finally, get this radial kernel
             rad_kern = np.empty(kern_shape, dtype=unsliced_rad_kern.dtype)
-            for i, get_sel in enumerate(get_sels):
-                rad_kern[ins_sels[i]] = unsliced_rad_kern[get_sel]
+            for sel in sels:
+                rad_kern[sel] = unsliced_rad_kern[sel]
             self._rad_kerns.append(rad_kern)
 
-        # get full list of n's, p's and unique list of n's, p's
-        # to build each kernel and sufficient phimaps
+        # get full list of n's, p's to build each kernel and sufficient phimaps
         if nforw is None:
             nforw = []
         else:
@@ -588,12 +583,10 @@ class KernelFactory:
 
         Returns
         -------
-        tuple of int, iterable of iterables, iterable of iterables
+        tuple of int, iterable of iterables
             The shape of the minimum bounding box, and the numpy
             selection tuples to go to/from full resolution to
-            multiresolution Fourier space. The first set of selection tuples
-            is meant to slice the full Fourier space. The second is meant
-            to insert data into the reduced-size space.
+            multiresolution Fourier space.
 
         Notes
         -----
@@ -605,83 +598,57 @@ class KernelFactory:
                 (Ellipsis, slice(None, None, None), slice(None, None, None)),
             ]
         else:
-            assert len(unsliced_sels) == 1 or len(unsliced_sels) == 2
+            assert len(unsliced_sels) == 1 or len(unsliced_sels) == 2, \
+                'Only 1 or 2 sels allowed'
 
         assert unsliced_kern.ndim == 2, \
             f'unsliced_kern must be a 2d array, got {unsliced_kern.ndim}d'
         ny, nx = (unsliced_kern.shape[0], unsliced_kern.shape[1])
         
-        # get bounding x indeces
+        # get bounding x indices
         x_mask = np.nonzero(unsliced_kern.any(axis=0))[0]
-        if x_mask.size == nx: # all columns in use
-            x_min = 0
-            x_max = nx
-        else:
-            assert x_mask.size > 0, \
-                f'idx {idx} has empty kernel'
-            x_min = max(x_mask.min() - 1, 0)
-            x_max = x_mask.max() + 1 # inclusive bounds
+        assert x_mask.size > 0, \
+            f'idx {idx} has empty kernel'
+        x_max = x_mask.max() + 1 # inclusive bounds
 
-        # first check if y in both quadrants or just positive or negative
+        # get bounding y indices
         y_mask = unsliced_kern.any(axis=1)
         y_mask_pos = np.nonzero(y_mask[:ny//2+1] > 0)[0]
         y_mask_neg = np.nonzero(y_mask[:-(ny//2+1):-1] > 0)[0]
+        assert y_mask_pos.size > 0 or y_mask_neg.size > 0, \
+            f'idx {idx} has empty kernel'
 
-        if y_mask_pos.size > 0 and y_mask_neg.size > 0:
-            quadrant = 'both'
-        elif y_mask_pos.size > 0:
-            quadrant = 'pos'
-        elif y_mask_neg.size > 0:
-            quadrant = 'neg'
-        else:
-            raise ValueError(f'idx {idx} has empty_kernel')
-        
-        # if both, we need a "full array height" span
-        if quadrant == 'both':
-            y_min_pos = 0
-            y_min_neg = 0
-            y_max_pos = min(y_mask_pos.max() + 1, ny//2 + 1)
-            y_max_neg = min(y_mask_neg.max() + 1, ny//2)
-            # assert not np.logical_xor(
-            #     y_max_pos == ny//2+1, y_max_neg == ny//2
-            #     ), \
-            #     '0-cuts in y-direction of kernel must occur in both +y and -y\n' + \
-            #     f'{idx, unsliced_kern.shape, unsliced_sels, ny, y_mask.size, y_max_pos, y_max_neg}'
-
-            # check for a "full height" slice in any direction and
-            # make it full height in both
-            if y_max_pos == ny//2+1 or y_max_neg == ny//2:
-                y_max_pos = ny//2+1
-                y_max_neg = ny//2
-                if ny%2 == 0:
-                    y_max_neg = ny//2-1 # if even, want to add up to ny
-            else:
-                # we did everything right if there is 1 more in y than x
-                # assert y_max_pos == y_max_neg + 1, \
-                #     f'y_max_pos and y_max_neg must differ in absval by 1, ' \
-                #     f'got {y_max_pos} and {y_max_neg} for idx {idx}'
-                if y_max_pos > y_max_neg + 1:
-                    y_max_neg = y_max_pos - 1
-                else:
-                    y_max_pos = y_max_neg + 1
-
-            kern_shape = (y_max_pos + y_max_neg, x_max - x_min)
-
-        elif quadrant == 'pos':
-            y_min_neg = 0
-            y_max_neg = 0
-            y_min_pos = max(y_mask_pos.min() - 1, 0)
-            y_max_pos = min(y_mask_pos.max() + 1, ny//2 + 1)
-
-            kern_shape = (y_max_pos - y_min_pos, x_max - x_min)
-
-        elif quadrant == 'neg':
-            y_min_pos= 0
+        if y_mask_pos.size == 0:
             y_max_pos = 0
-            y_min_neg = max(y_mask_neg.min() - 1, 0)
-            y_max_neg = min(y_mask_neg.max() + 1, ny//2)
+        else:
+            y_max_pos = y_mask_pos.max() + 1 # inclusive bounds
+        if y_mask_neg.size == 0:
+            y_max_neg = 0
+        else:
+            y_max_neg = y_mask_neg.max() + 1 # inclusive bounds
 
-            kern_shape = (y_max_neg - y_min_neg, x_max - x_min)
+        # we need to slice the "full fourier" plane even though just rfft. so
+        # need a negative slice even if don't find one, or positive slice even
+        # if don't find one
+        if y_max_pos > y_max_neg + 1:
+            y_max_neg = y_max_pos - 1
+        else:
+            y_max_pos = y_max_neg + 1
+
+        # we did something wrong if one of y_max_pos or y_max_neg is
+        # full height, but not the other
+        assert not np.logical_xor(
+            y_max_pos == ny//2+1, y_max_neg == ny//2
+            ), \
+            'full height kernels in y-direction must occur in both +y and -y'
+
+        # check for full height slice (checking just one leg is sufficient
+        # because of above assertion). in this case, if even, want total
+        # to add up to ny not ny+1
+        if y_max_pos == ny//2+1 and ny%2 == 0:
+            y_max_neg = ny//2-1
+
+        kern_shape = (y_max_pos + y_max_neg, x_max)
 
         # we did something wrong if the sliced shape is greater in extent
         # than the unsliced shape
@@ -693,22 +660,16 @@ class KernelFactory:
 
         # get everything, insert everything if no change
         if kern_shape == (ny, nx):
-            get_sels = unsliced_sels
-            ins_sels = unsliced_sels
+            sels = unsliced_sels
         
         # if y's are full but x's are clipped, then only need to slice in x
         elif (kern_shape[0] == ny) and (kern_shape[1] != nx):
             if len(unsliced_sels) == 1:
-                get_sels = [(*unsliced_sels[0][:2], np.s_[x_min:x_max]),]
-                ins_sels = [(*unsliced_sels[0][:2], np.s_[:x_max - x_min]),]
+                sels = [(*unsliced_sels[0][:2], np.s_[:x_max]),]
             elif len(unsliced_sels) == 2:
-                get_sels = [
-                    (*unsliced_sels[0][:2], np.s_[x_min:x_max]),
-                    (*unsliced_sels[1][:2], np.s_[x_min:x_max])
-                    ]
-                ins_sels = [
-                    (*unsliced_sels[0][:2], np.s_[:x_max - x_min]),
-                    (*unsliced_sels[1][:2], np.s_[:x_max - x_min])
+                sels = [
+                    (*unsliced_sels[0][:2], np.s_[:x_max]),
+                    (*unsliced_sels[1][:2], np.s_[:x_max])
                     ]
             else:
                 raise ValueError('Only 1 or 2 sels allowed')
@@ -716,26 +677,17 @@ class KernelFactory:
         # if y's are clipped, need to slice in y, and :x_max will work whether
         # clipped or not
         else:
-            if quadrant == 'both':
-                get_sels = [
-                    np.s_[..., :y_max_pos, x_min:x_max],
-                    np.s_[..., -y_max_neg:, x_min:x_max]
+            if y_max_neg > 0:
+                sels = [
+                    np.s_[..., :y_max_pos, :x_max],
+                    np.s_[..., -y_max_neg:, :x_max]
                     ]
-                ins_sels = [
-                    np.s_[..., :y_max_pos, :x_max - x_min],
-                    np.s_[..., -y_max_neg:, :x_max - x_min]
+            else: # catching the case where only ky=0 is nonzero
+                sels = [
+                    np.s_[..., :y_max_pos, :x_max]
                     ]
-            elif quadrant == 'pos':
-                get_sels = [np.s_[..., y_min_pos:y_max_pos, x_min:x_max],]
-                ins_sels = [np.s_[..., :y_max_pos - y_min_pos, :x_max - x_min],]
-            elif quadrant == 'neg':
-                if y_min_neg == 0:
-                    get_sels = [np.s_[..., -y_max_neg:, x_min:x_max],]
-                else:
-                    get_sels = [np.s_[..., -y_max_neg:-y_min_neg, x_min:x_max],]
-                ins_sels = [np.s_[..., -y_max_neg + y_min_neg:, :x_max - x_min],]
 
-        return kern_shape, get_sels, ins_sels
+        return kern_shape, sels
 
     def get_kernel(self, rad_idx, az_idx):
         """Generate the specified kernel.
@@ -753,13 +705,12 @@ class KernelFactory:
             A Kernel class instance.
         """
         rad_kern = self._rad_kerns[rad_idx]
-        get_sels = self._get_sels[rad_idx]
-        ins_sels = self._ins_sels[rad_idx]
+        sels = self._sels[rad_idx]
 
         # get a sliced phimap, evaluate the az_func on it
         kern_phimap = np.empty(rad_kern.shape, self._phimap.dtype)
-        for i, get_sel in enumerate(get_sels):
-            kern_phimap[ins_sels[i]] = self._phimap[get_sel]
+        for sel in sels:
+            kern_phimap[sel] = self._phimap[sel]
         az_kern = self._az_funcs[rad_idx, az_idx](kern_phimap)
         
         # get this kernel. we start from an initially reduced 
@@ -768,21 +719,19 @@ class KernelFactory:
         # helps speed things up. we then slice again the individual
         # kernel
         _kern = rad_kern * az_kern
-        kern_shape, get_sels, ins_sels = self._get_sliced_shape_and_sels(
-            _kern, idx=(rad_idx, az_idx), unsliced_sels=get_sels
+        kern_shape, sels = self._get_sliced_shape_and_sels(
+            _kern, idx=(rad_idx, az_idx), unsliced_sels=sels
             )
         kern = np.empty(kern_shape, dtype=_kern.dtype)
-        for i, get_sel in enumerate(get_sels):
-            kern[ins_sels[i]] = _kern[get_sel]
+        for sel in sels:
+            kern[sel] = _kern[sel]
 
         # kernels have 2(rkx-1)+1 pixels in map space x direction
         map_shape = (kern.shape[0], 2*(kern.shape[1]-1) + 1)
         _, map_wcs = enmap.geometry(self._corners, shape=map_shape)
         kern = enmap.ndmap(kern, map_wcs) 
 
-        return Kernel(
-            kern, index=(rad_idx, az_idx), get_sels=get_sels, ins_sels=ins_sels
-            )
+        return Kernel(kern, index=(rad_idx, az_idx), sels=sels)
 
 
 def get_rad_func(w_ell, n, j):
@@ -1013,10 +962,15 @@ def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1,
         # raise to 0.5 power. need to do some reshaping to allow use of
         # chunked eigpow, along a flattened pixel axis
         wmap2 = wmap2.reshape((*wmap2.shape[:-2], -1))
-        wmap2 = np.sqrt(wmap2)
-        # utils.chunked_eigpow(
-        #     wmap2, 0.5, axes=[-3, -2], chunk_axis=-1
-        #     )
+
+        # sqrt much faster, but only possible for one component
+        if wmap2.shape[0] == 1:
+            wmap2 = np.sqrt(wmap2)
+        else:
+            utils.chunked_eigpow(
+                wmap2, 0.5, axes=[-3, -2], chunk_axis=-1
+                )
+
         sqrt_cov_wavs[idx] = wmap2.reshape(
             (*wmap2.shape[:-1], *wmap.shape[-2:])
             )
