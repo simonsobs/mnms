@@ -1,11 +1,11 @@
 from pixell import enmap
-from mnms import utils, fsaw_noise
+from mnms import utils, fdw_noise
 import numpy as np 
 
 def test_wav_admissibility():
     shape = (2, 700, 700)
     _, wcs = enmap.geometry([0,0], shape=shape, res=np.pi/180/30)
-    fk = fsaw_noise.FSAWKernels(1.8, 10_000, 10, 5300, 36, 2, shape, wcs,
+    fk = fdw_noise.FDWKernels(1.8, 10_000, 10, 5300, 36, 2, shape, wcs,
                                 nforw=[0, 12, 12, 12, 12, 24, 24, 24, 24],
                                 nback=[18],
                                 pforw=[0, 12, 9, 6, 3, 24, 18, 12, 6],
@@ -21,7 +21,7 @@ def test_wav_admissibility():
 def test_wav_reconstruction():
     shape = (2, 700, 700)
     _, wcs = enmap.geometry([0,0], shape=shape, res=np.pi/180/30)
-    fk = fsaw_noise.FSAWKernels(1.8, 10_000, 10, 5300, 36, 2, shape, wcs,
+    fk = fdw_noise.FDWKernels(1.8, 10_000, 10, 5300, 36, 2, shape, wcs,
                                 nforw=[0, 12, 12, 12, 12, 24, 24, 24, 24],
                                 nback=[18],
                                 pforw=[0, 12, 9, 6, 3, 24, 18, 12, 6],
