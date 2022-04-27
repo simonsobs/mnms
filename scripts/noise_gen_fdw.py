@@ -21,7 +21,7 @@ parser.add_argument('--downgrade', dest='downgrade', type=int, default=1,
 parser.add_argument('--lmax', dest='lmax', type=int, default=None,
                     help='Bandlimit of covariance matrix.')
 
-parser.add_argument('--lambda', dest='lamb', type=float, required=False, default=1.8,
+parser.add_argument('--lambda', dest='lamb', type=float, required=False, default=1.6,
                     help='Parameter specifying width of wavelets kernels in log(ell).')
 
 parser.add_argument('--n', dest='n', type=int, default=36,
