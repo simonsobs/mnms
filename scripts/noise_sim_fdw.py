@@ -13,6 +13,9 @@ parser.add_argument('--mask-version', dest='mask_version', type=str,
 parser.add_argument('--mask-name', dest='mask_name', type=str, default=None,
                     help='Load mnms:mask_path/mask_version/mask_name.fits')
 
+parser.add_argument('--mask-obs-name', dest='mask_obs_name', type=str, default=None,
+                    help='Load mnms:mask_path/mask_version/mask_obs_name.fits')
+
 parser.add_argument('--downgrade', dest='downgrade', type=int, default=1,
                     help='downgrade all data in pixel space by square of this many pixels per side')
 
@@ -82,8 +85,9 @@ else:
     
 model = nm.FDWNoiseModel(
     *args.qid, data_model=data_model, downgrade=args.downgrade, lmax=args.lmax, mask_version=args.mask_version,
-    mask_name=args.mask_name, union_sources=args.union_sources, kfilt_lbounds=args.kfilt_lbounds, 
-    notes=args.notes, lamb=args.lamb, n=args.n, p=args.p, fwhm_fact=args.fwhm_fact)
+    mask_name=args.mask_name, mask_obs_name=args.mask_obs_name, union_sources=args.union_sources,
+    kfilt_lbounds=args.kfilt_lbounds, notes=args.notes, 
+    lamb=args.lamb, n=args.n, p=args.p, fwhm_fact=args.fwhm_fact)
 
 # get split nums
 if args.auto_split:
