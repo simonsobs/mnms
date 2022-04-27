@@ -10,19 +10,19 @@ import astropy.wcs as pywcs
 import h5py
 
 
-class FSAWKernels:
+class FDWKernels:
 
     def __init__(self, lamb, lmax, lmin, lmax_j, n, p, shape, wcs,
                  dtype=np.float32, nforw=None, nback=None, pforw=None, 
                  pback=None):
-        """A set of Fourier steerable anisotropic wavelets, allowing users to
+        """A set of Fourier directional wavelets, allowing users to
         analyze maps by simultaneous scale-, direction-, and location-dependence
         of information. Also supports map synthesis. The wavelet transform (both
         analysis and synthesis) is admissible. 
 
         The kernels are separable in Fourier scale and azimuthal direction. The
         radial functions are the scale-discrete wavelets of 1211.1680. The
-        azimuthal functions are cos^n (see e.g. https://doi.org/10.1109/34.93808).
+        azimuthal functions are cos^p((n+1)/(p+1)*phi).
 
         Parameters
         ----------
@@ -141,7 +141,7 @@ class FSAWKernels:
         -------
         (..., nky, nkx) enmap.ndmap
             Real DFT of a synthesized map. The datatype and wcs information
-            will come from the FSAWKernels instance.
+            will come from the FDWKernels instance.
         """
         # first get new kmap.
         preshape = wavs[list(wavs)[0]].shape[:-2]
@@ -846,16 +846,16 @@ def get_az_func(n, p, j):
             return 1+0j
     return w_phi
 
-def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1, 
+def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_observed=1, mask_est=1, 
                            fwhm_fact=2, nthread=0, verbose=True):
     """Generate square-root covariance information for the signal in imap.
     The covariance matrix is assumed to be block-diagonal in wavelet kernels,
     neglecting correlations due to their overlap. Kernels are managed by 
-    the 'fsaw_kernels' object passed as the first argument.
+    the 'fdw_kernels' object passed as the first argument.
 
     Parameters
     ----------
-    fsaw_kernels : FSAWKernels
+    fdw_kernels : FDWKernels
         A set of Fourier steerable anisotropic wavelets, allowing users to
         analyze/synthesize maps by simultaneous scale-, direction-, and 
         location-dependence of information.
@@ -897,7 +897,7 @@ def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1,
     if verbose:
         print(
             f'Map shape: {imap.shape}\n'
-            f'Num kernels: {len(fsaw_kernels.kernels)}\n'
+            f'Num kernels: {len(fdw_kernels.kernels)}\n'
             f'Smoothing factor: {fwhm_fact}'
             )
 
@@ -945,18 +945,18 @@ def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1,
     np.divide(kmap, sqrt_cov_k, out=kmap, where=sqrt_cov_k!=0)
 
     # get model
-    wavs = fsaw_kernels.k2wav(kmap, nthread=nthread)
+    wavs = fdw_kernels.k2wav(kmap, nthread=nthread)
     sqrt_cov_wavs = {}
     for idx, wmap in wavs.items():
         # get outer prod of wavelet maps with normalization factor
         ncomp = np.prod(wmap.shape[:-2], dtype=int)
         wmap = wmap.reshape((ncomp, *wmap.shape[-2:]))
         wmap2 = np.einsum('ayx, byx -> abyx', wmap, wmap)
-        wmap2 /= fsaw_kernels.mean_sqs[idx]
+        wmap2 /= fdw_kernels.mean_sqs[idx]
         wmap2 = enmap.ndmap(wmap2, wmap.wcs)
 
         # smooth them
-        fwhm = fwhm_fact * np.pi / fsaw_kernels.lmaxs[idx]
+        fwhm = fwhm_fact * np.pi / fdw_kernels.lmaxs[idx]
         utils.smooth_gauss(wmap2, fwhm, method='map', mode=['constant', 'wrap'])
         
         # raise to 0.5 power. need to do some reshaping to allow use of
@@ -977,14 +977,14 @@ def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1,
 
     return sqrt_cov_wavs, sqrt_cov_k
 
-def get_fsaw_noise_sim(fsaw_kernels, sqrt_cov_wavs, preshape=None,
+def get_fdw_noise_sim(fdw_kernels, sqrt_cov_wavs, preshape=None,
                        sqrt_cov_k=None, seed=None, nthread=0, verbose=True):
     """Draw a Guassian realization from the covariance corresponding to
     the square-root covariance wavelet maps in sqrt_cov_wavs.
 
     Parameters
     ----------
-    fsaw_kernels : FSAWKernels
+    fdw_kernels : FDWKernels
         A set of Fourier steerable anisotropic wavelets, allowing users to
         analyze/synthesize maps by simultaneous scale-, direction-, and 
         location-dependence of information.
@@ -1014,7 +1014,7 @@ def get_fsaw_noise_sim(fsaw_kernels, sqrt_cov_wavs, preshape=None,
     """
     if verbose:
         print(
-            f'Num kernels: {len(fsaw_kernels.kernels)}\n'
+            f'Num kernels: {len(fdw_kernels.kernels)}\n'
             f'Radial filtering: {sqrt_cov_k is not None}\n'
             f'Seed: {seed}'
             )
@@ -1029,7 +1029,7 @@ def get_fsaw_noise_sim(fsaw_kernels, sqrt_cov_wavs, preshape=None,
         np.einsum('abyx, byx -> ayx', wmap, wmap_sim, out=wmap_sim)
         wavs_sim[idx] = wmap_sim
 
-    kmap = fsaw_kernels.wav2k(wavs_sim, nthread=nthread)
+    kmap = fdw_kernels.wav2k(wavs_sim, nthread=nthread)
     if preshape is not None:
         kmap = kmap.reshape((*preshape, *kmap.shape[-2:]))
     preshape = kmap.shape[:-2]
@@ -1040,7 +1040,7 @@ def get_fsaw_noise_sim(fsaw_kernels, sqrt_cov_wavs, preshape=None,
         kmap = utils.concurrent_op(np.multiply, kmap, sqrt_cov_k, nthread=nthread)
         kmap = enmap.ndmap(kmap, wcs)
 
-    return utils.irfft(kmap, n=fsaw_kernels.shape[-1], nthread=nthread)
+    return utils.irfft(kmap, n=fdw_kernels.shape[-1], nthread=nthread)
 
 # follows pixell.enmap.write_hdf recipe for writing wcs information
 def write_wavs(fname, wavs, extra_attrs=None, extra_datasets=None):

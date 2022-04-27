@@ -244,7 +244,7 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, sim_num, a
     fn += f'{mapalm}{str(sim_num).zfill(4)}.fits'
     return fn
 
-def get_fsaw_model_fn(qid, split_num, lamb, n, fwhm_fact, lmax, notes=None, **kwargs):
+def get_fdw_model_fn(qid, split_num, lamb, n, p, fwhm_fact, lmax, notes=None, **kwargs):
     """
     Determine filename for square-root wavelet covariance file.
 
@@ -258,6 +258,8 @@ def get_fsaw_model_fn(qid, split_num, lamb, n, fwhm_fact, lmax, notes=None, **kw
         Parameter specifying width of wavelets kernels in log(ell).
     n : int
         Bandlimit (in radians per azimuthal radian) of the directional kernels.
+    p : int
+        The locality parameter of each azimuthal kernel.
     fwhm_fact : float
         Factor specifying smoothing FWHM per wavelet.
     lmax : int
@@ -282,10 +284,10 @@ def get_fsaw_model_fn(qid, split_num, lamb, n, fwhm_fact, lmax, notes=None, **kw
     else:
         notes = f'_{notes}'
         
-    fn += f'lamb{lamb}_n{n}_fwhm_fact{fwhm_fact}_lmax{lmax}{notes}_set{split_num}.hdf5'
+    fn += f'lamb{lamb}_n{n}_p{p}_fwhm_fact{fwhm_fact}_lmax{lmax}{notes}_set{split_num}.hdf5'
     return fn
 
-def get_fsaw_sim_fn(qid, split_num, lamb, n, fwhm_fact, lmax, sim_num, alm=False,
+def get_fdw_sim_fn(qid, split_num, lamb, n, p, fwhm_fact, lmax, sim_num, alm=False,
                    mask_obs=True, notes=None, **kwargs):
     """
     Determine filename for simulated noise map.
@@ -300,6 +302,8 @@ def get_fsaw_sim_fn(qid, split_num, lamb, n, fwhm_fact, lmax, sim_num, alm=False
         Parameter specifying width of wavelets kernels in log(ell).
     n : int
         Bandlimit (in radians per azimuthal radian) of the directional kernels.
+    p : int
+        The locality parameter of each azimuthal kernel.
     fwhm_fact : float
         Factor specifying smoothing FWHM per wavelet.
     lmax : int
@@ -335,7 +339,7 @@ def get_fsaw_sim_fn(qid, split_num, lamb, n, fwhm_fact, lmax, sim_num, alm=False
     else:
         notes = f'_{notes}'
     
-    fn += f'lamb{lamb}_n{n}_fwhm_fact{fwhm_fact}_{mask_obs_str}lmax{lmax}{notes}_set{split_num}_'
+    fn += f'lamb{lamb}_n{n}_p{p}_fwhm_fact{fwhm_fact}_{mask_obs_str}lmax{lmax}{notes}_set{split_num}_'
 
     # prepare map num tags
     mapalm = 'alm' if alm else 'map'

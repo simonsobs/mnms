@@ -21,8 +21,11 @@ parser.add_argument('--lmax', dest='lmax', type=int, default=None,
 parser.add_argument('--lambda', dest='lamb', type=float, required=False, default=1.8,
                     help='Parameter specifying width of wavelets kernels in log(ell).')
 
-parser.add_argument('--n', dest='n', type=int, default=24,
-                    help='Bandlimit (in radians per azimuthal radian) of the directional kernels.')
+parser.add_argument('--n', dest='n', type=int, default=36,
+                    help='Approx. bandlimit (in radians per azimuthal radian) of the directional kernels.')
+
+parser.add_argument('--p', dest='p', type=int, default=2,
+                    help='The locality parameter of each azimuthal kernel.')
 
 parser.add_argument('--fwhm-fact', dest='fwhm_fact', type=float, default=2., 
                     help='Factor determining smoothing scale at each wavelet scale: '
@@ -48,8 +51,8 @@ if args.data_model:
 else:
     data_model = None
     
-model = nm.FSAWNoiseModel(
+model = nm.FDWNoiseModel(
     *args.qid, data_model=data_model, downgrade=args.downgrade, lmax=args.lmax, mask_version=args.mask_version,
     mask_name=args.mask_name, union_sources=args.union_sources, kfilt_lbounds=args.kfilt_lbounds, 
-    notes=args.notes, lamb=args.lamb, n=args.n, fwhm_fact=args.fwhm_fact)
+    notes=args.notes, lamb=args.lamb, n=args.n, p=args.p, fwhm_fact=args.fwhm_fact)
 model.get_model(check_on_disk=True, verbose=True)

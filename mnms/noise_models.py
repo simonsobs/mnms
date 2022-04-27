@@ -1,4 +1,4 @@
-from mnms import simio, tiled_ndmap, utils, soapack_utils as s_utils, tiled_noise, wav_noise, fsaw_noise, inpaint
+from mnms import simio, tiled_ndmap, utils, soapack_utils as s_utils, tiled_noise, wav_noise, fdw_noise, inpaint
 from pixell import enmap, wcsutils
 from enlib import bench
 from optweight import wavtrans
@@ -1159,13 +1159,13 @@ class WaveletNoiseModel(NoiseModel):
 
 
 @register()
-class FSAWNoiseModel(NoiseModel):
+class FDWNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, preload=True, ivar=None, mask_est=None,
                  calibrated=True, downgrade=1, lmax=None, mask_version=None, mask_name=None,
                  union_sources=None, kfilt_lbounds=None, fwhm_ivar=None, notes=None, 
-                 dtype=None, lamb=1.8, n=24, fwhm_fact=2., **kwargs):
-        """An FSAWNoiseModel object supports drawing simulations which capture direction- 
+                 dtype=None, lamb=1.6, n=36, p=2, fwhm_fact=2., **kwargs):
+        """An FDWNoiseModel object supports drawing simulations which capture direction- 
         and scale-dependent, spatially-varying map depth. The simultaneous direction- and
         scale-sensitivity is achieved through steerable wavelet kernels in Fourier space.
         They also capture the total noise power spectrum, and array-array correlations.
@@ -1222,12 +1222,13 @@ class FSAWNoiseModel(NoiseModel):
             If None, inferred from data_model.dtype.
         lamb : float, optional
             Parameter specifying width of wavelets kernels in log(ell), by default 1.8
-        n : int, optional
-            Azimithul bandlimit (in radians per azimuthal radian) of the
+        n : int
+            Approximate azimuthal bandlimit (in rads per azimuthal rad) of the
             directional kernels. In other words, there are n+1 azimuthal 
-            kernels of the form cos^n(phi), by default 24. For speed, the lowest- and
-            highest-ell kernels will override to 0, and the next-lowest- and
-            next-highest-ell kernels will override to n//2. 
+            kernels.
+        p : int
+            The locality parameter of each azimuthal kernel. In other words,
+            each kernel is of the form cos^p((n+1)/(p+1)*phi).
         fwhm_fact : float, optional
             Factor determining smoothing scale at each wavelet scale:
             FWHM = fact * pi / lmax, where lmax is the max wavelet ell.
@@ -1244,11 +1245,11 @@ class FSAWNoiseModel(NoiseModel):
         Examples
         --------
         >>> from mnms import noise_models as nm
-        >>> fsawnm = nm.FSAWNoiseModel('s18_03', 's18_04', downgrade=2, notes='my_model')
-        >>> fsawnm.get_model() # will take several minutes and require a lot of memory
+        >>> fdwnm = nm.FDWNoiseModel('s18_03', 's18_04', downgrade=2, notes='my_model')
+        >>> fdwnm.get_model() # will take several minutes and require a lot of memory
                             # if running this exact model for the first time, otherwise
                             # will return None if model exists on-disk already
-        >>> fsawnm = wnm.get_sim(0, 123) # will get a sim of split 1 from the correlated arrays;
+        >>> fdwnm = wnm.get_sim(0, 123) # will get a sim of split 1 from the correlated arrays;
                                        # the map will have "index" 123, which is used in making
                                        # the random seed whether or not the sim is saved to disk,
                                        # and will be recorded in the filename if saved to disk.
@@ -1265,21 +1266,28 @@ class FSAWNoiseModel(NoiseModel):
         # save model-specific info
         self._lamb = lamb
         self._n = n
+        self._p = p
         self._fwhm_fact = fwhm_fact      
 
         # build the kernels.
+        #
         # there is no real significance to lmax=10_800 here. it will just be
         # used to build the kernel generating functions, specifically, to 
         # check that the last kernel is not "clipped"
-        self._fk = fsaw_noise.FSAWKernels(
-            self._lamb, 10_800, 10, 5300, self._n, self._shape, self._wcs,
-            dtype=self._dtype, nforw=[0, n//2], nback=[0, n//2]
+        #
+        # TODO: this is tuned to ACT DR6 and should be passable via a 
+        # yaml file or equivalent
+        self._fk = fdw_noise.FDWKernels(
+            self._lamb, 10_800, 10, 5300, self._n, self._p, self._shape,
+            self._wcs, nforw=[0, 6, 6, 6, 6, 12, 12, 12, 12, 24, 24],
+            nback=[18], pforw=[0, 6, 4, 2, 2, 12, 8, 4, 2, 12, 8],
+            dtype=self._dtype
         )
 
     def _get_model_fn(self, split_num):
         """Get a noise model filename for split split_num; return as <str>"""
-        return simio.get_fsaw_model_fn(
-            self._qids, split_num, self._lamb, self._n, self._fwhm_fact,
+        return simio.get_fdw_model_fn(
+            self._qids, split_num, self._lamb, self._n, self._p, self._fwhm_fact,
             self._lmax, notes=self._notes, data_model=self._data_model, 
             mask_version=self._mask_version, bin_apod=self._use_default_mask,
             mask_name=self._mask_name, calibrated=self._calibrated,
@@ -1289,7 +1297,7 @@ class FSAWNoiseModel(NoiseModel):
 
     def _read_model(self, fn):
         """Read a noise model with filename fn; return a dictionary of noise model variables"""
-        sqrt_cov_mat, extra_datasets = fsaw_noise.read_wavs(
+        sqrt_cov_mat, extra_datasets = fdw_noise.read_wavs(
             fn, extra_datasets=['sqrt_cov_k']
         )
         sqrt_cov_k = extra_datasets['sqrt_cov_k']
@@ -1307,7 +1315,7 @@ class FSAWNoiseModel(NoiseModel):
 
     def _get_model(self, split_num, dmap, verbose=False):
         """Return a dictionary of noise model variables for this NoiseModel subclass, for split split_num and from difference maps dmap"""
-        sqrt_cov_mat, sqrt_cov_k = fsaw_noise.get_fsaw_noise_covsqrt(
+        sqrt_cov_mat, sqrt_cov_k = fdw_noise.get_fdw_noise_covsqrt(
             self._fk, dmap[:, split_num], mask_observed=self._mask_observed,
             mask_est=self._mask_est, fwhm_fact=self._fwhm_fact, nthread=0,
             verbose=verbose
@@ -1320,14 +1328,14 @@ class FSAWNoiseModel(NoiseModel):
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_k=None, **kwargs):
         """Write sqrt_cov_mat, sqrt_cov_k, and possibly more noise model variables to filename fn"""
-        fsaw_noise.write_wavs(
+        fdw_noise.write_wavs(
             fn, sqrt_cov_mat, extra_datasets={'sqrt_cov_k': sqrt_cov_k}
         )
 
     def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
-        return simio.get_fsaw_sim_fn(
-            self._qids, split_num, self._lamb, self._n, self._fwhm_fact,
+        return simio.get_fdw_sim_fn(
+            self._qids, split_num, self._lamb, self._n, self._p, self._fwhm_fact,
             self._lmax, sim_num, alm=alm, notes=self._notes, data_model=self._data_model, 
             mask_version=self._mask_version, bin_apod=self._use_default_mask,
             mask_name=self._mask_name, calibrated=self._calibrated,
@@ -1342,7 +1350,7 @@ class FSAWNoiseModel(NoiseModel):
         sqrt_cov_mat = self._nm_dict[split_num]['sqrt_cov_mat']
         sqrt_cov_k = self._nm_dict[split_num]['sqrt_cov_k']
 
-        sim = fsaw_noise.get_fsaw_noise_sim(
+        sim = fdw_noise.get_fdw_noise_sim(
             self._fk, sqrt_cov_mat, preshape=(self._num_arrays, -1),
             sqrt_cov_k=sqrt_cov_k, seed=seed, nthread=0, verbose=verbose
         )
