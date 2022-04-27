@@ -436,6 +436,11 @@ def get_tiled_noise_sim(covsqrt, split_num, ivar=None, sqrt_cov_ell=None, rfft=T
         )
     omap = omap[covsqrt.unmasked_tiles]
 
+    if rfft:
+        # because reality condition will suppress power in only the first column
+        # (for all but the 0-freq compoonent)
+        omap[..., 1:, 0] *= np.sqrt(2)
+
     # multiply random draws by the covsqrt to get the sim
     omap = utils.concurrent_einsum(
         '...abyx, ...byx -> ...ayx', covsqrt, omap, nchunks=100, nthread=nthread
