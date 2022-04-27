@@ -10,18 +10,19 @@ import astropy.wcs as pywcs
 import h5py
 
 
-class FSAWKernels:
+class FDWKernels:
 
-    def __init__(self, lamb, lmax, lmin, lmax_j, n, shape, wcs,
-                 dtype=np.float32, nforw=None, nback=None):
-        """A set of Fourier steerable anisotropic wavelets, allowing users to
+    def __init__(self, lamb, lmax, lmin, lmax_j, n, p, shape, wcs,
+                 dtype=np.float32, nforw=None, nback=None, pforw=None, 
+                 pback=None):
+        """A set of Fourier directional wavelets, allowing users to
         analyze maps by simultaneous scale-, direction-, and location-dependence
         of information. Also supports map synthesis. The wavelet transform (both
         analysis and synthesis) is admissible. 
 
         The kernels are separable in Fourier scale and azimuthal direction. The
         radial functions are the scale-discrete wavelets of 1211.1680. The
-        azimuthal functions are cos^n (see e.g. https://doi.org/10.1109/34.93808).
+        azimuthal functions are cos^p((n+1)/(p+1)*phi).
 
         Parameters
         ----------
@@ -38,9 +39,12 @@ class FSAWKernels:
         lmax_j : int
             Multipole after which the second to last multipole ends.
         n : int
-            Azimithul bandlimit (in radians per azimuthal radian) of the
+            Approximate azimuthal bandlimit (in rads per azimuthal rad) of the
             directional kernels. In other words, there are n+1 azimuthal 
-            kernels of the form cos^n(phi).
+            kernels.
+        p : int
+            The locality parameter of each azimuthal kernel. In other words,
+            each kernel is of the form cos^p((n+1)/(p+1)*phi).
         shape : (..., ny, nx) iterable
             The shape of maps to transformed. Necessary because kernels 
             are defined in the Fourier plane, whose dimensions are
@@ -60,10 +64,22 @@ class FSAWKernels:
             Force high-ell azimuthal bandlimits to nback, by default None.
             For example, if n is 4 but nback is [0, 2], then the highest-
             ell kernel be directionally isotropic, and the next highest-
-            ell kernel will have a bandlimit of 2 rad/rad. 
+            ell kernel will have a bandlimit of 2 rad/rad.
+        pforw : iterable of int, optional
+            Force low-ell azimuthal locality parameters to pforw, by default
+            None. For example, if p is 4 but pforw is [1, 2], then the lowest-
+            ell kernel have a locality paramater of 1, and the next lowest-
+            ell kernel will have a locality parameter of 2, and 4 thereafter. 
+        pback : iterable of int, optional
+            Force high-ell azimuthal locality parameters to pback, by default
+            None. For example, if p is 4 but pback is [1, 2], then the highest-
+            ell kernel have a locality paramater of 1, and the next highest-
+            ell kernel will have a locality parameter of 2, and 4 thereafter. 
         """
-        self._kf = KernelFactory(lamb, lmax, lmin, lmax_j, n, shape, wcs,
-                                 dtype=dtype, nforw=nforw, nback=nback)
+        self._kf = KernelFactory(lamb, lmax, lmin, lmax_j, n, p, shape, wcs,
+                                 dtype=dtype, nforw=nforw, nback=nback, 
+                                 pforw=pforw, pback=pback)
+        self._shape = shape
         self._real_shape = (shape[-2], shape[-1]//2 + 1)
         self._wcs = wcs
         self._cdtype = np.result_type(1j, dtype)
@@ -73,9 +89,10 @@ class FSAWKernels:
         self._lmaxs = {}
         self._ns = {}
         self._mean_sqs = {}
-        for i, n in enumerate(self._kf._ns):
-            for j in range(n+1):
-                kern = self._kf.get_kernel(i, n, j)
+        for i in range(len(self._kf._rad_funcs)):
+            _n = self._kf._ns[i]
+            for j in range(_n+1):
+                kern = self._kf.get_kernel(i, j)
                 self._kernels[i, j] = kern
                 self._lmaxs[i, j] = self._kf._lmaxs[i]
                 self._ns[i, j] = self._kf._ns[i]
@@ -124,7 +141,7 @@ class FSAWKernels:
         -------
         (..., nky, nkx) enmap.ndmap
             Real DFT of a synthesized map. The datatype and wcs information
-            will come from the FSAWKernels instance.
+            will come from the FDWKernels instance.
         """
         # first get new kmap.
         preshape = wavs[list(wavs)[0]].shape[:-2]
@@ -197,10 +214,20 @@ class FSAWKernels:
         """
         return self._mean_sqs
 
+    @property
+    def shape(self):
+        """The supplied shape for the kernel set."""
+        return self._shape
+
+    @property
+    def wcs(self):
+        """The supplied wcs for the kernel set."""
+        return self._wcs
+
 
 class Kernel:
 
-    def __init__(self, k_kernel, sels=None):
+    def __init__(self, k_kernel, index=None, sels=None):
         """One simultaneously scale-, direction-, and location-dependent
         filter. Uses multiresolution partitioning of Fourier space.
 
@@ -210,11 +237,13 @@ class Kernel:
             Complex kernel defined in Fourier space. Because all
             operations use the real DFT, only the "positive" kx 
             modes are included.
+        index : any
+            Any value to name this Kernel. 
         sels : iterable of (Ellipsis, [slice,]) iterables, optional
             Selection tuples for the multiresolution partitioning, by 
             default None. If None, set to [(Ellipsis,)]. The application
             of each selection tuple to the full resolution Fourier space
-            should extract the appropriate "corners" for this Kernel.
+            should extract the appropriate "box" for this Kernel.
 
         Raises
         ------
@@ -224,6 +253,7 @@ class Kernel:
         assert k_kernel.ndim == 2, f'k_kernel must have 2 dims, got{k_kernel.ndim}'
         self._k_kernel = k_kernel
         self._k_kernel_conj = np.conj(k_kernel)
+        self._index = index
 
         # assume odd nx in orig map (very important)! in principle, we
         # could catch the case that the kernel spans the original map,
@@ -248,6 +278,20 @@ class Kernel:
             test_arr[sel] += 1
         assert np.all(test_arr == 1), \
             'Selection tuples do not cover each kernel element exactly once'
+        
+        # check that kernel is compatible with rfft.
+        # (a) only the symmetry of the first column excl. the first item 
+        # matters for odd self._n
+        # (b) the below thresholds seemed to work for common kernel sets
+        if k_kernel.shape[-2] > 2:
+            rel_diff = np.abs(k_kernel[1:, 0] - np.conj(k_kernel[:0:-1, 0]))
+            rel_diff /= np.abs(k_kernel).max()
+            assert np.max(rel_diff) < 1e-5, \
+                f'Kernel {index} does not correspond to real fft:\n' + \
+                f'max rel_diff={np.max(rel_diff)}, expected < 1e-5'
+            assert np.mean(rel_diff) < 5e-6, \
+                f'Kernel {index} does not correspond to real fft:\n' + \
+                f'mean rel_diff={np.mean(rel_diff)}, expected < 5e-6'
 
     def k2wav(self, kmap, use_kernel_wcs=True, inplace=True, from_full=True, nthread=0):
         """Generate the wavelet map for this kernel from a real DFT of a map. 
@@ -292,7 +336,8 @@ class Kernel:
             kmap *= self._k_kernel
 
         assert kmap.shape[-2:] == self._k_kernel.shape, \
-            f'kmap must have same shape[-2:] as k_kernel, got {kmap.shape}'
+            f'kmap must have same shape[-2:] as k_kernel, got\n' + \
+            f'{kmap.shape} and {self._k_kernel.shape}'
 
         wmap = utils.irfft(kmap, n=self._n, nthread=nthread) # destroys kmap buffer
         wcs = self._k_kernel.wcs if use_kernel_wcs else kmap.wcs
@@ -321,9 +366,11 @@ class Kernel:
             Real DFT of a map to be analyzed.
         """
         assert wmap.shape[-2] == self._k_kernel.shape[-2], \
-            f'wmap must have same shape[-2] as k_kernel, got {wmap.shape[-2]}'
+            f'wmap must have same shape[-2] as k_kernel, got\n' + \
+            f'{wmap.shape[-2]} and {self._k_kernel.shape[-2]}'
         assert wmap.shape[-1]//2+1 == self._k_kernel.shape[-1], \
-            f'wmap must have same shape[-1]//2+1 as k_kernel, got {wmap.shape[-1]//2+1}'
+            f'wmap must have same shape[-1]//2+1 as k_kernel, got\n' + \
+            f'{wmap.shape[-1]//2+1} and {self._k_kernel.shape[-1]}'
         
         kmap = utils.rfft(wmap, nthread=nthread) 
         kmap *= self._k_kernel_conj
@@ -332,11 +379,15 @@ class Kernel:
         wcs = self._k_kernel.wcs if use_kernel_wcs else wmap.wcs
         return enmap.ndmap(kmap, wcs)
 
+    @property
+    def index(self):
+        return self._index
 
 class KernelFactory:
 
-    def __init__(self, lamb, lmax, lmin, lmax_j, n, shape, wcs,
-                 dtype=np.float32, nforw=None, nback=None):
+    def __init__(self, lamb, lmax, lmin, lmax_j, n, p, shape, wcs,
+                 dtype=np.float32, nforw=None, nback=None, pforw=None,
+                 pback=None):
         """A helper class to build Kernel objects.
 
         Parameters
@@ -354,9 +405,12 @@ class KernelFactory:
         lmax_j : int
             Multipole after which the second to last multipole ends.
         n : int
-            Azimithul bandlimit (in radians per azimuthal radian) of the
+            Approximate azimuthal bandlimit (in rads per azimuthal rad) of the
             directional kernels. In other words, there are n+1 azimuthal 
-            kernels of the form cos^n(phi).
+            kernels.
+        p : int
+            The locality parameter of each azimuthal kernel. In other words,
+            each kernel is of the form cos^p((n+1)/(p+1)*phi).
         shape : (..., ny, nx) iterable
             The shape of maps to transformed. Necessary because kernels 
             are defined in the Fourier plane, whose dimensions are
@@ -376,7 +430,17 @@ class KernelFactory:
             Force high-ell azimuthal bandlimits to nback, by default None.
             For example, if n is 4 but nback is [0, 2], then the highest-
             ell kernel be directionally isotropic, and the next highest-
-            ell kernel will have a bandlimit of 2 rad/rad. 
+            ell kernel will have a bandlimit of 2 rad/rad.
+        pforw : iterable of int, optional
+            Force low-ell azimuthal locality parameters to pforw, by default
+            None. For example, if p is 4 but pforw is [1, 2], then the lowest-
+            ell kernel have a locality paramater of 1, and the next lowest-
+            ell kernel will have a locality parameter of 2, and 4 thereafter. 
+        pback : iterable of int, optional
+            Force high-ell azimuthal locality parameters to pback, by default
+            None. For example, if p is 4 but pback is [1, 2], then the highest-
+            ell kernel have a locality paramater of 1, and the next highest-
+            ell kernel will have a locality parameter of 2, and 4 thereafter. 
 
         Notes
         -----
@@ -393,7 +457,16 @@ class KernelFactory:
         # fullshape, map geometry info
         modlmap = enmap.modlmap(shape, wcs).astype(dtype, copy=False)
         modlmap = modlmap[..., :shape[-1]//2 + 1]
-        self._phimap = np.arctan2(*enmap.lrmap(shape, wcs), dtype=dtype)
+        ly, lx = enmap.lrmap(shape, wcs)
+
+        # because np.fft.fftfreq gives negative Nyquist freq when even,
+        # making the x freqs continuous instead will cause phimap to 
+        # be continuous from the second-to-last, to the last column, rather
+        # than jumping weirdly
+        if shape[-1]%2 == 0:
+            lx[:, -1] *= -1
+        self._phimap = np.arctan2(ly, lx, dtype=dtype)
+
         corners = enmap.corners(shape, wcs, corner=False)
 
         # need to make sure corners are centered or else call to 
@@ -432,10 +505,12 @@ class KernelFactory:
         for i, w_ell in enumerate(w_ells):
             rad_func = get_rad_func(w_ell, len(w_ells), i)
             self._rad_funcs.append(rad_func)
-            unsliced_rad_kern = rad_func(modlmap)
+
+            # interp1d returns as np.float64 always, need to cast
+            unsliced_rad_kern = rad_func(modlmap).astype(modlmap.dtype)
 
             kern_shape, sels = self._get_sliced_shape_and_sels(
-                unsliced_rad_kern, rad_idx=i
+                unsliced_rad_kern, idx=i
                 )
             self._sels.append(sels)
             
@@ -445,9 +520,7 @@ class KernelFactory:
                 rad_kern[sel] = unsliced_rad_kern[sel]
             self._rad_kerns.append(rad_kern)
 
-        # get list of w_phi callables
-        # also get full list of n's and unique list of n's to build each
-        # kernel and sufficient phimaps
+        # get full list of n's, p's to build each kernel and sufficient phimaps
         if nforw is None:
             nforw = []
         else:
@@ -456,32 +529,57 @@ class KernelFactory:
             nback = []
         else:
             nback = list(nback)[::-1]
+
+        if pforw is None:
+            pforw = []
+        else:
+            pforw = list(pforw)
+        if pback is None:
+            pback = []
+        else:
+            pback = list(pback)
+
         assert len(w_ells) - len(nforw) - len(nback) >= 0, \
             'Must have at least len(w_ells) radial kernels as len(nforw)\n' + \
             f'+ len(nback), got {len(w_ells)} and {len(nforw)} + {len(nback)}'    
-        all_ns = nforw + (len(w_ells)-len(nforw)-len(nback))*[n] + nback
-        self._ns = all_ns
-        unique_ns = np.unique(all_ns)
-        
+        assert len(w_ells) - len(pforw) - len(pback) >= 0, \
+            'Must have at least len(w_ells) radial kernels as len(pforw)\n' + \
+            f'+ len(pback), got {len(w_ells)} and {len(pforw)} + {len(pback)}'
+
+        self._ns = np.array(
+            nforw + (len(w_ells) - len(nforw) - len(nback)) * [n] + nback
+            )
+        self._ps = np.array(
+            pforw + (len(w_ells) - len(pforw) - len(pback)) * [p] + pback
+        )
+
         # TODO: fix this
-        assert np.all(unique_ns%2 == 0), 'only even ns'
+        assert np.all(self._ns%2 == 0), 'only even ns'
 
         self._az_funcs = {}
-        for unique_n in unique_ns:
-            for i in range(unique_n+1):
-                self._az_funcs[unique_n, i] = get_az_func(unique_n, i)
+        for i in range(len(w_ells)):
+            _n = self._ns[i]
+            _p = self._ps[i]
+            for j in range(_n+1):
+                self._az_funcs[i, j] = get_az_func(_n, _p, j)
 
-    def _get_sliced_shape_and_sels(self, unsliced_rad_kern, rad_idx=None):
-        """Given a radial kernel at full Fourier resolution, determine
-        the minimal 'bounding box' and associated numpy selection tuples
-        necessary and sufficient to admit lossless analysis and synthesis.
+    def _get_sliced_shape_and_sels(self, unsliced_kern, idx=None,
+                                   unsliced_sels=None):
+        """Given a kernel at full Fourier resolution, determine the minimal 
+        'bounding box' and associated numpy selection tuples necessary and 
+        sufficient to admit lossless analysis and synthesis.
 
         Parameters
         ----------
-        unsliced_rad_kern : (..., nky, nkx) enmap.ndmap
-            A full Fourier resolution radial kernel.
-        rad_idx : int, optional
-            The radial index for this kernel, by default None.
+        unsliced_kern : (..., nky, nkx) enmap.ndmap
+            A full Fourier resolution kernel.
+        idx : int, optional
+            The index for this kernel, by default None.
+        unsliced_sels : iterable of iterables
+            The selection tuples associated with unsliced_kern, if
+            unsliced_kern is already sliced out of some higher 
+            resolution space. By default this is a selection tuple
+            that grabs "everything."
 
         Returns
         -------
@@ -494,81 +592,110 @@ class KernelFactory:
         -----
         Assumes real DFTs, therefore nkx counts only the "positive" kx modes.
         """
-        assert unsliced_rad_kern.ndim == 2, \
-            f'unsliced_rad_kern must be a 2d array, got {unsliced_rad_kern.ndim}d'
-        ny, nx = (unsliced_rad_kern.shape[0], unsliced_rad_kern.shape[1])
-        
-        # get maximal x index
-        x_mask = np.nonzero(unsliced_rad_kern.astype(bool).sum(axis=0) > 0)[0]
-        if x_mask.size == nx: # all columns in use
-            x_max = nx
+        # start with everything if nothing passed
+        if unsliced_sels is None:
+            unsliced_sels = [
+                (Ellipsis, slice(None, None, None), slice(None, None, None)),
+            ]
         else:
-            assert x_mask.size > 0, \
-                f'rad_idx {rad_idx} has empty kernel'
-            x_max = x_mask.max() + 1 # inclusive bounds
+            assert len(unsliced_sels) == 1 or len(unsliced_sels) == 2, \
+                'Only 1 or 2 sels allowed'
 
-        # get maximal y indices in both "positive" and "negative" directions
-        y_mask = unsliced_rad_kern.astype(bool).sum(axis=1)
+        assert unsliced_kern.ndim == 2, \
+            f'unsliced_kern must be a 2d array, got {unsliced_kern.ndim}d'
+        ny, nx = (unsliced_kern.shape[0], unsliced_kern.shape[1])
+        
+        # get bounding x indices
+        x_mask = np.nonzero(unsliced_kern.any(axis=0))[0]
+        assert x_mask.size > 0, \
+            f'idx {idx} has empty kernel'
+        x_max = x_mask.max() + 1 # inclusive bounds
+
+        # get bounding y indices
+        y_mask = unsliced_kern.any(axis=1)
         y_mask_pos = np.nonzero(y_mask[:ny//2+1] > 0)[0]
         y_mask_neg = np.nonzero(y_mask[:-(ny//2+1):-1] > 0)[0]
-    
-        # either both or neither are full
-        assert not np.logical_xor(
-            y_mask_pos.size == ny//2+1, y_mask_neg.size == ny//2
-            ), \
-            '0-cuts in y-direction of kernel must occur in both +y and -y'
+        assert y_mask_pos.size > 0 or y_mask_neg.size > 0, \
+            f'idx {idx} has empty kernel'
 
-        if y_mask_pos.max()+1 == ny//2+1: # all rows in use
-            y_max_pos = ny
+        if y_mask_pos.size == 0:
+            y_max_pos = 0
+        else:
+            y_max_pos = y_mask_pos.max() + 1 # inclusive bounds
+        if y_mask_neg.size == 0:
             y_max_neg = 0
         else:
-            assert y_mask_pos.size > 0, \
-                f'rad_idx {rad_idx} has empty kernel'
-            assert y_mask_neg.size > 0, \
-                f'rad_idx {rad_idx} has empty kernel'
-
-            y_max_pos = y_mask_pos.max() + 1 # inclusive bounds
             y_max_neg = y_mask_neg.max() + 1 # inclusive bounds
 
-            # we did everything right if there is 1 more in y than x
-            assert y_max_pos == y_max_neg + 1, \
-                f'y_max_pos and y_max_neg must differ in absval by 1, ' \
-                f'got {y_max_pos} and {y_max_neg} for rad_idx {rad_idx}'
+        # we need to slice the "full fourier" plane even though just rfft. so
+        # need a negative slice even if don't find one, or positive slice even
+        # if don't find one
+        if y_max_pos > y_max_neg + 1:
+            y_max_neg = y_max_pos - 1
+        else:
+            y_max_pos = y_max_neg + 1
+
+        # we did something wrong if one of y_max_pos or y_max_neg is
+        # full height, but not the other
+        assert not np.logical_xor(
+            y_max_pos == ny//2+1, y_max_neg == ny//2
+            ), \
+            'full height kernels in y-direction must occur in both +y and -y'
+
+        # check for full height slice (checking just one leg is sufficient
+        # because of above assertion). in this case, if even, want total
+        # to add up to ny not ny+1
+        if y_max_pos == ny//2+1 and ny%2 == 0:
+            y_max_neg = ny//2-1
+
+        kern_shape = (y_max_pos + y_max_neg, x_max)
 
         # we did something wrong if the sliced shape is greater in extent
         # than the unsliced shape
-        assert y_max_pos + y_max_neg <= ny, \
-            f'y_max_pos + y_max_neg > ny for rad_idx {rad_idx}'
-        assert x_max <= nx, \
-            f'x_max > nx for rad_idx {rad_idx}'
+        assert kern_shape[0] <= ny, \
+            print(unsliced_kern.shape, y_max_pos, y_max_neg, \
+            f'y_max_pos + y_max_neg > ny for idx {idx}')
+        assert kern_shape[1] <= nx, \
+            f'x_max > nx for idx {idx}'
 
-        # get the shape of this kernel and selection tuples
-        kern_shape = (y_max_pos + y_max_neg, x_max)
-
-        # get everything, insert everything
+        # get everything, insert everything if no change
         if kern_shape == (ny, nx):
-            sels= [(Ellipsis,)]
+            sels = unsliced_sels
         
         # if y's are full but x's are clipped, then only need to slice in x
         elif (kern_shape[0] == ny) and (kern_shape[1] != nx):
-            sels = [np.s_[..., :x_max],]
+            if len(unsliced_sels) == 1:
+                sels = [(*unsliced_sels[0][:2], np.s_[:x_max]),]
+            elif len(unsliced_sels) == 2:
+                sels = [
+                    (*unsliced_sels[0][:2], np.s_[:x_max]),
+                    (*unsliced_sels[1][:2], np.s_[:x_max])
+                    ]
+            else:
+                raise ValueError('Only 1 or 2 sels allowed')
         
         # if y's are clipped, need to slice in y, and :x_max will work whether
         # clipped or not
         else:
-            sels = [np.s_[..., :y_max_pos, :x_max], np.s_[..., -y_max_neg:, :x_max]]
+            if y_max_neg > 0:
+                sels = [
+                    np.s_[..., :y_max_pos, :x_max],
+                    np.s_[..., -y_max_neg:, :x_max]
+                    ]
+            else: # catching the case where only ky=0 is nonzero
+                sels = [
+                    np.s_[..., :y_max_pos, :x_max]
+                    ]
 
         return kern_shape, sels
 
-    def get_kernel(self, rad_idx, az_n, az_idx):
+    def get_kernel(self, rad_idx, az_idx):
         """Generate the specified kernel.
 
         Parameters
         ----------
         rad_idx : int
             The radial kernel index.
-        az_n : int
-            The azimuthal kernel bandlimit.
         az_idx : int
             The azimuthal kernel index.
 
@@ -584,17 +711,27 @@ class KernelFactory:
         kern_phimap = np.empty(rad_kern.shape, self._phimap.dtype)
         for sel in sels:
             kern_phimap[sel] = self._phimap[sel]
-        az_kern = self._az_funcs[az_n, az_idx](kern_phimap)
+        az_kern = self._az_funcs[rad_idx, az_idx](kern_phimap)
         
-        # get this kernel
-        kern = rad_kern * az_kern
+        # get this kernel. we start from an initially reduced 
+        # slice of full Fourier space, _kern, which centers on the
+        # "full square" defined by the radial part only. this just
+        # helps speed things up. we then slice again the individual
+        # kernel
+        _kern = rad_kern * az_kern
+        kern_shape, sels = self._get_sliced_shape_and_sels(
+            _kern, idx=(rad_idx, az_idx), unsliced_sels=sels
+            )
+        kern = np.empty(kern_shape, dtype=_kern.dtype)
+        for sel in sels:
+            kern[sel] = _kern[sel]
 
         # kernels have 2(rkx-1)+1 pixels in map space x direction
         map_shape = (kern.shape[0], 2*(kern.shape[1]-1) + 1)
         _, map_wcs = enmap.geometry(self._corners, shape=map_shape)
         kern = enmap.ndmap(kern, map_wcs) 
 
-        return Kernel(kern, sels=sels)
+        return Kernel(kern, index=(rad_idx, az_idx), sels=sels)
 
 
 def get_rad_func(w_ell, n, j):
@@ -646,18 +783,18 @@ def get_rad_func(w_ell, n, j):
         ell, w_ell, kind='nearest', bounds_error=False, fill_value=fill_value
         )
 
-# radial kernels are cos^n(phi) from https://doi.org/10.1109/34.93808
-def get_az_func(n, j):
-    """Generate a callable for a given steerable azimuthal wavelet
-    kernel (kernels from e.g. https://doi.org/10.1109/34.93808). 
+def get_az_func(n, p, j):
+    """Generate a callable for a given "cos-power" kernel.
 
     Parameters
     ----------
     n : int
         Azimuthal bandlimit. For a complete basis, one requires
         n + 1 kernels.
+    p : int
+        Power to raise each cosine kernel to. Must be in [0..n]
     j : int
-        The azimuthal kernel index.
+        The azimuthal kernel index. Must be in [0..n]
 
     Returns
     -------
@@ -668,36 +805,57 @@ def get_az_func(n, j):
 
     Notes
     -----
-    The kernel is the function c*cos(x - j*pi/(n+1))**n. The constant
+    The kernel is the function c * cos(w * (x - x0)) ** p, where:
     c is chosen so that (a) the sum (over j) of the squared magnitude 
     of the kernels is 1 for all x, and (b) so that multiplying by a 
-    real DFT returns an array still corresponding to a real map.
+    real DFT returns an array still corresponding to a real map; w is
+    (n+1)/(p+1) and x0 = pi/(n+1) +/- k*pi where k is any integer. It 
+    is given by this fucntion for the single "bump" around each x0,
+    but is 0 otherwise.
+
+    The case n = p corresponds to a steerable basis, see e.g.
+    https://doi.org/10.1109/34.93808
+
+    The case p = 0 corresponds to n + 1 evenly spaced tophats.
     """
     # important! if n is actually an np.int64, e.g., then
     # the following calculations can overflow!
     assert n >= 0, 'n must be non-negative'
+    assert p >= 0, 'p must be non-negative'
+    assert p <= n, 'p must be less than or equal to n'
     assert j >= 0, 'j must be non-negative'
     assert j <= n, 'j must be less than or equal to n'
-    n = float(n) 
-    c = np.sqrt(2**(2*n) / ((n+1) * comb(2*n, n)))
+    p = float(p) 
+    c = np.sqrt(2**(2*p) / ((p+1) * comb(2*p, p)))
+
     if n > 0:
+        delta = np.pi/2*(p+1)/(n+1)
+        freq = np.pi/(2*delta)
         def w_phi(phis):
-            return c * 1j**n * np.cos(phis - j*np.pi/(n+1))**n
+            out = np.asanyarray(phis) * 0j
+            for i in [-2, -1, 0, 1, 2]:
+                center = j*np.pi/(n+1) + i*np.pi
+                cut_low = (center - delta) <= phis
+                cut_high = phis < (center + delta)
+                cond = np.logical_and(cut_low, cut_high)
+                func = c*1j**p*(-1)**(p*i)*np.cos(freq*(phis - center))**p
+                out += np.where(cond, func, 0)
+            return out
     else:
         def w_phi(phis):
             return 1+0j
     return w_phi
 
-def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1, 
+def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_observed=1, mask_est=1, 
                            fwhm_fact=2, nthread=0, verbose=True):
     """Generate square-root covariance information for the signal in imap.
     The covariance matrix is assumed to be block-diagonal in wavelet kernels,
     neglecting correlations due to their overlap. Kernels are managed by 
-    the 'fsaw_kernels' object passed as the first argument.
+    the 'fdw_kernels' object passed as the first argument.
 
     Parameters
     ----------
-    fsaw_kernels : FSAWKernels
+    fdw_kernels : FDWKernels
         A set of Fourier steerable anisotropic wavelets, allowing users to
         analyze/synthesize maps by simultaneous scale-, direction-, and 
         location-dependence of information.
@@ -739,7 +897,7 @@ def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1,
     if verbose:
         print(
             f'Map shape: {imap.shape}\n'
-            f'Num kernels: {len(fsaw_kernels.kernels)}\n'
+            f'Num kernels: {len(fdw_kernels.kernels)}\n'
             f'Smoothing factor: {fwhm_fact}'
             )
 
@@ -779,46 +937,54 @@ def get_fsaw_noise_covsqrt(fsaw_kernels, imap, mask_observed=1, mask_est=1,
             np.arange(lmax_meas+1), sqrt_cov_ell[preidx], bounds_error=False, 
             fill_value=(0, sqrt_cov_ell[(*preidx, -1)])
             )
+        
+        # interp1d returns as float64 always, but this recasts in assignment
         sqrt_cov_k[preidx] = sqrt_cov_ell_func(modlmap)
     
     np.multiply(kmap, 0, out=kmap, where=sqrt_cov_k==0)
     np.divide(kmap, sqrt_cov_k, out=kmap, where=sqrt_cov_k!=0)
 
     # get model
-    wavs = fsaw_kernels.k2wav(kmap, nthread=nthread)
+    wavs = fdw_kernels.k2wav(kmap, nthread=nthread)
     sqrt_cov_wavs = {}
     for idx, wmap in wavs.items():
         # get outer prod of wavelet maps with normalization factor
         ncomp = np.prod(wmap.shape[:-2], dtype=int)
         wmap = wmap.reshape((ncomp, *wmap.shape[-2:]))
         wmap2 = np.einsum('ayx, byx -> abyx', wmap, wmap)
-        wmap2 /= fsaw_kernels.mean_sqs[idx]
+        wmap2 /= fdw_kernels.mean_sqs[idx]
         wmap2 = enmap.ndmap(wmap2, wmap.wcs)
 
         # smooth them
-        fwhm = fwhm_fact * np.pi / fsaw_kernels.lmaxs[idx]
+        fwhm = fwhm_fact * np.pi / fdw_kernels.lmaxs[idx]
         utils.smooth_gauss(wmap2, fwhm, method='map', mode=['constant', 'wrap'])
         
         # raise to 0.5 power. need to do some reshaping to allow use of
         # chunked eigpow, along a flattened pixel axis
         wmap2 = wmap2.reshape((*wmap2.shape[:-2], -1))
-        wmap2 = utils.chunked_eigpow(
-            wmap2, 0.5, axes=[-3, -2], chunk_axis=-1
-            )
+
+        # sqrt much faster, but only possible for one component
+        if wmap2.shape[0] == 1:
+            wmap2 = np.sqrt(wmap2)
+        else:
+            utils.chunked_eigpow(
+                wmap2, 0.5, axes=[-3, -2], chunk_axis=-1
+                )
+
         sqrt_cov_wavs[idx] = wmap2.reshape(
             (*wmap2.shape[:-1], *wmap.shape[-2:])
             )
 
     return sqrt_cov_wavs, sqrt_cov_k
 
-def get_fsaw_noise_sim(fsaw_kernels, sqrt_cov_wavs, preshape=None,
+def get_fdw_noise_sim(fdw_kernels, sqrt_cov_wavs, preshape=None,
                        sqrt_cov_k=None, seed=None, nthread=0, verbose=True):
     """Draw a Guassian realization from the covariance corresponding to
     the square-root covariance wavelet maps in sqrt_cov_wavs.
 
     Parameters
     ----------
-    fsaw_kernels : FSAWKernels
+    fdw_kernels : FDWKernels
         A set of Fourier steerable anisotropic wavelets, allowing users to
         analyze/synthesize maps by simultaneous scale-, direction-, and 
         location-dependence of information.
@@ -848,7 +1014,7 @@ def get_fsaw_noise_sim(fsaw_kernels, sqrt_cov_wavs, preshape=None,
     """
     if verbose:
         print(
-            f'Num kernels: {len(fsaw_kernels.kernels)}\n'
+            f'Num kernels: {len(fdw_kernels.kernels)}\n'
             f'Radial filtering: {sqrt_cov_k is not None}\n'
             f'Seed: {seed}'
             )
@@ -863,7 +1029,7 @@ def get_fsaw_noise_sim(fsaw_kernels, sqrt_cov_wavs, preshape=None,
         np.einsum('abyx, byx -> ayx', wmap, wmap_sim, out=wmap_sim)
         wavs_sim[idx] = wmap_sim
 
-    kmap = fsaw_kernels.wav2k(wavs_sim, nthread=nthread)
+    kmap = fdw_kernels.wav2k(wavs_sim, nthread=nthread)
     if preshape is not None:
         kmap = kmap.reshape((*preshape, *kmap.shape[-2:]))
     preshape = kmap.shape[:-2]
@@ -874,7 +1040,7 @@ def get_fsaw_noise_sim(fsaw_kernels, sqrt_cov_wavs, preshape=None,
         kmap = utils.concurrent_op(np.multiply, kmap, sqrt_cov_k, nthread=nthread)
         kmap = enmap.ndmap(kmap, wcs)
 
-    return utils.irfft(kmap, nthread=nthread)
+    return utils.irfft(kmap, n=fdw_kernels.shape[-1], nthread=nthread)
 
 # follows pixell.enmap.write_hdf recipe for writing wcs information
 def write_wavs(fname, wavs, extra_attrs=None, extra_datasets=None):

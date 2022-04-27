@@ -1286,6 +1286,7 @@ def concurrent_normal(size=1, loc=0., scale=1., nchunks=100, nthread=0,
         out = concurrent_op(
             np.multiply, out, scale_vec, nchunks=nchunks, nthread=nthread, flatten_axes=[0]
             )
+            
     if loc != 0:
         loc_vec = np.full((nchunks, 1), loc, dtype=dtype)
         out = concurrent_op(
