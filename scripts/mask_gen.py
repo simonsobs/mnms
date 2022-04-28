@@ -71,7 +71,8 @@ enmap.write_map(ofn, mask)
 
 # make an xlink mask_obs based on a thresholding of coadds
 threshold = args.threshold
-xlink_box = [[-90, 124], [3, -97]]
+xlink_box1 = [[-90, 125], [3, -100]]
+xlink_box2 = [[-90, 180], [-6, -180]]
 
 din = sints.dconfig[data_model.name]['coadd_input_path']
 fxlink = 'cmb_night_pa{}_f{}_8way_coadd_xlink.fits'
@@ -94,16 +95,23 @@ for i, qid in enumerate(qids):
     mask_bool_arr = 1 - f > threshold
     mask_bool_xlink = np.logical_and(mask_bool_arr, mask_bool_xlink)
 
-# inside the box, retain any pixels in the estimate mask
-# outside the box, set equal to the ivar mask bool
-skybox = enmap.skybox2pixbox(
-    mask_bool_ivar.shape, mask_bool_ivar.wcs, np.deg2rad(xlink_box)
-    ).astype(int)
-skybox[0, 0] = 0
-sel = np.s_[..., skybox[0, 0]:skybox[1, 0], skybox[0, 1]:skybox[1, 1]]
+# inside the boxes, retain any pixels in the estimate mask
+# outside the boxes, leave as True to be intersected with ivars in NoiseModels
+mask_bool = enmap.ones(mask_bool_ivar.shape, mask_bool_ivar.wcs, dtype=bool)
 
-mask_bool = mask_bool_ivar.copy()
-mask_bool[sel] = np.logical_or(mask.astype(bool)[sel], mask_bool_xlink[sel])
+skybox1 = enmap.skybox2pixbox(
+    mask_bool_ivar.shape, mask_bool_ivar.wcs, np.deg2rad(xlink_box1)
+    ).astype(int)
+skybox1[0, 0] = 0
+sel1 = np.s_[..., skybox1[0, 0]:skybox1[1, 0], skybox1[0, 1]:skybox1[1, 1]]
+mask_bool[sel1] = np.logical_or(mask.astype(bool)[sel1], mask_bool_xlink[sel1])
+
+skybox2 = enmap.skybox2pixbox(
+    mask_bool_ivar.shape, mask_bool_ivar.wcs, np.deg2rad(xlink_box2)
+    ).astype(int)
+skybox2[0, 0] = 0
+sel2 = np.s_[..., skybox2[0, 0]:skybox2[1, 0], skybox2[0, 1]:skybox2[1, 1]]
+mask_bool[sel2] = np.logical_or(mask.astype(bool)[sel2], mask_bool_xlink[sel2])
 
 xmask_name = args.xmask_name
 xmask_name = os.path.splitext(xmask_name)[0]

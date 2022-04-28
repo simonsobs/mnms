@@ -970,7 +970,7 @@ class TiledNoiseModel(NoiseModel):
         return simio.get_tiled_model_fn(
             self._qids, split_num, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, notes=self._notes,
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
-            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
+            mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
             kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
         )
 
@@ -1013,10 +1013,11 @@ class TiledNoiseModel(NoiseModel):
     def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num; return as <str>"""
         return simio.get_tiled_sim_fn(
-            self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, split_num, sim_num, alm=alm, notes=self._notes,
+            self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax,
+            split_num, sim_num, notes=self._notes, alm=alm, mask_obs=mask_obs, 
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
-            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources, kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar,
-            mask_obs=mask_obs, **self._kwargs
+            mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
+            kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
         )
 
     def _get_sim(self, split_num, seed, mask=None, verbose=False):
@@ -1162,11 +1163,10 @@ class WaveletNoiseModel(NoiseModel):
     def _get_model_fn(self, split_num):
         """Get a noise model filename for split split_num; return as <str>"""
         return simio.get_wav_model_fn(
-            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, self._fwhm_fact, 
-            notes=self._notes, data_model=self._data_model, mask_version=self._mask_version,
-            bin_apod=self._use_default_mask, mask_name=self._mask_name, calibrated=self._calibrated,
-            downgrade=self._downgrade, union_sources=self._union_sources, kfilt_lbounds=self._kfilt_lbounds,
-            fwhm_ivar=self._fwhm_ivar, **self._kwargs
+            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, self._fwhm_fact, notes=self._notes, 
+            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
+            mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
+            kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
         )
 
     def _read_model(self, fn):
@@ -1213,10 +1213,10 @@ class WaveletNoiseModel(NoiseModel):
         """Get a sim filename for split split_num, sim sim_num; return as <str>"""
         return simio.get_wav_sim_fn(
             self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, self._fwhm_fact,
-            sim_num, alm=alm, notes=self._notes, data_model=self._data_model,
-            mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
-            calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
-            kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, mask_obs=mask_obs, **self._kwargs
+            sim_num, notes=self._notes, alm=alm, mask_obs=mask_obs, 
+            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
+            mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
+            kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
         )
 
     def _get_sim(self, split_num, seed, mask=None, verbose=False):
@@ -1397,11 +1397,9 @@ class FDWNoiseModel(NoiseModel):
     def _get_model_fn(self, split_num):
         """Get a noise model filename for split split_num; return as <str>"""
         return simio.get_fdw_model_fn(
-            self._qids, split_num, self._lamb, self._n, self._p, self._fwhm_fact,
-            self._lmax, notes=self._notes, data_model=self._data_model, 
-            mask_version=self._mask_version, bin_apod=self._use_default_mask,
-            mask_name=self._mask_name, calibrated=self._calibrated,
-            downgrade=self._downgrade, union_sources=self._union_sources,
+            self._qids, split_num, self._lamb, self._n, self._p, self._fwhm_fact, self._lmax, notes=self._notes,
+            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
+            mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
             kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
         )
 
@@ -1445,13 +1443,11 @@ class FDWNoiseModel(NoiseModel):
     def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
         return simio.get_fdw_sim_fn(
-            self._qids, split_num, self._lamb, self._n, self._p, self._fwhm_fact,
-            self._lmax, sim_num, alm=alm, notes=self._notes, data_model=self._data_model, 
-            mask_version=self._mask_version, bin_apod=self._use_default_mask,
-            mask_name=self._mask_name, calibrated=self._calibrated,
-            downgrade=self._downgrade, union_sources=self._union_sources,
-            kfilt_lbounds=self._kfilt_lbounds, mask_obs=mask_obs, fwhm_ivar=self._fwhm_ivar, 
-            **self._kwargs
+            self._qids, split_num, self._lamb, self._n, self._p, self._fwhm_fact, self._lmax,
+            sim_num, notes=self._notes, alm=alm, mask_obs=mask_obs, 
+            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
+            mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
+            kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
         )
 
     def _get_sim(self, split_num, seed, mask=None, verbose=False):
