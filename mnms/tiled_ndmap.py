@@ -202,10 +202,10 @@ class tiled_ndmap(enmap.ndmap):
                 assert not mask.tiled, 'mask is tiled_ndmap with tiled=True but passed is_mask_tiled=False'
                 assert np.all(mask.unmasked_tiles == np.arange(mask.num_tiles)), \
                     'mask is tiled_ndmap with some masked tiles, not sure how to proceed'
-                mask = mask.to_tiled()
             else:
                 # explicitly passing tiled=False will check mask.shape against self.ishape
-                mask = self.sametiles(mask, tiled=False, unmasked_tiles=None).to_tiled()
+                mask = self.sametiles(mask, tiled=False, unmasked_tiles=None)
+            mask = mask.to_tiled()
         
         apod = self.apod()
         sq_f_sky = np.mean((mask*apod)**2, axis=(-2, -1)) # this computes the f_sky for each tile, taking mean along map axes 

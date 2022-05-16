@@ -4,7 +4,7 @@ from mnms import utils
 import numpy as np
 from scipy.interpolate import interp1d
 
-def get_iso_curvedsky_noise_covar(imap, ivar=None, mask=None, N=5, lmax=1000):
+def get_isoivar_noise_covsqrt(imap, ivar=None, mask_est=1, verbose=True):
     """Get the 1D global, isotropic power spectra to draw sims from later. Ivar maps, if passed
     are used to pre-whiten the maps in pixel-space by their high-ell white noise level prior to 
     measuring power spectra.
@@ -28,37 +28,45 @@ def get_iso_curvedsky_noise_covar(imap, ivar=None, mask=None, N=5, lmax=1000):
         A set of power spectra from the crosses of array, pol pairs. Only saves upper-triangular matrix
         elements, so e.g. if 2 arrays and 3 pols, output shape is (21, lmax+1)
     """
+    # check that imap conforms with convention
+    assert imap.ndim in range(2, 6), \
+        'Data must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
+    imap = utils.atleast_nd(imap, 5) # make data 5d
+
     # if ivar is not None, whiten the imap data using ivar
     if ivar is not None:
-        assert np.all(ivar >= 0)
+        if verbose:
+            print('Getting whitened difference maps')
         imap = utils.get_whitened_noise_map(imap, ivar)
+        ivar = None
 
-    # make data 5d, with prepended shape (num_arrays, num_splits, num_pol)
-    assert imap.ndim in range(2, 6), 'Data must be broadcastable to shape (num_arrays, num_splits, num_pol, ny, nx)'
-    imap = utils.atleast_nd(imap, 5) # make data 5d
     num_arrays, num_splits, num_pol = imap.shape[:3]
+    assert num_splits == 1, 'Only one split allowed'
     ncomp = num_arrays * num_pol
-    nspec = utils.triangular(ncomp)
 
     # get the mask, pixsizemap, and initialized output
-    if mask is None:
-        mask = enmap.ones(imap.shape[-2:], wcs=imap.wcs)
-    pmap = enmap.pixsizemap(mask.shape, mask.wcs)
-    Nl_1d = np.zeros([nspec, lmax+1], dtype=imap.dtype) # upper triangular
+    mask_est = np.asanyarray(mask_est, dtype=imap.dtype)
+    lmax = utils.lmax_from_wcs(imap.wcs) 
+    pmap = enmap.pixsizemap(imap.shape, imap.wcs)
+    Nl_1d = np.zeros([ncomp, ncomp, lmax+1], dtype=imap.dtype) # upper triangular
     ls = np.arange(lmax+1)
 
     # get alms of each array, split, pol
-    print('Measuring alms of each map')
-    alms = []#np.zeros(imap.shape[:3] + ls.shape, dtype=imap.dtype)
+    if verbose:
+        print('Measuring alms of each map')
+    alms = []
     for map_index in range(num_arrays):
-        for split in range(num_splits):
-            for pol_index in range(num_pol):
-                alms.append(curvedsky.map2alm(imap[map_index, split, pol_index]*mask, lmax=lmax))
+        for pol_index in range(num_pol):
+            alms.append(
+                curvedsky.map2alm(
+                    imap[map_index, 0, pol_index]*mask_est, lmax=lmax
+                )
+            )
     alms = np.array(alms)
-    alms = alms.reshape(*imap.shape[:3], -1)
+    alms = alms.reshape((ncomp, -1))
 
     # iterate over spectra
-    for i in range(nspec):
+    for i in range(ncomp):
         # get array, pol indices
         comp1, comp2 = utils.triu_pos(i, ncomp)
         map_index_1, pol_index_1 = divmod(comp1, num_pol)
