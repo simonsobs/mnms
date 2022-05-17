@@ -65,7 +65,8 @@ else:
 assert np.all(maps >= 0)
 
 # Iterate over sims
-for i, s in enumerate(splits):
-    for j, m in enumerate(maps):
-        model.get_sim(s, m, alm=args.alm, check_on_disk=True, write=True, verbose=True)
+for s in splits:
+    for m in maps:
+        model.get_sim(s, m, alm=args.alm, check_on_disk=True, write=True, 
+                      keep_model=True, do_mask_observed=True, verbose=True)
     model.delete_model(s)

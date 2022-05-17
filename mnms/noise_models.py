@@ -140,7 +140,7 @@ class NoiseModel(ABC):
         else:
             if mask_obs is None:
                 # True or downgraded mask_obs from disk
-                mask_obs = self._get_mask_observed_from_disk()
+                mask_obs = self._get_mask_observed_from_disk(shaped=False)
             if ivar is not None:
                 self._ivar = ivar
                 self._mask_observed = np.logical_and(
@@ -263,7 +263,8 @@ class NoiseModel(ABC):
         ivars = self._empty(ivar=True)
 
         # get the full-resolution mask_observed, whether from disk or
-        # all True
+        # all True. Numpy understands in-place multiplication operation
+        # even if mask_observed is python True to start
         mask_observed = self._get_mask_observed_from_disk(downgrade=False)
 
         for i, qid in enumerate(self._qids):
@@ -327,8 +328,8 @@ class NoiseModel(ABC):
         ----------
         ivar : bool, optional
             If True, load the inverse-variance map shape for the qid and
-            split. If False, load the source-free map shape for the same,
-            by default False.
+            split. If False, load the map shape for the same, by default
+            False.
         num_arrays : int, optional
             The number of arrays (axis -5) in the empty ndmap, by default None.
             If None, inferred from the number of qids in the NoiseModel.
@@ -412,12 +413,14 @@ class NoiseModel(ABC):
             ostr += f' imap for {qid}'
         return ostr
 
-    def get_model(self, check_on_disk=True, write=True, keep_model=False, keep_data=False, 
-                  verbose=False, **kwargs):
+    def get_model(self, split_num, check_on_disk=True, write=True,
+                  keep_model=False, keep_data=False, verbose=False, **kwargs):
         """Generate (or load) a sqrt-covariance matrix for this NoiseModel instance.
 
         Parameters
         ----------
+        split_num : int
+            The 0-based index of the split to model.
         check_on_disk : bool, optional
             If True, first check if an identical model (including by 'notes') exists
             on-disk for each split. If it does, do nothing or store it in the object
@@ -435,21 +438,15 @@ class NoiseModel(ABC):
             Print possibly helpful messages, by default False.
         """
         if check_on_disk:
-            # build a list of splits that don't have models on-disk
-            does_not_exist = []
-            for s in range(self._num_splits):
-                res = self._check_model_on_disk(s, keep_model=keep_model)
-                if not res:
-                    does_not_exist.append(s)
-            if not does_not_exist:
-                # if all models exist on-disk, exit this function
+            res = self._check_model_on_disk(
+                split_num, keep_model=keep_model, generate=True
+                )
+            if res:
                 return
-        else:
-            does_not_exist = range(self._num_splits)
 
         # models need data split differences as inputs
         if self._dmap is None:
-            dmap = self._get_data_split_diffs()
+            dmap = self._get_data_split_diffs(split_num)
             if keep_data:
                 self._dmap = dmap
         else:
@@ -464,34 +461,38 @@ class NoiseModel(ABC):
         if self._mask_est is None:
             self._mask_est = self._get_mask_est(min_threshold=1e-4)
 
-        for s in does_not_exist:
-            with bench.show(f'Generating noise model for split {s}'):
-                nm_dict = self._get_model(s, dmap, verbose=verbose)
+        with bench.show(f'Generating noise model for split {split_num}'):
+            nm_dict = self._get_model(split_num, dmap, verbose=verbose)
 
-            if keep_model:
-                self._keep_model(s, nm_dict)
+        if keep_model:
+            self._keep_model(split_num, nm_dict)
 
-            if write:
-                fn = self._get_model_fn(s)
-                self._write_model(fn, **nm_dict)
+        if write:
+            fn = self._get_model_fn(split_num)
+            self._write_model(fn, **nm_dict)
 
-            # remove nm_dict from memory before moving onto next split
-            nm_dict = None
+        # remove nm_dict from memory before moving onto next split
+        nm_dict = None
 
-    def _get_data_split_diffs(self):
+    def _get_data_split_diffs(self, split_num):
         """Load the raw data split differences according to instance attributes.
+
+        Parameters
+        ----------
+        split_num : int
+            The 0-based index of the split.
 
         Returns
         -------
-        dmaps : (nmaps, nsplits, npol, ny, nx) enmap
+        dmaps : (nmaps, nsplits=1, npol, ny, nx) enmap
             Data split difference maps, possibly downgraded.
         """
         # first check for mask compatibility and get map geometry
         full_shape, full_wcs = self._check_geometry()
 
         # allocate a buffer to accumulate all difference maps in.
-        # this has shape (nmaps, nsplits, npol, ny, nx).
-        dmaps = self._empty(ivar=False)
+        # this has shape (nmaps, nsplits=1, npol, ny, nx).
+        dmaps = self._empty(ivar=False, num_splits=1)
 
         # all filtering operations use the same filter
         if self._kfilt_lbounds is not None:
@@ -521,43 +522,46 @@ class NoiseModel(ABC):
 
                 # we want to do this split-by-split in case we can save
                 # memory by downgrading one split at a time
-                for j in range(self._num_splits):
-                    imap = s_utils.read_map(self._data_model, qid, j, ivar=False)
-                    imap = enmap.extract(imap, full_shape, full_wcs) 
-                    imap *= mul_imap
+                imap = s_utils.read_map(
+                    self._data_model, qid, split_num=split_num, ivar=False
+                    )
+                imap = enmap.extract(imap, full_shape, full_wcs)
+                imap *= mul_imap
 
-                    # need to reload ivar at full res if inpainting or kspace filtering
-                    if self._union_sources or self._kfilt_lbounds:
-                        if self._downgrade != 1:
-                            ivar = s_utils.read_map(self._data_model, qid, j, ivar=True)
-                            ivar = enmap.extract(ivar, full_shape, full_wcs)
-                            ivar *= mul_ivar
-                        else:
-                            ivar = self._ivar[i, j]
-
-                    if self._union_sources:
-                        # the boolean mask for this array, split, is non-zero ivar.
-                        # iteratively build the boolean mask at full resolution, 
-                        # loop over leading dims. this really should be a singleton
-                        # leading dim!
-                        mask_bool = np.ones(full_shape, dtype=bool)
-                        for idx in np.ndindex(*ivar.shape[:-2]):
-                            mask_bool *= ivar[idx].astype(bool)
-                            
-                        self._inpaint(imap, ivar, mask_bool, qid=qid, split_num=j) 
-
-                    dmap = imap - cmap
-
-                    if self._kfilt_lbounds is not None:
-                        ivar_eff = utils.get_ivar_eff(ivar, sum_ivar=cvar, use_zero=True)
-                        dmap = utils.filter_weighted(dmap, ivar_eff, filt)
-
+                # need to reload ivar at full res if inpainting or kspace filtering
+                if self._union_sources or self._kfilt_lbounds:
                     if self._downgrade != 1:
-                        dmaps[i, j] = utils.fourier_downgrade_cc_quad(
-                            dmap, self._downgrade
-                        )
+                        ivar = s_utils.read_map(
+                            self._data_model, qid, split_num=split_num, ivar=True
+                            )
+                        ivar = enmap.extract(ivar, full_shape, full_wcs)
+                        ivar *= mul_ivar
                     else:
-                        dmaps[i, j] = dmap
+                        ivar = self._ivar[i, split_num]
+
+                if self._union_sources:
+                    # the boolean mask for this array, split, is non-zero ivar.
+                    # iteratively build the boolean mask at full resolution, 
+                    # loop over leading dims. this really should be a singleton
+                    # leading dim!
+                    mask_bool = np.ones(full_shape, dtype=bool)
+                    for idx in np.ndindex(*ivar.shape[:-2]):
+                        mask_bool *= ivar[idx].astype(bool)
+                        
+                    self._inpaint(imap, ivar, mask_bool, qid=qid, split_num=split_num) 
+
+                dmap = imap - cmap
+
+                if self._kfilt_lbounds is not None:
+                    ivar_eff = utils.get_ivar_eff(ivar, sum_ivar=cvar, use_zero=True)
+                    dmap = utils.filter_weighted(dmap, ivar_eff, filt)
+
+                if self._downgrade != 1:
+                    dmaps[i, 0] = utils.fourier_downgrade_cc_quad(
+                        dmap, self._downgrade
+                    )
+                else:
+                    dmaps[i, 0] = dmap
     
         return dmaps*self._mask_observed
 

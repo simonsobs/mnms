@@ -51,7 +51,7 @@ parser.add_argument('--data-model', dest='data_model', type=str, default=None,
 
 parser.add_argument('--split', nargs='+', dest='split', type=int, 
                     help='if --no-auto-split, simulate this list of splits '
-                    '(0-indexed) (default: %(default)s)')
+                    '(0-indexed)')
 
 parser.add_argument('--no-auto-split', dest='auto_split', default=True, 
                     action='store_false', help='if passed, do not simulate every '
@@ -59,19 +59,17 @@ parser.add_argument('--no-auto-split', dest='auto_split', default=True,
 
 parser.add_argument('--maps', dest='maps', nargs='+', type=str, default=None,
                     help='simulate exactly these map_ids, overwriting if preexisting; '
-                    'overriden by --nsims (default: %(default)s)')
+                    'overriden by --nsims')
 
 parser.add_argument('--maps-start', dest='maps_start', type=int, default=None, 
-                    help='like --maps, except iterate starting at this map_id '
-                    '(default: %(default)s)')
+                    help='like --maps, except iterate starting at this map_id')
 
 parser.add_argument('--maps-end', dest='maps_end', type=int, default=None, 
-                    help='like --maps, except end iteration with this map_id '
-                    '(default: %(default)s)')
+                    help='like --maps, except end iteration with this map_id')
 
 parser.add_argument('--maps-step', dest='maps_step', type=int, default=1,
                     help='like --maps, except step iteration over map_ids by '
-                    'this number (default: %(default)s)')
+                    'this number')
 
 parser.add_argument('--map', dest='alm', default=True, 
                     action='store_false', help='Generate simulated maps instead of alms.')
@@ -106,7 +104,8 @@ else:
 assert np.all(maps >= 0)
 
 # Iterate over sims
-for i, s in enumerate(splits):
-    for j, m in enumerate(maps):
-        model.get_sim(s, m, alm=args.alm, check_on_disk=True, write=True, verbose=True)
+for s in splits:
+    for m in maps:
+        model.get_sim(s, m, alm=args.alm, check_on_disk=True, write=True, 
+                      keep_model=True, do_mask_observed=True, verbose=True)
     model.delete_model(s)

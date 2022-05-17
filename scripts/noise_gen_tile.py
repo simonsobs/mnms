@@ -1,6 +1,7 @@
 from mnms import noise_models as nm
 from soapack import interfaces as sints
 import argparse
+import numpy as np
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--qid', dest='qid',nargs='+',type=str,required=True,help='list of soapack array "qids"')
@@ -22,6 +23,13 @@ parser.add_argument('--kfilt-lbounds', dest='kfilt_lbounds', nargs='+', type=flo
                     help="The ly, lx scale for an ivar-weighted Gaussian kspace filter. E.g. " 
                     "'4000 5'. Will be used for kspace filtering.")
 parser.add_argument('--data-model',dest='data_model',type=str,default=None,help='soapack DataModel class to use')
+parser.add_argument('--split', nargs='+', dest='split', type=int, 
+                    help='if --no-auto-split, simulate this list of splits '
+                    '(0-indexed)')
+
+parser.add_argument('--no-auto-split', dest='auto_split', default=True, 
+                    action='store_false', help='if passed, do not simulate every '
+                    'split for this array')
 args = parser.parse_args()
 
 if args.data_model:
@@ -34,4 +42,15 @@ model = nm.TiledNoiseModel(
     mask_name=args.mask_name, mask_obs_name=args.mask_obs_name, union_sources=args.union_sources,
     kfilt_lbounds=args.kfilt_lbounds, notes=args.notes, 
     width_deg=args.width_deg, height_deg=args.height_deg, delta_ell_smooth=args.delta_ell_smooth)
-model.get_model(check_on_disk=True, verbose=True)
+
+# get split nums
+if args.auto_split:
+    splits = np.arange(model.num_splits)
+else:
+    splits = np.atleast_1d(args.split)
+assert np.all(splits >= 0)
+
+# Iterate over models
+for s in splits:
+    model.get_model(s, check_on_disk=True, write=True, keep_model=False,
+                    keep_data=False, verbose=True)

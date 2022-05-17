@@ -62,12 +62,10 @@ parser.add_argument('--maps', dest='maps', nargs='+', type=str, default=None,
                     'overriden by --nsims')
 
 parser.add_argument('--maps-start', dest='maps_start', type=int, default=None, 
-                    help='like --maps, except iterate starting at this map_id '
-                    '(default: %(default)s)')
+                    help='like --maps, except iterate starting at this map_id')
 
 parser.add_argument('--maps-end', dest='maps_end', type=int, default=None, 
-                    help='like --maps, except end iteration with this map_id '
-                    '(default: %(default)s)')
+                    help='like --maps, except end iteration with this map_id')
 
 parser.add_argument('--maps-step', dest='maps_step', type=int, default=1,
                     help='like --maps, except step iteration over map_ids by '
@@ -106,7 +104,8 @@ else:
 assert np.all(maps >= 0)
 
 # Iterate over sims
-for i, s in enumerate(splits):
-    for j, m in enumerate(maps):
-        model.get_sim(s, m, alm=args.alm, check_on_disk=True, write=True, verbose=True)
+for s in splits:
+    for m in maps:
+        model.get_sim(s, m, alm=args.alm, check_on_disk=True, write=True, 
+                      keep_model=True, do_mask_observed=True, verbose=True)
     model.delete_model(s)
