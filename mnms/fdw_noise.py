@@ -809,7 +809,7 @@ def get_az_func(n, p, j):
     c is chosen so that (a) the sum (over j) of the squared magnitude 
     of the kernels is 1 for all x, and (b) so that multiplying by a 
     real DFT returns an array still corresponding to a real map; w is
-    (n+1)/(p+1) and x0 = pi/(n+1) +/- k*pi where k is any integer. It 
+    (n+1)/(p+1) and x0 = j*pi/(n+1) +/- k*pi where k is any integer. It 
     is given by this fucntion for the single "bump" around each x0,
     but is 0 otherwise.
 

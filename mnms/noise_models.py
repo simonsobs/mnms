@@ -514,8 +514,8 @@ class NoiseModel(ABC):
                 cmap = enmap.extract(cmap, full_shape, full_wcs) 
                 cmap *= mul_imap
 
-                # need full-res coadd ivar if kspace filtering
-                if self._kfilt_lbounds is not None:
+                # need full-res coadd ivar if inpainting or kspace filtering
+                if self._union_sources or self._kfilt_lbounds:
                     cvar = s_utils.read_map(self._data_model, qid, coadd=True, ivar=True)
                     cvar = enmap.extract(cvar, full_shape, full_wcs)
                     cvar *= mul_ivar
@@ -528,7 +528,8 @@ class NoiseModel(ABC):
                 imap = enmap.extract(imap, full_shape, full_wcs)
                 imap *= mul_imap
 
-                # need to reload ivar at full res if inpainting or kspace filtering
+                # need to reload ivar at full res and get ivar_eff
+                # if inpainting or kspace filtering
                 if self._union_sources or self._kfilt_lbounds:
                     if self._downgrade != 1:
                         ivar = s_utils.read_map(
@@ -538,6 +539,10 @@ class NoiseModel(ABC):
                         ivar *= mul_ivar
                     else:
                         ivar = self._ivar[i, split_num]
+                    ivar_eff = utils.get_ivar_eff(ivar, sum_ivar=cvar, use_zero=True)
+
+                # take difference before inpainting or kspace_filtering
+                dmap = imap - cmap
 
                 if self._union_sources:
                     # the boolean mask for this array, split, is non-zero ivar.
@@ -548,12 +553,9 @@ class NoiseModel(ABC):
                     for idx in np.ndindex(*ivar.shape[:-2]):
                         mask_bool *= ivar[idx].astype(bool)
                         
-                    self._inpaint(imap, ivar, mask_bool, qid=qid, split_num=split_num) 
-
-                dmap = imap - cmap
+                    self._inpaint(dmap, ivar_eff, mask_bool, qid=qid, split_num=split_num) 
 
                 if self._kfilt_lbounds is not None:
-                    ivar_eff = utils.get_ivar_eff(ivar, sum_ivar=cvar, use_zero=True)
                     dmap = utils.filter_weighted(dmap, ivar_eff, filt)
 
                 if self._downgrade != 1:
