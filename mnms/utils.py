@@ -138,6 +138,30 @@ def unflatten_axis(imap, shape, axis=None, pos=0):
         return imap
 
 def atleast_nd(arr, n, axis=None):
+    """Add dimensions to array.
+
+    Parameters
+    ----------
+    arr : array-like
+        Input array to add dimensions to.
+    n : int
+        Desired output dimension of array.
+        If axis is not provided:
+            if n < arr.ndim, has no effect. 
+            else dimensions are prepended to arr.
+        If axis is provided:
+            if n < arr.ndim + len(axis), raises AssertionError.
+            else axes inserted at axis locations; any extra dimensions
+            are prepended to arr.
+    axis : int or iterable of int, optional
+        Locations in new array where additional dimensions should appear,
+        by default None.
+
+    Returns
+    -------
+    array-like
+        View of expanded array.
+    """
     arr = np.asanyarray(arr)
     if (axis is None) or (arr.ndim >= n):
         oaxis=tuple(range(n - arr.ndim)) # prepend the dims or do nothing in n < arr.ndim
@@ -590,7 +614,7 @@ def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0
         return alm2map(alm, omap, ainfo=ainfo, tweak=tweak)
 
 # forces shape to (num_arrays, num_splits, num_pol, ny, nx) and optionally averages over splits
-def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=True, per_split=True, mode='curvedsky',
+def ell_flatten(imap, mask_obs=1, mask_est=1, return_sqrt_cov=True, per_split=True, mode='curvedsky',
                 lmax=None, ainfo=None, ledges=None, weights=None, nthread=0, tweak=False):
     """Flattens a map 'by its own power spectrum', i.e., such that the resulting map
     has a power spectrum of unity.
@@ -599,7 +623,7 @@ def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=True, per_spl
     ----------
     imap : enmap.ndmap
         Input map to flatten.
-    mask_observed : enmap.ndmap, optional
+    mask_obs : enmap.ndmap, optional
         A spatial window to apply to the map, by default 1. Note that, if applied,
         the resulting 'flat' map will also masked.
     mask_est : enmap.ndmap, optional
@@ -682,7 +706,7 @@ def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=True, per_spl
                     lfuncs.append(lfunc)
 
         # Re-do the FFT for the map masked with the bigger mask.
-        kmap[:] = enmap.fft(imap*mask_observed, normalize='phys', nthread=nthread)
+        kmap[:] = enmap.fft(imap*mask_obs, normalize='phys', nthread=nthread)
 
         # Apply the filter to the maps.
         for i in range(num_arrays):
@@ -729,7 +753,7 @@ def ell_flatten(imap, mask_observed=1, mask_est=1, return_sqrt_cov=True, per_spl
         lfilter = np.broadcast_to(lfilter, (*imap.shape[:-2], lfilter.shape[-1]))
 
         # Re-do the SHT for the map masked with the bigger mask.
-        alm = map2alm(imap*mask_observed, alm=alm, ainfo=ainfo, lmax=lmax, tweak=tweak)
+        alm = map2alm(imap*mask_obs, alm=alm, ainfo=ainfo, lmax=lmax, tweak=tweak)
         for preidx in np.ndindex(imap.shape[:-2]):
             assert alm[preidx].ndim == 1
             assert lfilter[preidx].ndim == 1

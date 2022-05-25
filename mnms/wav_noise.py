@@ -88,7 +88,7 @@ def rand_enmap_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, mask, lmax, w_ell,
                         w_ell, dtype=type_utils.to_complex(dtype), seed=seed)
     return utils.alm2map(alm, shape=mask.shape, wcs=mask.wcs, dtype=dtype, ainfo=ainfo)
 
-def estimate_sqrt_cov_wav_from_enmap(imap, mask_observed, lmax, mask_est, lamb=1.3,
+def estimate_sqrt_cov_wav_from_enmap(imap, mask_obs, lmax, mask_est, lamb=1.3,
                                      smooth_loc=False, fwhm_fact=2):
     """
     Estimate wavelet-based covariance matrix given noise enmap.
@@ -97,7 +97,7 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_observed, lmax, mask_est, lamb=1
     ----------
     imap : (ncomp, npol, ny, nx) enmap
         Input noise maps.
-    mask_observed : (ny, nx) enmap
+    mask_obs : (ny, nx) enmap
         Sky mask.
     lmax : int
         Bandlimit for output noise covariance.
@@ -136,11 +136,11 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_observed, lmax, mask_est, lamb=1
                          f'{lmax}. Lower lmax or downgrade map less.')
 
     if smooth_loc:
-        mask_observed = mask_observed.copy()
-        mask_observed[mask_observed<1e-4] = 0
-        features = enmap.grow_mask(~mask_observed.astype(bool), np.radians(6))
-        features &= enmap.grow_mask(mask_observed.astype(bool), np.radians(10))
-        features = features.astype(mask_observed.dtype)
+        mask_obs = mask_obs.copy()
+        mask_obs[mask_obs<1e-4] = 0
+        features = enmap.grow_mask(~mask_obs.astype(bool), np.radians(6))
+        features &= enmap.grow_mask(mask_obs.astype(bool), np.radians(10))
+        features = features.astype(mask_obs.dtype)
         features = enmap.smooth_gauss(features, np.radians(1))
         features, minfo_features = map_utils.enmap2gauss(
                     features, 2 * lmax, mode='nearest', order=1)
@@ -161,7 +161,7 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_observed, lmax, mask_est, lamb=1
         n_ell[cidx] *= np.eye(3)[:,:,np.newaxis]
 
     # Re-use buffer from first alm for second alm.
-    alm_obs = utils.map2alm(imap * mask_observed, alm=alm, ainfo=ainfo)
+    alm_obs = utils.map2alm(imap * mask_obs, alm=alm, ainfo=ainfo)
 
     for cidx in range(ncomp):
         # Filter by sqrt of inverse diagonal spectrum from first alm.

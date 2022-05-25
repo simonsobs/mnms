@@ -846,7 +846,7 @@ def get_az_func(n, p, j):
             return 1+0j
     return w_phi
 
-def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_observed=1, mask_est=1, 
+def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1, 
                            fwhm_fact=2, nthread=0, verbose=True):
     """Generate square-root covariance information for the signal in imap.
     The covariance matrix is assumed to be block-diagonal in wavelet kernels,
@@ -862,7 +862,7 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_observed=1, mask_est=1,
     imap : (..., ny, nx) enmap.ndmap
         Input signal maps. The outer product of this map with itself will
         be taken in the wavelet basis to create the covariance matrix.
-    mask_observed : array-like, optional
+    mask_obs : array-like, optional
         A mask of observed pixels, by default 1. This mask will be applied
         to imap before taking the initial Fourier transform.
     mask_est : array-like, optional
@@ -901,11 +901,11 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_observed=1, mask_est=1,
             f'Smoothing factor: {fwhm_fact}'
             )
 
-    mask_observed = np.asanyarray(mask_observed, dtype=imap.dtype)
+    mask_obs = np.asanyarray(mask_obs, dtype=imap.dtype)
     mask_est = np.asanyarray(mask_est, dtype=imap.dtype)
 
     imap = utils.atleast_nd(imap, 3)
-    kmap = utils.rfft(imap * mask_observed, nthread=nthread)
+    kmap = utils.rfft(imap * mask_obs, nthread=nthread)
     
     # first measure N_ell and get its square root. because we work in
     # Fourier space, need to turn this into a callable for non-integer

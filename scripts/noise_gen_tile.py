@@ -52,5 +52,4 @@ assert np.all(splits >= 0)
 
 # Iterate over models
 for s in splits:
-    model.get_model(s, check_on_disk=True, write=True, keep_model=False,
-                    keep_data=False, verbose=True)
+    model.get_model(s, verbose=True)

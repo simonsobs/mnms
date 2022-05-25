@@ -67,6 +67,6 @@ assert np.all(maps >= 0)
 # Iterate over sims
 for s in splits:
     for m in maps:
-        model.get_sim(s, m, alm=args.alm, check_on_disk=True, write=True, 
-                      keep_model=True, do_mask_observed=True, verbose=True)
+        model.get_sim(s, m, alm=args.alm, write=True, verbose=True)
     model.delete_model(s)
+    model.delete_ivar_mask_obs(s)
