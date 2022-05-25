@@ -1,7 +1,6 @@
 import numpy as np
 import warnings
 
-from optweight import mat_utils
 from pixell import enmap, utils
 
 from mnms import utils as m_utils
@@ -208,7 +207,7 @@ def inpaint_noise_catalog(imap, ivar, mask, catalog, radius=6, thumb_width=120,
     if not inplace:
         imap = imap.copy()
     shape_in = imap.shape
-    imap = mat_utils.atleast_nd(imap, 3)
+    imap = m_utils.atleast_nd(imap, 3)
     mask = mask.astype(bool)
 
     # Convert to pixel units, this ignores the curvature of the sky.
@@ -220,7 +219,7 @@ def inpaint_noise_catalog(imap, ivar, mask, catalog, radius=6, thumb_width=120,
                            utils.nint(nthumb / 10))
 
     # Create circular mask in center and second mask around first mask.
-    xx, yy = np.mgrid[-nthumb//2:nthumb//2,-nthumb//2:nthumb//2]
+    xx, yy = np.mgrid[-nthumb//2:nthumb//2, -nthumb//2:nthumb//2]
     rr = np.sqrt(xx ** 2 + yy ** 2)
     mask_src = rr <= nradius
     mask_est = (rr > nradius) & (rr < int(nradius * 1.5))
@@ -237,14 +236,14 @@ def inpaint_noise_catalog(imap, ivar, mask, catalog, radius=6, thumb_width=120,
             # Do not inpaint sources that are outside the footprint.
             continue
 
-        if not mask[pix_y,pix_x]:
+        if not mask[pix_y, pix_x]:
             # Do not inpaint sources outside mask.
             continue
 
         mslice = extract_thumbnail(imap, pix_y, pix_x, nthumb)
         ivarslice = extract_thumbnail(ivar, pix_y, pix_x, nthumb)
 
-        if not (ivarslice[..., mask_src] != 0).sum() > 0:
+        if not np.any(ivarslice[..., mask_src]):
             # Do not inpaint sources for which there are no observed pixels around the source
             warnings.warn(f'No good ivars in mask_src at cat_idx {cat_idx}, pix {(pix_y, pix_x)}', RuntimeWarning)
             continue
@@ -339,8 +338,8 @@ def inpaint(imap, ivar, mask_apod, mask_src, mask_est, fwhm, seed=None):
             raise ValueError('mask_src should be 2D or match shape ivar, '
                   f'got {mask_src.shape}, while ivar.shape = {ivar.shape}')
 
-    imap = mat_utils.atleast_nd(imap, 4)
-    ivar = mat_utils.atleast_nd(ivar, 4)
+    imap = m_utils.atleast_nd(imap, 4)
+    ivar = m_utils.atleast_nd(ivar, 4)
 
     if imap.shape[:-3] != ivar.shape[:-3]:
         raise ValueError(
