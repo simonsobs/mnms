@@ -365,11 +365,9 @@ def get_ivar_eff(ivar, sum_ivar=None, use_inf=False, use_zero=False):
     assert not (use_inf and use_zero), \
         'Both use_inf and use_zero are True, but this is impossible'
 
-    # Make 4d by prepending splits along -4 axis.
-    ivar = atleast_nd(ivar, 4) 
-    if sum_ivar is not None:
-        sum_ivar = atleast_nd(sum_ivar, 4)
-    else:
+    if sum_ivar is None:
+        # Make 4d by prepending splits along -4 axis.
+        ivar = atleast_nd(ivar, 4) 
         sum_ivar = np.sum(ivar, axis=-4, keepdims=True)
 
     # We want to calculate 1 / (1/ivar - 1/sum(ivar). It easier to do 

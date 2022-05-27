@@ -26,7 +26,7 @@ class NoiseModel(ABC):
 
     def __init__(self, *qids, data_model=None, calibrated=True, downgrade=1,
                  lmax=None, mask_est=None, mask_version=None, mask_name=None,
-                 cvar=None, ivar_mask_obs_dict=None, mask_obs_name=None, 
+                 ivar_mask_obs_dict=None, mask_obs_name=None, cfact_dict=None,
                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
                  fwhm_ivar=None, notes=None, dtype=None, **kwargs):
         """Base class for all NoiseModel subclasses. Supports loading raw data necessary for all 
@@ -60,10 +60,6 @@ class NoiseModel(ABC):
             Name of mask file, by default None. This mask will be used as the mask_est (see
             above) if mask_est is None. If mask_est is None and mask_name is None, a default
             mask_est will be loaded from disk.
-        cvar : array-like, optional
-            Coadd inverse-variance maps, by default None. If provided, assumed properly
-            downgraded into compatible wcs with internal NoiseModel operations. If not
-            provided, will be loaded in call to NoiseModel.get_model(...).
         ivar_mask_obs_dict : dict, optional
             A dictionary of ivar and mask_obs maps, indexed by split_num keys. If
             provided, assumed properly downgraded into compatible wcs with internal 
@@ -75,6 +71,10 @@ class NoiseModel(ABC):
             split_num in calls to NoiseModel.get_model(...) or NoiseModel.get_sim(...),
             this mask file will be loaded from disk and stored in ivar_mask_obs_dict under
             that split_num.
+        cfact_dict : dict, optional
+            A dictionary of split correction factor maps, indexed by split_num keys. If
+            provided, assumed properly downgraded into compatible wcs with internal 
+            NoiseModel operations.
         dmap_dict : dict, optional
             A dictionary of data split difference maps, indexed by split_num keys. If
             provided, assumed properly downgraded into compatible wcs with internal 
@@ -126,10 +126,15 @@ class NoiseModel(ABC):
 
         # Possibly store input data
         self._mask_est = mask_est
-        self._cvar = cvar
+        
         if ivar_mask_obs_dict is None:
             ivar_mask_obs_dict = {}
         self._ivar_mask_obs_dict = ivar_mask_obs_dict
+        
+        if cfact_dict is None:
+            cfact_dict = {}
+        self._cfact_dict = cfact_dict
+
         if dmap_dict is None:
             dmap_dict = {}
         self._dmap_dict = dmap_dict
@@ -255,7 +260,7 @@ class NoiseModel(ABC):
         mask_obs = self._get_mask_obs_from_disk(downgrade=False)
 
         for i, qid in enumerate(self._qids):
-            with bench.show(self._action_str(qid, ivar=True)):
+            with bench.show(self._action_str(qid, split_num=split_num, ivar=True)):
                 if self._calibrated:
                     mul = s_utils.get_mult_fact(self._data_model, qid, ivar=True)
                 else:
@@ -263,9 +268,7 @@ class NoiseModel(ABC):
 
                 # we want to do this split-by-split in case we can save
                 # memory by downgrading one split at a time
-                ivar = s_utils.read_map(
-                    self._data_model, qid, split_num=split_num, ivar=True
-                    )
+                ivar = s_utils.read_map(self._data_model, qid, split_num=split_num, ivar=True)
                 ivar = enmap.extract(ivar, full_shape, full_wcs)
                 ivar *= mul
 
@@ -306,13 +309,18 @@ class NoiseModel(ABC):
         
         return ivars*mask_obs, mask_obs
 
-    def get_cvar(self):
-        """Load the coadd inverse-variance maps according to instance attributes.
+    def get_cfact(self, split_num):
+        """Load the correction factor maps according to instance attributes.
+
+        Parameters
+        ----------
+        split_num : int
+            The 0-based index of the split.
 
         Returns
         -------
-        cvar : (nmaps, nsplits=1, npol, ny, nx) enmap
-            Coadd inverse-variance maps, possibly downgraded. 
+        cfact : (nmaps, nsplits=1, npol, ny, nx) enmap
+            Correction factor maps, possibly downgraded. 
         """
 
         # first check for ivar compatibility
@@ -320,10 +328,10 @@ class NoiseModel(ABC):
 
         # allocate a buffer to accumulate all ivar maps in.
         # this has shape (nmaps, nsplits=1, npol=1, ny, nx).
-        cvars = self._empty(ivar=True, num_splits=1)
+        cfacts = self._empty(ivar=True, num_splits=1)
 
         for i, qid in enumerate(self._qids):
-            with bench.show(self._action_str(qid, cvar=True)):
+            with bench.show(self._action_str(qid, split_num=split_num, cfact=True)):
                 if self._calibrated:
                     mul = s_utils.get_mult_fact(self._data_model, qid, ivar=True)
                 else:
@@ -333,29 +341,28 @@ class NoiseModel(ABC):
                 cvar = s_utils.read_map(self._data_model, qid, coadd=True, ivar=True)
                 cvar = enmap.extract(cvar, full_shape, full_wcs)
                 cvar *= mul
+
+                # we want to do this split-by-split in case we can save
+                # memory by downgrading one split at a time
+                ivar = s_utils.read_map(self._data_model, qid, split_num=split_num, ivar=True)
+                ivar = enmap.extract(ivar, full_shape, full_wcs)
+                ivar *= mul
+
+                cfact = utils.get_corr_fact(ivar, sum_ivar=cvar)
                 
                 if self._downgrade != 1:
                     # use harmonic instead of interpolated downgrade because it is 
                     # 10x faster
-                    cvar = utils.fourier_downgrade_cc_quad(
-                        cvar, self._downgrade, area_pow=1
+                    cfact = utils.fourier_downgrade_cc_quad(
+                        cfact, self._downgrade
                         )           
-                
-                # this can happen after downgrading
-                if self._fwhm_ivar:
-                    cvar = self._apply_fwhm_ivar(cvar)
 
-                # zero-out any numerical negative ivar
-                cvar[cvar < 0] = 0
+                # zero-out any numerical negative cfacts
+                cfact[cfact < 0] = 0
 
-                cvars[i, 0] = cvar
+                cfacts[i, 0] = cfact
         
-        return cvars
-
-    def _check_cvar_ivar(self, ivar):
-        """Check that ivar not greater than coadd ivar"""
-        assert np.all(self._cvar - ivar >= 0), \
-            f'ivar > cvar'
+        return cfacts
 
     def _empty(self, ivar=False, num_arrays=None, num_splits=None,
                 shape=None, wcs=None):
@@ -413,19 +420,22 @@ class NoiseModel(ABC):
         shape = (num_arrays, num_splits, *shape)
         return enmap.empty(shape, wcs=footprint_wcs, dtype=self._dtype)
 
-    def _action_str(self, qid, ivar=False, cvar=False):
+    def _action_str(self, qid, split_num=None, ivar=False, cfact=False):
         """Get a string for benchmarking the loading step of a map product.
 
         Parameters
         ----------
         qid : str
             Map identification string
+        split_num : int, optional
+            If not 'cvar', print the split_num where appropriate.
         ivar : bool, optional
             If True, print 'ivar' where appropriate. If False, print 'imap'
             where appropriate, by default False.
-        cvar : bool, optional
-            If True, print 'cvar' where appropriate. If False, print 'imap'
-            where appropriate, by default False.
+        cfact : bool, optional
+            If True, print 'cfact' where appropriate. If False, print 'imap'
+            where appropriate, by default False. Cannot be True with 'ivar'
+            simultaneously.
 
         Returns
         -------
@@ -439,16 +449,16 @@ class NoiseModel(ABC):
         >>> tnm._action_str('s18_03')
         >>> 'Loading, inpainting, downgrading imap for s18_03'
         """
-        assert not (ivar and cvar), 'ivar and cvar, ambiguous'
+        assert not (ivar and cfact), \
+            'Cannot produce action str for ivar and cfact simultaneously'
         ostr = 'Loading'
-        if ivar or cvar:
+        if ivar or cfact:
             if self._downgrade != 1:
                 ostr += ', downgrading'
             if ivar:
-                vstr = 'ivar'
-            elif cvar:
-                vstr = 'cvar'
-            ostr += f' {vstr} for {qid}'
+                mstr = 'ivar'
+            elif cfact:
+                mstr = 'cfact'
         else:
             if self._union_sources:
                 ostr += ', inpainting'
@@ -456,7 +466,8 @@ class NoiseModel(ABC):
                 ostr += ', kspace filtering'
             if self._downgrade != 1:
                 ostr += ', downgrading'
-            ostr += f' imap for {qid}'
+            mstr = 'imap'
+        ostr += f' {mstr} for {qid}, split {split_num}'
         return ostr
 
     def _apply_fwhm_ivar(self, ivar):
@@ -480,8 +491,8 @@ class NoiseModel(ABC):
         return ivar
 
     def get_model(self, split_num, check_on_disk=True, generate=True,
-                  keep_model=False, keep_ivar_mask_obs=False, keep_dmap=False,
-                  write=True, verbose=False):
+                  keep_model=False, keep_ivar_mask_obs=False, keep_cfact=False,
+                  keep_dmap=False, write=True, verbose=False):
         """Load or generate a sqrt-covariance matrix from this NoiseModel. 
         Will load necessary products to disk if not yet stored in instance
         attributes.
@@ -506,6 +517,9 @@ class NoiseModel(ABC):
         keep_ivar_mask_obs : bool, optional
             Store the loaded, possibly downgraded, ivar and mask_obs in the instance
             attributes, by default True.
+        keep_cfact: bool, optional
+            Store the loaded, possibly downgraded, correction factor in the
+            instance attributes, by default False.
         keep_dmap: bool, optional
             Store the loaded, possibly downgraded, data split difference in the
             instance attributes, by default False.
@@ -529,34 +543,35 @@ class NoiseModel(ABC):
             else: # generate == True
                 pass
 
-        # models need cvar, ivar, mask_obs. need to keep them through
-        # making a model, then can delete as necessary
-        if self._cvar is None:
-            self._cvar = self.get_cvar()
+        # get the conservative mask for estimating the harmonic filter used to whiten
+        # the difference map
+        if self._mask_est is None:
+            self._mask_est = self.get_mask_est(min_threshold=1e-4)
 
+        # models need ivar, mask_obs, and cfacts. need to keep them through
+        # making a model, then can delete as necessary
         if split_num not in self._ivar_mask_obs_dict:
             ivar, mask_obs = self.get_ivar_mask_obs(split_num)
         else:
             ivar = self.ivar(split_num)
             mask_obs = self.mask_obs(split_num)
 
-        self._check_cvar_ivar(ivar)
+        if split_num not in self._cfact_dict:
+            cfact = self.get_cfact(split_num)
+        else:
+            cfact = self.cfact(split_num)
 
-        # models need a data split difference as inputs. correct the total power
+        # models need a data split difference as inputs
         if split_num not in self._dmap_dict:
             dmap = self.get_data_split_diffs(split_num, mask_obs)
         else:
             dmap = self.dmap(split_num)
-        dmap *= utils.get_corr_fact(ivar, sum_ivar=self._cvar)
-
-        # get the conservative mask for estimating the harmonic filter used to whiten
-        # the difference map
-        if self._mask_est is None:
-            self._mask_est = self.get_mask_est(min_threshold=1e-4)
 
         with bench.show(f'Generating noise model for split {split_num}'):
+            # in order to have load/keep operations in abstract get_model, need
+            # to pass ivar and mask_obs here, rather than e.g. split_num
             nm_dict = self._get_model(
-                dmap, ivar=ivar, mask_obs=mask_obs, verbose=verbose
+                dmap*cfact, ivar=ivar, mask_obs=mask_obs, verbose=verbose
                 )
 
         if keep_model:
@@ -564,6 +579,9 @@ class NoiseModel(ABC):
 
         if keep_ivar_mask_obs:
             self._keep_ivar_mask_obs(split_num, ivar, mask_obs)
+
+        if keep_cfact:
+            self._keep_cfact(split_num, cfact)
 
         if keep_dmap:
             self._keep_dmap(split_num, dmap)
@@ -640,7 +658,7 @@ class NoiseModel(ABC):
                 )
     
         for i, qid in enumerate(self._qids):
-            with bench.show(self._action_str(qid, ivar=False)):
+            with bench.show(self._action_str(qid, split_num=split_num)):
                 if self._calibrated:
                     mul_imap = s_utils.get_mult_fact(self._data_model, qid, ivar=False)
                     mul_ivar = s_utils.get_mult_fact(self._data_model, qid, ivar=True)
@@ -661,18 +679,14 @@ class NoiseModel(ABC):
 
                 # we want to do this split-by-split in case we can save
                 # memory by downgrading one split at a time
-                imap = s_utils.read_map(
-                    self._data_model, qid, split_num=split_num, ivar=False
-                    )
+                imap = s_utils.read_map(self._data_model, qid, split_num=split_num, ivar=False)
                 imap = enmap.extract(imap, full_shape, full_wcs)
                 imap *= mul_imap
 
                 # need to reload ivar at full res and get ivar_eff
                 # if inpainting or kspace filtering
                 if self._union_sources or self._kfilt_lbounds:
-                    ivar = s_utils.read_map(
-                        self._data_model, qid, split_num=split_num, ivar=True
-                        )
+                    ivar = s_utils.read_map(self._data_model, qid, split_num=split_num, ivar=True)
                     ivar = enmap.extract(ivar, full_shape, full_wcs)
                     ivar *= mul_ivar
                     ivar_eff = utils.get_ivar_eff(ivar, sum_ivar=cvar, use_zero=True)
@@ -804,10 +818,15 @@ class NoiseModel(ABC):
         self._ivar_mask_obs_dict[split_num]['ivar'] = ivar
         self._ivar_mask_obs_dict[split_num]['mask_obs'] = mask_obs
 
-    def _keep_dmap(self, split_num, dmap_dict):
+    def _keep_cfact(self, split_num, cfact):
+        """Store a dictionary of correction factors in instance attributes under key split_num"""
+        print(f'Storing correction factor for split {split_num} into memory')
+        self._cfact_dict[split_num] = cfact
+
+    def _keep_dmap(self, split_num, dmap):
         """Store a dictionary of data split differences in instance attributes under key split_num"""
         print(f'Storing data split difference for split {split_num} into memory')
-        self._dmap_dict[split_num] = dmap_dict
+        self._dmap_dict[split_num] = dmap
 
     @abstractmethod
     def _get_model(self, dmap, verbose=False, **kwargs):
@@ -1001,8 +1020,8 @@ class NoiseModel(ABC):
         return self._mask_est
 
     @property
-    def cvar(self):
-        return self._cvar
+    def ivar_mask_obs_dict(self):
+        return self._ivar_mask_obs_dict
 
     def ivar(self, split_num):
         return self._ivar_mask_obs_dict[split_num]['ivar']
@@ -1010,12 +1029,23 @@ class NoiseModel(ABC):
     def mask_obs(self, split_num):
         return self._ivar_mask_obs_dict[split_num]['mask_obs']
 
+    @property
+    def cfact_dict(self):
+        return self._cfact_dict
+
+    def cfact(self, split_num):
+        return self._cfact_dict[split_num]
+
     def delete_ivar_mask_obs(self, split_num):
-        """Delete a dictionary entry of ivar and mask_obs from instance attributes under key split_num"""
+        """Delete a dictionary entry of ivar, mask_obs, and cfacts from instance attributes under key split_num"""
         try:
             del self._ivar_mask_obs_dict[split_num]
         except KeyError:
-            print(f'Nothing to delete, no model in memory for split {split_num}')
+            print(f'Nothing to delete, no ivar, mask_obs in memory for split {split_num}')
+
+    @property
+    def dmap_dict(self):
+        return self._dmap_dict
 
     def dmap(self, split_num):
         return self._dmap_dict[split_num]
@@ -1037,7 +1067,7 @@ class TiledNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, calibrated=True, downgrade=1,
                  lmax=None, mask_est=None, mask_version=None, mask_name=None,
-                 cvar=None, ivar_mask_obs_dict=None, mask_obs_name=None, 
+                 ivar_mask_obs_dict=None, mask_obs_name=None, cfact_dict=None,
                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
                  fwhm_ivar=None, notes=None, dtype=None,
                  width_deg=4., height_deg=4., delta_ell_smooth=400, **kwargs):
@@ -1073,10 +1103,6 @@ class TiledNoiseModel(NoiseModel):
             Name of mask file, by default None. This mask will be used as the mask_est (see
             above) if mask_est is None. If mask_est is None and mask_name is None, a default
             mask_est will be loaded from disk.
-        cvar : array-like, optional
-            Coadd inverse-variance maps, by default None. If provided, assumed properly
-            downgraded into compatible wcs with internal NoiseModel operations. If not
-            provided, will be loaded in call to NoiseModel.get_model(...).
         ivar_mask_obs_dict : dict, optional
             A dictionary of ivar and mask_obs maps, indexed by split_num keys. If
             provided, assumed properly downgraded into compatible wcs with internal 
@@ -1088,6 +1114,10 @@ class TiledNoiseModel(NoiseModel):
             split_num in calls to NoiseModel.get_model(...) or NoiseModel.get_sim(...),
             this mask file will be loaded from disk and stored in ivar_mask_obs_dict under
             that split_num.
+        cfact_dict : dict, optional
+            A dictionary of split correction factor maps, indexed by split_num keys. If
+            provided, assumed properly downgraded into compatible wcs with internal 
+            NoiseModel operations.
         dmap_dict : dict, optional
             A dictionary of data split difference maps, indexed by split_num keys. If
             provided, assumed properly downgraded into compatible wcs with internal 
@@ -1135,7 +1165,7 @@ class TiledNoiseModel(NoiseModel):
         super().__init__(
             *qids, data_model=data_model, calibrated=calibrated, downgrade=downgrade,
             lmax=lmax, mask_est=mask_est, mask_version=mask_version, mask_name=mask_name,
-            cvar=cvar, ivar_mask_obs_dict=ivar_mask_obs_dict, mask_obs_name=mask_obs_name, 
+            ivar_mask_obs_dict=ivar_mask_obs_dict, mask_obs_name=mask_obs_name, cfact_dict=cfact_dict,
             dmap_dict=dmap_dict, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
             fwhm_ivar=fwhm_ivar, notes=notes, dtype=dtype, **kwargs
             )
@@ -1226,7 +1256,7 @@ class WaveletNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, calibrated=True, downgrade=1,
                  lmax=None, mask_est=None, mask_version=None, mask_name=None,
-                 cvar=None, ivar_mask_obs_dict=None, mask_obs_name=None, 
+                 ivar_mask_obs_dict=None, mask_obs_name=None, cfact_dict=None,
                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
                  fwhm_ivar=None, notes=None, dtype=None,
                  lamb=1.3, smooth_loc=False, fwhm_fact=2, **kwargs):
@@ -1262,10 +1292,6 @@ class WaveletNoiseModel(NoiseModel):
             Name of mask file, by default None. This mask will be used as the mask_est (see
             above) if mask_est is None. If mask_est is None and mask_name is None, a default
             mask_est will be loaded from disk.
-        cvar : array-like, optional
-            Coadd inverse-variance maps, by default None. If provided, assumed properly
-            downgraded into compatible wcs with internal NoiseModel operations. If not
-            provided, will be loaded in call to NoiseModel.get_model(...).
         ivar_mask_obs_dict : dict, optional
             A dictionary of ivar and mask_obs maps, indexed by split_num keys. If
             provided, assumed properly downgraded into compatible wcs with internal 
@@ -1277,6 +1303,10 @@ class WaveletNoiseModel(NoiseModel):
             split_num in calls to NoiseModel.get_model(...) or NoiseModel.get_sim(...),
             this mask file will be loaded from disk and stored in ivar_mask_obs_dict under
             that split_num.
+        cfact_dict : dict, optional
+            A dictionary of split correction factor maps, indexed by split_num keys. If
+            provided, assumed properly downgraded into compatible wcs with internal 
+            NoiseModel operations.
         dmap_dict : dict, optional
             A dictionary of data split difference maps, indexed by split_num keys. If
             provided, assumed properly downgraded into compatible wcs with internal 
@@ -1325,7 +1355,7 @@ class WaveletNoiseModel(NoiseModel):
         super().__init__(
             *qids, data_model=data_model, calibrated=calibrated, downgrade=downgrade,
             lmax=lmax, mask_est=mask_est, mask_version=mask_version, mask_name=mask_name,
-            cvar=cvar, ivar_mask_obs_dict=ivar_mask_obs_dict, mask_obs_name=mask_obs_name, 
+            ivar_mask_obs_dict=ivar_mask_obs_dict, mask_obs_name=mask_obs_name, cfact_dict=cfact_dict,
             dmap_dict=dmap_dict, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
             fwhm_ivar=fwhm_ivar, notes=notes, dtype=dtype, **kwargs
             )
@@ -1426,7 +1456,7 @@ class FDWNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, calibrated=True, downgrade=1,
                  lmax=None, mask_est=None, mask_version=None, mask_name=None,
-                 cvar=None, ivar_mask_obs_dict=None, mask_obs_name=None, 
+                 ivar_mask_obs_dict=None, mask_obs_name=None, cfact_dict=None,
                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
                  fwhm_ivar=None, notes=None, dtype=None,
                  lamb=1.6, n=36, p=2, fwhm_fact=2., **kwargs):
@@ -1463,10 +1493,6 @@ class FDWNoiseModel(NoiseModel):
             Name of mask file, by default None. This mask will be used as the mask_est (see
             above) if mask_est is None. If mask_est is None and mask_name is None, a default
             mask_est will be loaded from disk.
-        cvar : array-like, optional
-            Coadd inverse-variance maps, by default None. If provided, assumed properly
-            downgraded into compatible wcs with internal NoiseModel operations. If not
-            provided, will be loaded in call to NoiseModel.get_model(...).
         ivar_mask_obs_dict : dict, optional
             A dictionary of ivar and mask_obs maps, indexed by split_num keys. If
             provided, assumed properly downgraded into compatible wcs with internal 
@@ -1478,6 +1504,10 @@ class FDWNoiseModel(NoiseModel):
             split_num in calls to NoiseModel.get_model(...) or NoiseModel.get_sim(...),
             this mask file will be loaded from disk and stored in ivar_mask_obs_dict under
             that split_num.
+        cfact_dict : dict, optional
+            A dictionary of split correction factor maps, indexed by split_num keys. If
+            provided, assumed properly downgraded into compatible wcs with internal 
+            NoiseModel operations.
         dmap_dict : dict, optional
             A dictionary of data split difference maps, indexed by split_num keys. If
             provided, assumed properly downgraded into compatible wcs with internal 
@@ -1535,7 +1565,7 @@ class FDWNoiseModel(NoiseModel):
         super().__init__(
             *qids, data_model=data_model, calibrated=calibrated, downgrade=downgrade,
             lmax=lmax, mask_est=mask_est, mask_version=mask_version, mask_name=mask_name,
-            cvar=cvar, ivar_mask_obs_dict=ivar_mask_obs_dict, mask_obs_name=mask_obs_name, 
+            ivar_mask_obs_dict=ivar_mask_obs_dict, mask_obs_name=mask_obs_name, cfact_dict=cfact_dict,
             dmap_dict=dmap_dict, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
             fwhm_ivar=fwhm_ivar, notes=notes, dtype=dtype, **kwargs
             )
