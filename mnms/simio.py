@@ -22,7 +22,7 @@ def get_sim_mask_fn(qid, data_model, use_default_mask=True, mask_version=None, m
         return f'{fbase}{mask_version}/{mask_name}'
 
 def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=True,
-                     mask_name=None, galcut=None, apod_deg=None, mask_obs_name=None, calibrated=None,
+                     mask_est_name=None, galcut=None, apod_deg=None, mask_obs_name=None, calibrated=None,
                      downgrade=None, union_sources=None, kfilt_lbounds=None, fwhm_ivar=None):
     """
     """
@@ -40,9 +40,9 @@ def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=True,
         if apod_deg is not None:
             mask_flag += f'apod_deg_{apod_deg}_'
     else:
-        assert mask_name is not None
-        assert mask_name != ''
-        mask_flag = mask_name + '_'
+        assert mask_est_name is not None
+        assert mask_est_name != ''
+        mask_flag = mask_est_name + '_'
 
     if mask_obs_name is not None:
         mask_flag += f'maskobs_{mask_obs_name}_'

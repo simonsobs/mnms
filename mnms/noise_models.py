@@ -25,8 +25,8 @@ def register(registry=REGISTERED_NOISE_MODELS):
 class NoiseModel(ABC):
 
     def __init__(self, *qids, data_model=None, calibrated=True, downgrade=1,
-                 lmax=None, mask_est=None, mask_version=None, mask_name=None,
-                 ivar_mask_obs_dict=None, mask_obs_name=None, cfact_dict=None,
+                 lmax=None, mask_version=None, mask_est=None, mask_est_name=None,
+                 mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
                  fwhm_ivar=None, notes=None, dtype=None, **kwargs):
         """Base class for all NoiseModel subclasses. Supports loading raw data necessary for all 
@@ -47,30 +47,31 @@ class NoiseModel(ABC):
             The bandlimit of the maps, by default None. If None, will be set to the 
             Nyquist limit of the pixelization. Note, this is twice the theoretical CAR
             bandlimit, ie 180/wcs.wcs.cdelt[1].
+        mask_version : str, optional
+            The mask version folder name, by default None. If None, will first look in
+            config 'mnms' block, then block of default data model.
         mask_est : enmap.ndmap, optional
             Mask denoting data that will be used to determine the harmonic filter used
             in calls to NoiseModel.get_model(...), by default None. Whitens the data
             before estimating its variance. If provided, assumed properly downgraded
             into compatible wcs with internal NoiseModel operations. If None, will
-            load a mask according to the 'mask_version' and 'mask_name' kwargs.
-        mask_version : str, optional
-            The mask version folder name, by default None. If None, will first look in
-            config 'mnms' block, then block of default data model.
-        mask_name : str, optional
-            Name of mask file, by default None. This mask will be used as the mask_est (see
-            above) if mask_est is None. If mask_est is None and mask_name is None, a default
-            mask_est will be loaded from disk.
-        ivar_mask_obs_dict : dict, optional
-            A dictionary of ivar and mask_obs maps, indexed by split_num keys. If
-            provided, assumed properly downgraded into compatible wcs with internal 
-            NoiseModel operations, and with any additional preprocessing specified by
-            the model. 
+            load a mask according to the 'mask_version' and 'mask_est_name' kwargs.
+        mask_est_name : str, optional
+            Name of harmonic filter estimate mask file, by default None. This mask will
+            be used as the mask_est (see above) if mask_est is None. If mask_est is
+            None and mask_est_name is None, a default mask_est will be loaded from disk.
+        mask_obs : str, optional
+            Mask denoting data to include in building noise model step. If mask_obs=0
+            in any pixel, that pixel will not be modeled. Optionally used when drawing
+            a sim from a model to mask unmodeled pixels. If provided, assumed properly
+            downgraded into compatible wcs with internal NoiseModel operations.
         mask_obs_name : str, optional
             Name of observed mask file, by default None. This mask will be used as the
-            mask_obs (see above). If ivar_mask_obs_dict does not have an item under a given 
-            split_num in calls to NoiseModel.get_model(...) or NoiseModel.get_sim(...),
-            this mask file will be loaded from disk and stored in ivar_mask_obs_dict under
-            that split_num.
+            mask_obs (see above) if mask_obs is None. 
+        ivar_dict : dict, optional
+            A dictionary of inverse-variance maps, indexed by split_num keys. If
+            provided, assumed properly downgraded into compatible wcs with internal 
+            NoiseModel operations. 
         cfact_dict : dict, optional
             A dictionary of split correction factor maps, indexed by split_num keys. If
             provided, assumed properly downgraded into compatible wcs with internal 
@@ -108,7 +109,7 @@ class NoiseModel(ABC):
         if mask_version is None:
             mask_version = utils.get_default_mask_version()
         self._mask_version = mask_version
-        self._mask_name = mask_name
+        self._mask_est_name = mask_est_name
         self._mask_obs_name = mask_obs_name
         self._notes = notes
         self._union_sources = union_sources
@@ -122,14 +123,15 @@ class NoiseModel(ABC):
         # get derived instance properties
         self._num_arrays = len(self._qids)
         self._num_splits = utils.get_nsplits_by_qid(self._qids[0], self._data_model)
-        self._use_default_mask = mask_name is None
+        self._use_default_mask = mask_est_name is None
 
         # Possibly store input data
         self._mask_est = mask_est
+        self._mask_obs = mask_obs
         
-        if ivar_mask_obs_dict is None:
-            ivar_mask_obs_dict = {}
-        self._ivar_mask_obs_dict = ivar_mask_obs_dict
+        if ivar_dict is None:
+            ivar_dict = {}
+        self._ivar_dict = ivar_dict
         
         if cfact_dict is None:
             cfact_dict = {}
@@ -206,7 +208,7 @@ class NoiseModel(ABC):
             # we are loading straight from the filename with use_default_mask=False
             # so we don't need to check each qid
             fn = simio.get_sim_mask_fn(
-                self._qids[0], self._data_model, use_default_mask=False,
+                None, self._data_model, use_default_mask=False,
                 mask_version=self._mask_version, mask_name=self._mask_obs_name,
                 **self._kwargs
             )
@@ -231,33 +233,68 @@ class NoiseModel(ABC):
 
         return mask_obs
 
-    def get_ivar_mask_obs(self, split_num):
-        """Load the inverse-variance maps according to instance attributes, and use it
-        to construct an observed-by-all-splits pixel map.
+    def get_mask_obs(self):
+        """Load the inverse-variance maps according to instance attributes,
+        and use them to construct an observed-by-all-splits pixel map.
+
+        Returns
+        -------
+        mask_obs : (ny, nx) enmap
+            Observed-pixel map map, possibly downgraded.
+        """
+        # first check for ivar compatibility
+        full_shape, full_wcs = self._check_geometry()
+
+        # get the full-resolution mask_obs, whether from disk or
+        # all True. Numpy understands in-place multiplication operation
+        # even if mask_obs is python True to start
+        mask_obs = self._get_mask_obs_from_disk(downgrade=False)
+
+        with bench.show('Generating observed-pixels mask'):
+            for qid in self._qids:
+                for s in range(self._num_splits):
+                    # we want to do this split-by-split in case we can save
+                    # memory by downgrading one split at a time
+                    ivar = s_utils.read_map(self._data_model, qid, split_num=s, ivar=True)
+                    ivar = enmap.extract(ivar, full_shape, full_wcs)
+
+                    # iteratively build the mask_obs at full resolution, 
+                    # loop over leading dims
+                    for idx in np.ndindex(*ivar.shape[:-2]):
+                        mask_obs *= ivar[idx].astype(bool)
+
+            mask_obs = utils.interpol_downgrade_cc_quad(
+                mask_obs, self._downgrade, dtype=self._dtype
+                )
+
+            # define downgraded mask_obs to be True only where the interpolated 
+            # downgrade is all 1 -- this is the most conservative route in terms of 
+            # excluding pixels that may not actually have nonzero ivar or data
+            mask_obs = utils.get_mask_bool(mask_obs, threshold=1.)
+        
+        return mask_obs
+
+    def get_ivar(self, split_num, mask=True):
+        """Load the inverse-variance maps according to instance attributes.
 
         Parameters
         ----------
         split_num : int
             The 0-based index of the split.
+        mask : array-like
+            Mask to apply to final dmap.
 
         Returns
         -------
-        ivar, mask_obs : (nmaps, nsplits=1, npol, ny, nx) enmap, (ny, nx) enmap
-            Inverse-variance maps, possibly downgraded. Observed pixel map,
-            possibly downgraded.
+        ivar : (nmaps, nsplits=1, npol, ny, nx) enmap
+            Inverse-variance maps, possibly downgraded.
         """
-
         # first check for ivar compatibility
         full_shape, full_wcs = self._check_geometry()
 
         # allocate a buffer to accumulate all ivar maps in.
         # this has shape (nmaps, nsplits=1, npol=1, ny, nx).
         ivars = self._empty(ivar=True, num_splits=1)
-
-        # get the full-resolution mask_obs, whether from disk or
-        # all True. Numpy understands in-place multiplication operation
-        # even if mask_obs is python True to start
-        mask_obs = self._get_mask_obs_from_disk(downgrade=False)
 
         for i, qid in enumerate(self._qids):
             with bench.show(self._action_str(qid, split_num=split_num, ivar=True)):
@@ -271,11 +308,6 @@ class NoiseModel(ABC):
                 ivar = s_utils.read_map(self._data_model, qid, split_num=split_num, ivar=True)
                 ivar = enmap.extract(ivar, full_shape, full_wcs)
                 ivar *= mul
-
-                # iteratively build the mask_obs at full resolution, 
-                # loop over leading dims
-                for idx in np.ndindex(*ivar.shape[:-2]):
-                    mask_obs *= ivar[idx].astype(bool)
                 
                 if self._downgrade != 1:
                     # use harmonic instead of interpolated downgrade because it is 
@@ -292,37 +324,24 @@ class NoiseModel(ABC):
                 ivar[ivar < 0] = 0     
 
                 ivars[i, 0] = ivar
-
-        with bench.show('Generating observed-pixels mask'):
-            mask_obs = utils.interpol_downgrade_cc_quad(
-                mask_obs, self._downgrade, dtype=self._dtype
-                )
-
-            # define downgraded mask_obs to be True only where the interpolated 
-            # downgrade is all 1 -- this is the most conservative route in terms of 
-            # excluding pixels that may not actually have nonzero ivar or data
-            mask_obs = utils.get_mask_bool(mask_obs, threshold=1.)
-
-            # finally, need to layer on any ivars that may still be 0 that aren't yet
-            # masked
-            mask_obs *= utils.get_bool_mask_from_ivar(ivars)
         
-        return ivars*mask_obs, mask_obs
+        return ivars*mask
 
-    def get_cfact(self, split_num):
+    def get_cfact(self, split_num, mask=True):
         """Load the correction factor maps according to instance attributes.
 
         Parameters
         ----------
         split_num : int
             The 0-based index of the split.
+        mask : array-like
+            Mask to apply to final dmap.
 
         Returns
         -------
         cfact : (nmaps, nsplits=1, npol, ny, nx) enmap
             Correction factor maps, possibly downgraded. 
         """
-
         # first check for ivar compatibility
         full_shape, full_wcs = self._check_geometry()
 
@@ -362,7 +381,7 @@ class NoiseModel(ABC):
 
                 cfacts[i, 0] = cfact
         
-        return cfacts
+        return cfacts*mask
 
     def _empty(self, ivar=False, num_arrays=None, num_splits=None,
                 shape=None, wcs=None):
@@ -491,7 +510,7 @@ class NoiseModel(ABC):
         return ivar
 
     def get_model(self, split_num, check_on_disk=True, generate=True,
-                  keep_model=False, keep_ivar_mask_obs=False, keep_cfact=False,
+                  keep_model=False, keep_ivar=False, keep_cfact=False,
                   keep_dmap=False, write=True, verbose=False):
         """Load or generate a sqrt-covariance matrix from this NoiseModel. 
         Will load necessary products to disk if not yet stored in instance
@@ -514,9 +533,9 @@ class NoiseModel(ABC):
         keep_model : bool, optional
             Store the loaded or generated model in the instance attributes, by 
             default False.
-        keep_ivar_mask_obs : bool, optional
-            Store the loaded, possibly downgraded, ivar and mask_obs in the instance
-            attributes, by default True.
+        keep_ivar : bool, optional
+            Store the loaded, possibly downgraded, ivar in the instance
+            attributes, by default False.
         keep_cfact: bool, optional
             Store the loaded, possibly downgraded, correction factor in the
             instance attributes, by default False.
@@ -548,37 +567,38 @@ class NoiseModel(ABC):
         if self._mask_est is None:
             self._mask_est = self.get_mask_est(min_threshold=1e-4)
 
-        # models need ivar, mask_obs, and cfacts. need to keep them through
-        # making a model, then can delete as necessary
-        if split_num not in self._ivar_mask_obs_dict:
-            ivar, mask_obs = self.get_ivar_mask_obs(split_num)
+        # get the observed-pixels mask
+        if self._mask_obs is None:
+            self._mask_obs = self.get_mask_obs()
+
+        # models need ivar and cfacts. need to keep them through making a
+        # model, then can delete as necessary
+        if split_num not in self._ivar_dict:
+            ivar = self.get_ivar(split_num, self._mask_obs)
         else:
             ivar = self.ivar(split_num)
-            mask_obs = self.mask_obs(split_num)
 
         if split_num not in self._cfact_dict:
-            cfact = self.get_cfact(split_num)
+            cfact = self.get_cfact(split_num, self._mask_obs)
         else:
             cfact = self.cfact(split_num)
 
         # models need a data split difference as inputs
         if split_num not in self._dmap_dict:
-            dmap = self.get_data_split_diffs(split_num, mask_obs)
+            dmap = self.get_dmap(split_num, self._mask_obs)
         else:
             dmap = self.dmap(split_num)
 
         with bench.show(f'Generating noise model for split {split_num}'):
             # in order to have load/keep operations in abstract get_model, need
             # to pass ivar and mask_obs here, rather than e.g. split_num
-            nm_dict = self._get_model(
-                dmap*cfact, ivar=ivar, mask_obs=mask_obs, verbose=verbose
-                )
+            nm_dict = self._get_model(dmap*cfact, ivar=ivar, verbose=verbose)
 
         if keep_model:
             self._keep_model(split_num, nm_dict)
 
-        if keep_ivar_mask_obs:
-            self._keep_ivar_mask_obs(split_num, ivar, mask_obs)
+        if keep_ivar:
+            self._keep_ivar(split_num, ivar)
 
         if keep_cfact:
             self._keep_cfact(split_num, cfact)
@@ -629,19 +649,19 @@ class NoiseModel(ABC):
                 print(f'Model for split {split_num} not found on-disk, please generate it first')
                 raise FileNotFoundError(fn) from e
 
-    def get_data_split_diffs(self, split_num, mask_obs=True):
+    def get_dmap(self, split_num, mask=True):
         """Load the raw data split differences according to instance attributes.
 
         Parameters
         ----------
         split_num : int
             The 0-based index of the split.
-        mask_obs : array-like
-            Boolean mask to apply to final dmap.
+        mask : array-like
+            Mask to apply to final dmap.
 
         Returns
         -------
-        dmaps : (nmaps, nsplits=1, npol, ny, nx) enmap
+        dmap : (nmaps, nsplits=1, npol, ny, nx) enmap
             Data split difference maps, possibly downgraded.
         """
         # first check for mask compatibility and get map geometry
@@ -715,7 +735,7 @@ class NoiseModel(ABC):
                 else:
                     dmaps[i, 0] = dmap
     
-        return dmaps*mask_obs
+        return dmaps*mask
 
     def _inpaint(self, imap, ivar, mask, inplace=True, qid=None, split_num=None):
         """Inpaint point sources given by the union catalog in input map.
@@ -736,7 +756,6 @@ class NoiseModel(ABC):
             The 0-based index of the split that is inpainted, used to get unique seeds 
             per split if this function is called per split. Otherwise defaults to 0.
         """
-
         assert self._union_sources is not None, f'Inpainting needs union-sources, got {self._union_sources}'
 
         catalog = utils.get_catalog(self._union_sources)
@@ -768,7 +787,7 @@ class NoiseModel(ABC):
             for i, qid in enumerate(self._qids):
                 fn = simio.get_sim_mask_fn(
                     qid, self._data_model, use_default_mask=self._use_default_mask,
-                    mask_version=self._mask_version, mask_name=self._mask_name, **self._kwargs
+                    mask_version=self._mask_version, mask_name=self._mask_est_name, **self._kwargs
                 )
                 mask = enmap.read_map(fn).astype(self._dtype, copy=False)
 
@@ -808,25 +827,27 @@ class NoiseModel(ABC):
     
     def _keep_model(self, split_num, nm_dict):
         """Store a dictionary of noise model variables in instance attributes under key split_num"""
-        print(f'Storing model for split {split_num} in memory')
-        self._nm_dict[split_num] = nm_dict
+        if split_num not in self._nm_dict:
+            print(f'Storing model for split {split_num} in memory')
+            self._nm_dict[split_num] = nm_dict
 
-    def _keep_ivar_mask_obs(self, split_num, ivar, mask_obs):
-        """Store a dictionary of ivar, mask_obs in instance attributes under key split_num"""
-        print(f'Storing ivar, mask_obs for split {split_num} into memory')
-        self._ivar_mask_obs_dict[split_num] = {}
-        self._ivar_mask_obs_dict[split_num]['ivar'] = ivar
-        self._ivar_mask_obs_dict[split_num]['mask_obs'] = mask_obs
+    def _keep_ivar(self, split_num, ivar):
+        """Store a dictionary of ivars in instance attributes under key split_num"""
+        if split_num not in self._ivar_dict:
+            print(f'Storing ivar, mask_obs for split {split_num} into memory')
+            self._ivar_dict[split_num] = ivar
 
     def _keep_cfact(self, split_num, cfact):
         """Store a dictionary of correction factors in instance attributes under key split_num"""
-        print(f'Storing correction factor for split {split_num} into memory')
-        self._cfact_dict[split_num] = cfact
+        if split_num not in self._cfact_dict:
+            print(f'Storing correction factor for split {split_num} into memory')
+            self._cfact_dict[split_num] = cfact
 
     def _keep_dmap(self, split_num, dmap):
         """Store a dictionary of data split differences in instance attributes under key split_num"""
-        print(f'Storing data split difference for split {split_num} into memory')
-        self._dmap_dict[split_num] = dmap
+        if split_num not in self._dmap_dict:
+            print(f'Storing data split difference for split {split_num} into memory')
+            self._dmap_dict[split_num] = dmap
 
     @abstractmethod
     def _get_model(self, dmap, verbose=False, **kwargs):
@@ -840,7 +861,7 @@ class NoiseModel(ABC):
 
     def get_sim(self, split_num, sim_num, alm=True, do_mask_obs=True,
                 check_on_disk=True, generate=True, keep_model=True,
-                keep_ivar_mask_obs=True, write=False, verbose=False):
+                keep_ivar=True, write=False, verbose=False):
         """Load or generate a sim from this NoiseModel. Will load necessary
         products to disk if not yet stored in instance attributes.
 
@@ -873,9 +894,9 @@ class NoiseModel(ABC):
             Store the loaded model for this split in instance attributes, by default True.
             This spends memory to avoid spending time loading the model from disk
             for each call to this method.
-        keep_ivar_mask_obs : bool, optional
-            Store the loaded, possibly downgraded, ivar and mask_obs in the instance
-            attributes, by default True.
+        keep_ivar : bool, optional
+            Store the loaded, possibly downgraded, ivar in the instance
+            attributes, by default False.
         write : bool, optional
             Save a generated sim to disk, by default False.
         verbose : bool, optional
@@ -899,20 +920,24 @@ class NoiseModel(ABC):
             else: # generate == True
                 pass
 
+        # get the observed-pixels mask
+        if self._mask_obs is None:
+            self._mask_obs = self.get_mask_obs()
+
+        # get the model and ivar
         if split_num not in self._nm_dict:
             nm_dict = self._check_model_on_disk(split_num, generate=False)
         else:
             nm_dict = self.noise_model(split_num)
 
-        if split_num not in self._ivar_mask_obs_dict:
-            ivar, mask_obs = self.get_ivar_mask_obs(split_num)
+        if split_num not in self._ivar_dict:
+            ivar = self.get_ivar(split_num, self._mask_obs)
         else:
             ivar = self.ivar(split_num)
-            mask_obs = self.mask_obs(split_num)
         
         with bench.show(f'Generating noise sim for split {split_num}, map {sim_num}'):
             seed = self._get_seed(split_num, sim_num)
-            mask = mask_obs if do_mask_obs else None
+            mask = self._mask_obs if do_mask_obs else None
             if alm:
                 sim = self._get_sim_alm(
                     nm_dict, seed, verbose=verbose, ivar=ivar, mask=mask
@@ -925,8 +950,8 @@ class NoiseModel(ABC):
         if keep_model:
             self._keep_model(split_num, nm_dict)
 
-        if keep_ivar_mask_obs:
-            self._keep_ivar_mask_obs(split_num, ivar, mask_obs)
+        if keep_ivar:
+            self._keep_ivar(split_num, ivar)
         
         if write:
             fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_obs)
@@ -1020,14 +1045,22 @@ class NoiseModel(ABC):
         return self._mask_est
 
     @property
-    def ivar_mask_obs_dict(self):
-        return self._ivar_mask_obs_dict
+    def mask_obs(self):
+        return self._mask_obs
+
+    @property
+    def ivar_dict(self):
+        return self._ivar_dict
 
     def ivar(self, split_num):
-        return self._ivar_mask_obs_dict[split_num]['ivar']
+        return self._ivar_dict[split_num]
 
-    def mask_obs(self, split_num):
-        return self._ivar_mask_obs_dict[split_num]['mask_obs']
+    def delete_ivar(self, split_num):
+        """Delete a dictionary entry of ivar from instance attributes under key split_num"""
+        try:
+            del self._ivar_dict[split_num]
+        except KeyError:
+            print(f'Nothing to delete, no ivar in memory for split {split_num}')
 
     @property
     def cfact_dict(self):
@@ -1036,12 +1069,12 @@ class NoiseModel(ABC):
     def cfact(self, split_num):
         return self._cfact_dict[split_num]
 
-    def delete_ivar_mask_obs(self, split_num):
-        """Delete a dictionary entry of ivar, mask_obs, and cfacts from instance attributes under key split_num"""
+    def delete_cfact(self, split_num):
+        """Delete a dictionary entry of correction factor from instance attributes under key split_num"""
         try:
-            del self._ivar_mask_obs_dict[split_num]
+            del self._cfact_dict[split_num]
         except KeyError:
-            print(f'Nothing to delete, no ivar, mask_obs in memory for split {split_num}')
+            print(f'Nothing to delete, no cfact in memory for split {split_num}')
 
     @property
     def dmap_dict(self):
@@ -1066,8 +1099,8 @@ class NoiseModel(ABC):
 class TiledNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, calibrated=True, downgrade=1,
-                 lmax=None, mask_est=None, mask_version=None, mask_name=None,
-                 ivar_mask_obs_dict=None, mask_obs_name=None, cfact_dict=None,
+                 lmax=None, mask_version=None, mask_est=None, mask_est_name=None,
+                 mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
                  fwhm_ivar=None, notes=None, dtype=None,
                  width_deg=4., height_deg=4., delta_ell_smooth=400, **kwargs):
@@ -1089,31 +1122,31 @@ class TiledNoiseModel(NoiseModel):
         lmax : int, optional
             The bandlimit of the maps, by default None. If None, will be set to the 
             Nyquist limit of the pixelization. Note, this is twice the theoretical CAR
-            bandlimit, ie 180/wcs.wcs.cdelt[1].
+            bandlimit, ie 180/wcs.wcs.cdelt[1].mask_version : str, optional
+            The mask version folder name, by default None. If None, will first look in
+            config 'mnms' block, then block of default data model.
         mask_est : enmap.ndmap, optional
             Mask denoting data that will be used to determine the harmonic filter used
             in calls to NoiseModel.get_model(...), by default None. Whitens the data
             before estimating its variance. If provided, assumed properly downgraded
             into compatible wcs with internal NoiseModel operations. If None, will
-            load a mask according to the 'mask_version' and 'mask_name' kwargs.
-        mask_version : str, optional
-            The mask version folder name, by default None. If None, will first look in
-            config 'mnms' block, then block of default data model.
-        mask_name : str, optional
-            Name of mask file, by default None. This mask will be used as the mask_est (see
-            above) if mask_est is None. If mask_est is None and mask_name is None, a default
-            mask_est will be loaded from disk.
-        ivar_mask_obs_dict : dict, optional
-            A dictionary of ivar and mask_obs maps, indexed by split_num keys. If
-            provided, assumed properly downgraded into compatible wcs with internal 
-            NoiseModel operations, and with any additional preprocessing specified by
-            the model. 
+            load a mask according to the 'mask_version' and 'mask_est_name' kwargs.
+        mask_est_name : str, optional
+            Name of harmonic filter estimate mask file, by default None. This mask will
+            be used as the mask_est (see above) if mask_est is None. If mask_est is
+            None and mask_est_name is None, a default mask_est will be loaded from disk.
+        mask_obs : str, optional
+            Mask denoting data to include in building noise model step. If mask_obs=0
+            in any pixel, that pixel will not be modeled. Optionally used when drawing
+            a sim from a model to mask unmodeled pixels. If provided, assumed properly
+            downgraded into compatible wcs with internal NoiseModel operations.
         mask_obs_name : str, optional
             Name of observed mask file, by default None. This mask will be used as the
-            mask_obs (see above). If ivar_mask_obs_dict does not have an item under a given 
-            split_num in calls to NoiseModel.get_model(...) or NoiseModel.get_sim(...),
-            this mask file will be loaded from disk and stored in ivar_mask_obs_dict under
-            that split_num.
+            mask_obs (see above) if mask_obs is None. 
+        ivar_dict : dict, optional
+            A dictionary of inverse-variance maps, indexed by split_num keys. If
+            provided, assumed properly downgraded into compatible wcs with internal 
+            NoiseModel operations. 
         cfact_dict : dict, optional
             A dictionary of split correction factor maps, indexed by split_num keys. If
             provided, assumed properly downgraded into compatible wcs with internal 
@@ -1164,8 +1197,8 @@ class TiledNoiseModel(NoiseModel):
         """
         super().__init__(
             *qids, data_model=data_model, calibrated=calibrated, downgrade=downgrade,
-            lmax=lmax, mask_est=mask_est, mask_version=mask_version, mask_name=mask_name,
-            ivar_mask_obs_dict=ivar_mask_obs_dict, mask_obs_name=mask_obs_name, cfact_dict=cfact_dict,
+            lmax=lmax, mask_est=mask_est, mask_version=mask_version, mask_est_name=mask_est_name,
+            mask_obs=mask_obs, mask_obs_name=mask_obs_name, ivar_dict=ivar_dict, cfact_dict=cfact_dict,
             dmap_dict=dmap_dict, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
             fwhm_ivar=fwhm_ivar, notes=notes, dtype=dtype, **kwargs
             )
@@ -1179,7 +1212,7 @@ class TiledNoiseModel(NoiseModel):
         """Get a noise model filename for split split_num; return as <str>"""
         return simio.get_tiled_model_fn(
             self._qids, split_num, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, notes=self._notes,
-            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
+            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
             kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
         )
@@ -1197,10 +1230,10 @@ class TiledNoiseModel(NoiseModel):
             'sqrt_cov_ell': sqrt_cov_ell
             }
 
-    def _get_model(self, dmap, ivar=None, mask_obs=None, verbose=False, **kwargs):
+    def _get_model(self, dmap, ivar=None, verbose=False, **kwargs):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
         sqrt_cov_mat, sqrt_cov_ell = tiled_noise.get_tiled_noise_covsqrt(
-            dmap, ivar=ivar, mask_obs=mask_obs, mask_est=self._mask_est,
+            dmap, ivar=ivar, mask_obs=self._mask_obs, mask_est=self._mask_est,
             width_deg=self._width_deg, height_deg=self._height_deg,
             delta_ell_smooth=self._delta_ell_smooth, lmax=self._lmax,
             rfft=True, nthread=0, verbose=verbose
@@ -1221,7 +1254,7 @@ class TiledNoiseModel(NoiseModel):
         return simio.get_tiled_sim_fn(
             self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax,
             split_num, sim_num, notes=self._notes, alm=alm, mask_obs=mask_obs, 
-            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
+            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
             kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
         )
@@ -1255,8 +1288,8 @@ class TiledNoiseModel(NoiseModel):
 class WaveletNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, calibrated=True, downgrade=1,
-                 lmax=None, mask_est=None, mask_version=None, mask_name=None,
-                 ivar_mask_obs_dict=None, mask_obs_name=None, cfact_dict=None,
+                 lmax=None, mask_version=None, mask_est=None, mask_est_name=None,
+                 mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
                  fwhm_ivar=None, notes=None, dtype=None,
                  lamb=1.3, smooth_loc=False, fwhm_fact=2, **kwargs):
@@ -1278,31 +1311,31 @@ class WaveletNoiseModel(NoiseModel):
         lmax : int, optional
             The bandlimit of the maps, by default None. If None, will be set to the 
             Nyquist limit of the pixelization. Note, this is twice the theoretical CAR
-            bandlimit, ie 180/wcs.wcs.cdelt[1].
+            bandlimit, ie 180/wcs.wcs.cdelt[1].mask_version : str, optional
+            The mask version folder name, by default None. If None, will first look in
+            config 'mnms' block, then block of default data model.
         mask_est : enmap.ndmap, optional
             Mask denoting data that will be used to determine the harmonic filter used
             in calls to NoiseModel.get_model(...), by default None. Whitens the data
             before estimating its variance. If provided, assumed properly downgraded
             into compatible wcs with internal NoiseModel operations. If None, will
-            load a mask according to the 'mask_version' and 'mask_name' kwargs.
-        mask_version : str, optional
-            The mask version folder name, by default None. If None, will first look in
-            config 'mnms' block, then block of default data model.
-        mask_name : str, optional
-            Name of mask file, by default None. This mask will be used as the mask_est (see
-            above) if mask_est is None. If mask_est is None and mask_name is None, a default
-            mask_est will be loaded from disk.
-        ivar_mask_obs_dict : dict, optional
-            A dictionary of ivar and mask_obs maps, indexed by split_num keys. If
-            provided, assumed properly downgraded into compatible wcs with internal 
-            NoiseModel operations, and with any additional preprocessing specified by
-            the model. 
+            load a mask according to the 'mask_version' and 'mask_est_name' kwargs.
+        mask_est_name : str, optional
+            Name of harmonic filter estimate mask file, by default None. This mask will
+            be used as the mask_est (see above) if mask_est is None. If mask_est is
+            None and mask_est_name is None, a default mask_est will be loaded from disk.
+        mask_obs : str, optional
+            Mask denoting data to include in building noise model step. If mask_obs=0
+            in any pixel, that pixel will not be modeled. Optionally used when drawing
+            a sim from a model to mask unmodeled pixels. If provided, assumed properly
+            downgraded into compatible wcs with internal NoiseModel operations.
         mask_obs_name : str, optional
             Name of observed mask file, by default None. This mask will be used as the
-            mask_obs (see above). If ivar_mask_obs_dict does not have an item under a given 
-            split_num in calls to NoiseModel.get_model(...) or NoiseModel.get_sim(...),
-            this mask file will be loaded from disk and stored in ivar_mask_obs_dict under
-            that split_num.
+            mask_obs (see above) if mask_obs is None. 
+        ivar_dict : dict, optional
+            A dictionary of inverse-variance maps, indexed by split_num keys. If
+            provided, assumed properly downgraded into compatible wcs with internal 
+            NoiseModel operations. 
         cfact_dict : dict, optional
             A dictionary of split correction factor maps, indexed by split_num keys. If
             provided, assumed properly downgraded into compatible wcs with internal 
@@ -1354,8 +1387,8 @@ class WaveletNoiseModel(NoiseModel):
         """
         super().__init__(
             *qids, data_model=data_model, calibrated=calibrated, downgrade=downgrade,
-            lmax=lmax, mask_est=mask_est, mask_version=mask_version, mask_name=mask_name,
-            ivar_mask_obs_dict=ivar_mask_obs_dict, mask_obs_name=mask_obs_name, cfact_dict=cfact_dict,
+            lmax=lmax, mask_est=mask_est, mask_version=mask_version, mask_est_name=mask_est_name,
+            mask_obs=mask_obs, mask_obs_name=mask_obs_name, ivar_dict=ivar_dict, cfact_dict=cfact_dict,
             dmap_dict=dmap_dict, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
             fwhm_ivar=fwhm_ivar, notes=notes, dtype=dtype, **kwargs
             )
@@ -1369,7 +1402,7 @@ class WaveletNoiseModel(NoiseModel):
         """Get a noise model filename for split split_num; return as <str>"""
         return simio.get_wav_model_fn(
             self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, self._fwhm_fact, notes=self._notes, 
-            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
+            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
             kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
         )
@@ -1384,11 +1417,11 @@ class WaveletNoiseModel(NoiseModel):
         
         return nm_dict
 
-    def _get_model(self, dmap, mask_obs=None, **kwargs):
+    def _get_model(self, dmap, **kwargs):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
         # method assumes 4d dmap
         sqrt_cov_mat, sqrt_cov_ell, w_ell = wav_noise.estimate_sqrt_cov_wav_from_enmap(
-            dmap[:, 0], mask_obs, self._lmax, self._mask_est, lamb=self._lamb,
+            dmap[:, 0], self._mask_obs, self._lmax, self._mask_est, lamb=self._lamb,
             smooth_loc=self._smooth_loc, fwhm_fact=self._fwhm_fact
         )
 
@@ -1410,7 +1443,7 @@ class WaveletNoiseModel(NoiseModel):
         return simio.get_wav_sim_fn(
             self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, self._fwhm_fact,
             sim_num, notes=self._notes, alm=alm, mask_obs=mask_obs, 
-            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
+            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
             kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
         )
@@ -1455,8 +1488,8 @@ class WaveletNoiseModel(NoiseModel):
 class FDWNoiseModel(NoiseModel):
 
     def __init__(self, *qids, data_model=None, calibrated=True, downgrade=1,
-                 lmax=None, mask_est=None, mask_version=None, mask_name=None,
-                 ivar_mask_obs_dict=None, mask_obs_name=None, cfact_dict=None,
+                 lmax=None, mask_version=None, mask_est=None, mask_est_name=None,
+                 mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
                  fwhm_ivar=None, notes=None, dtype=None,
                  lamb=1.6, n=36, p=2, fwhm_fact=2., **kwargs):
@@ -1479,31 +1512,31 @@ class FDWNoiseModel(NoiseModel):
         lmax : int, optional
             The bandlimit of the maps, by default None. If None, will be set to the 
             Nyquist limit of the pixelization. Note, this is twice the theoretical CAR
-            bandlimit, ie 180/wcs.wcs.cdelt[1].
+            bandlimit, ie 180/wcs.wcs.cdelt[1].mask_version : str, optional
+            The mask version folder name, by default None. If None, will first look in
+            config 'mnms' block, then block of default data model.
         mask_est : enmap.ndmap, optional
             Mask denoting data that will be used to determine the harmonic filter used
             in calls to NoiseModel.get_model(...), by default None. Whitens the data
             before estimating its variance. If provided, assumed properly downgraded
             into compatible wcs with internal NoiseModel operations. If None, will
-            load a mask according to the 'mask_version' and 'mask_name' kwargs.
-        mask_version : str, optional
-            The mask version folder name, by default None. If None, will first look in
-            config 'mnms' block, then block of default data model.
-        mask_name : str, optional
-            Name of mask file, by default None. This mask will be used as the mask_est (see
-            above) if mask_est is None. If mask_est is None and mask_name is None, a default
-            mask_est will be loaded from disk.
-        ivar_mask_obs_dict : dict, optional
-            A dictionary of ivar and mask_obs maps, indexed by split_num keys. If
-            provided, assumed properly downgraded into compatible wcs with internal 
-            NoiseModel operations, and with any additional preprocessing specified by
-            the model. 
+            load a mask according to the 'mask_version' and 'mask_est_name' kwargs.
+        mask_est_name : str, optional
+            Name of harmonic filter estimate mask file, by default None. This mask will
+            be used as the mask_est (see above) if mask_est is None. If mask_est is
+            None and mask_est_name is None, a default mask_est will be loaded from disk.
+        mask_obs : str, optional
+            Mask denoting data to include in building noise model step. If mask_obs=0
+            in any pixel, that pixel will not be modeled. Optionally used when drawing
+            a sim from a model to mask unmodeled pixels. If provided, assumed properly
+            downgraded into compatible wcs with internal NoiseModel operations.
         mask_obs_name : str, optional
             Name of observed mask file, by default None. This mask will be used as the
-            mask_obs (see above). If ivar_mask_obs_dict does not have an item under a given 
-            split_num in calls to NoiseModel.get_model(...) or NoiseModel.get_sim(...),
-            this mask file will be loaded from disk and stored in ivar_mask_obs_dict under
-            that split_num.
+            mask_obs (see above) if mask_obs is None. 
+        ivar_dict : dict, optional
+            A dictionary of inverse-variance maps, indexed by split_num keys. If
+            provided, assumed properly downgraded into compatible wcs with internal 
+            NoiseModel operations. 
         cfact_dict : dict, optional
             A dictionary of split correction factor maps, indexed by split_num keys. If
             provided, assumed properly downgraded into compatible wcs with internal 
@@ -1564,8 +1597,8 @@ class FDWNoiseModel(NoiseModel):
         """
         super().__init__(
             *qids, data_model=data_model, calibrated=calibrated, downgrade=downgrade,
-            lmax=lmax, mask_est=mask_est, mask_version=mask_version, mask_name=mask_name,
-            ivar_mask_obs_dict=ivar_mask_obs_dict, mask_obs_name=mask_obs_name, cfact_dict=cfact_dict,
+            lmax=lmax, mask_est=mask_est, mask_version=mask_version, mask_est_name=mask_est_name,
+            mask_obs=mask_obs, mask_obs_name=mask_obs_name, ivar_dict=ivar_dict, cfact_dict=cfact_dict,
             dmap_dict=dmap_dict, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
             fwhm_ivar=fwhm_ivar, notes=notes, dtype=dtype, **kwargs
             )
@@ -1595,7 +1628,7 @@ class FDWNoiseModel(NoiseModel):
         """Get a noise model filename for split split_num; return as <str>"""
         return simio.get_fdw_model_fn(
             self._qids, split_num, self._lamb, self._n, self._p, self._fwhm_fact, self._lmax, notes=self._notes,
-            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
+            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
             kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
         )
@@ -1612,10 +1645,10 @@ class FDWNoiseModel(NoiseModel):
             'sqrt_cov_k': sqrt_cov_k
             }
 
-    def _get_model(self, dmap, mask_obs=None, verbose=False, **kwargs):
+    def _get_model(self, dmap, verbose=False, **kwargs):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
         sqrt_cov_mat, sqrt_cov_k = fdw_noise.get_fdw_noise_covsqrt(
-            self._fk, dmap, mask_obs=mask_obs, mask_est=self._mask_est,
+            self._fk, dmap, mask_obs=self._mask_obs, mask_est=self._mask_est,
             fwhm_fact=self._fwhm_fact, nthread=0, verbose=verbose
         )
 
@@ -1635,7 +1668,7 @@ class FDWNoiseModel(NoiseModel):
         return simio.get_fdw_sim_fn(
             self._qids, split_num, self._lamb, self._n, self._p, self._fwhm_fact, self._lmax,
             sim_num, notes=self._notes, alm=alm, mask_obs=mask_obs, 
-            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_name=self._mask_name,
+            data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
             kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
         )
