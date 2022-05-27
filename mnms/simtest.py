@@ -2,7 +2,7 @@ from pixell import enmap, curvedsky, wcsutils
 from mnms import utils, tiled_ndmap
 
 import numpy as np
-from scipy import stats
+from scipy import stats, ndimage
 import matplotlib.pyplot as plt
 
 from tqdm import tqdm
@@ -203,7 +203,9 @@ def _plot_stats_hist_by_tile(clmap, mask=None, f_sky=0.5, mapidx=0, polidx=0, le
         else:
             plt.close()
 
-def get_Cl_ratio(data_map, sim_map, data_window=1, sim_window=1, ledges=None, lmax=6000, method='curvedsky', ylim=None, plot=True, show=False, save_path=None, tweak=False):
+def get_Cl_ratio(data_map, sim_map, mask_est=1, ledges=None, lmax=5400,
+                 binwidth=None, method='curvedsky', ylim=None, plot=True,
+                 show=False, save_path=None, tweak=False):
     """Returns the ratio of Cls for the two maps masked with the given window.
 
     Parameters
@@ -212,7 +214,7 @@ def get_Cl_ratio(data_map, sim_map, data_window=1, sim_window=1, ledges=None, lm
         The data map.
     sim_map : ndmap
         The simulated map to compare to the data map.
-    window : ndmap
+    mask_est : ndmap
         A common mask to apply to both maps.
     lmax : int, optional
         The maximum ell of the harmonic transform, by default 6000
@@ -233,11 +235,15 @@ def get_Cl_ratio(data_map, sim_map, data_window=1, sim_window=1, ledges=None, lm
     assert len(ledges) > 1
     ledges = np.array(ledges)
 
-    alm_data = curvedsky.map2alm(data_map*data_window, lmax=lmax, tweak=tweak)
-    alm_sim = curvedsky.map2alm(sim_map*sim_window, lmax=lmax, tweak=tweak)
+    alm_data = curvedsky.map2alm(data_map*mask_est, lmax=lmax, tweak=tweak)
+    alm_sim = curvedsky.map2alm(sim_map*mask_est, lmax=lmax, tweak=tweak)
 
     Cl_data = curvedsky.alm2cl(alm_data)
     Cl_sim = curvedsky.alm2cl(alm_sim)
+
+    if binwidth is not None:
+        ndimage.uniform_filter(Cl_data, size=binwidth, output=Cl_data, mode='nearest')
+        ndimage.uniform_filter(Cl_sim, size=binwidth, output=Cl_sim, mode='nearest')
 
     y_full = Cl_sim/Cl_data
     out = []

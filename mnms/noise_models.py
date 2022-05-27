@@ -249,6 +249,7 @@ class NoiseModel(ABC):
         # all True. Numpy understands in-place multiplication operation
         # even if mask_obs is python True to start
         mask_obs = self._get_mask_obs_from_disk(downgrade=False)
+        mask_obs_dg = True
 
         with bench.show('Generating observed-pixels mask'):
             for qid in self._qids:
@@ -263,6 +264,14 @@ class NoiseModel(ABC):
                     for idx in np.ndindex(*ivar.shape[:-2]):
                         mask_obs *= ivar[idx].astype(bool)
 
+                        if self._downgrade != 1:
+                            # use harmonic instead of interpolated downgrade because it is 
+                            # 10x faster
+                            ivar_dg = utils.fourier_downgrade_cc_quad(
+                                ivar[idx], self._downgrade
+                                )
+                            mask_obs_dg *= ivar_dg > 0
+
             mask_obs = utils.interpol_downgrade_cc_quad(
                 mask_obs, self._downgrade, dtype=self._dtype
                 )
@@ -271,6 +280,10 @@ class NoiseModel(ABC):
             # downgrade is all 1 -- this is the most conservative route in terms of 
             # excluding pixels that may not actually have nonzero ivar or data
             mask_obs = utils.get_mask_bool(mask_obs, threshold=1.)
+
+            # finally, need to layer on any ivars that may still be 0 that aren't yet
+            # masked
+            mask_obs *= mask_obs_dg
         
         return mask_obs
 
