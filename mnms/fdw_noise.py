@@ -847,7 +847,7 @@ def get_az_func(n, p, j):
     return w_phi
 
 def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1, 
-                           fwhm_fact=2, nthread=0, verbose=True):
+                          fwhm_fact=2, rad_filt=True, nthread=0, verbose=True):
     """Generate square-root covariance information for the signal in imap.
     The covariance matrix is assumed to be block-diagonal in wavelet kernels,
     neglecting correlations due to their overlap. Kernels are managed by 
@@ -906,43 +906,44 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
 
     imap = utils.atleast_nd(imap, 3)
     kmap = utils.rfft(imap * mask_obs, nthread=nthread)
-    
-    # first measure N_ell and get its square root. because we work in
-    # Fourier space, need to turn this into a callable for non-integer
-    # scales in order to perform flattening. 
-    # 
-    # NOTE: measuring through SHTs is fine, because just need
-    # approximate shape (and it will be a very close approximation
-    # to the shape using DFTs). It is nicer because we don't need to 
-    # use arbitrary bin sizes.
-    lmax_meas = utils.lmax_from_wcs(imap.wcs) 
-    pmap = enmap.pixsizemap(imap.shape, imap.wcs)
-    mask_est = np.broadcast_to(mask_est, imap.shape[-2:], subok=True)
-    w2 = np.sum((mask_est**2)*pmap) / np.pi / 4.   
-    sqrt_cov_ell = np.sqrt(
-        curvedsky.alm2cl(
-            utils.map2alm(imap * mask_est, lmax=lmax_meas, spin=0)
-            ) / w2
-    )
-    
-    # get filters over k, apply them
-    sqrt_cov_k = enmap.empty(kmap.shape, kmap.wcs, kmap.real.dtype)
-    modlmap = imap.modlmap().astype(imap.dtype, copy=False) # modlmap is np.float64 always...
-    modlmap = modlmap[..., :modlmap.shape[-1]//2+1] # need "real" modlmap
-    assert kmap.shape[-2:] == modlmap.shape, \
-        'kmap map shape and modlmap shape must match'
 
-    for preidx in np.ndindex(imap.shape[:-2]):
-        sqrt_cov_ell_func = interp1d(
-            np.arange(lmax_meas+1), sqrt_cov_ell[preidx], bounds_error=False, 
-            fill_value=(0, sqrt_cov_ell[(*preidx, -1)])
-            )
+    if rad_filt:
+        # first measure N_ell and get its square root. because we work in
+        # Fourier space, need to turn this into a callable for non-integer
+        # scales in order to perform flattening. 
+        # 
+        # NOTE: measuring through SHTs is fine, because just need
+        # approximate shape (and it will be a very close approximation
+        # to the shape using DFTs). It is nicer because we don't need to 
+        # use arbitrary bin sizes.
+        lmax_meas = utils.lmax_from_wcs(imap.wcs) 
+        pmap = enmap.pixsizemap(imap.shape, imap.wcs)
+        mask_est = np.broadcast_to(mask_est, imap.shape[-2:], subok=True)
+        w2 = np.sum((mask_est**2)*pmap) / np.pi / 4.   
+        sqrt_cov_ell = np.sqrt(
+            curvedsky.alm2cl(
+                utils.map2alm(imap * mask_est, lmax=lmax_meas, spin=0)
+                ) / w2
+        )
         
-        # interp1d returns as float64 always, but this recasts in assignment
-        sqrt_cov_k[preidx] = sqrt_cov_ell_func(modlmap)
-    
-    np.multiply(kmap, 0, out=kmap, where=sqrt_cov_k==0)
-    np.divide(kmap, sqrt_cov_k, out=kmap, where=sqrt_cov_k!=0)
+        # get filters over k, apply them
+        sqrt_cov_k = enmap.empty(kmap.shape, kmap.wcs, kmap.real.dtype)
+        modlmap = imap.modlmap().astype(imap.dtype, copy=False) # modlmap is np.float64 always...
+        modlmap = modlmap[..., :modlmap.shape[-1]//2+1] # need "real" modlmap
+        assert kmap.shape[-2:] == modlmap.shape, \
+            'kmap map shape and modlmap shape must match'
+
+        for preidx in np.ndindex(imap.shape[:-2]):
+            sqrt_cov_ell_func = interp1d(
+                np.arange(lmax_meas+1), sqrt_cov_ell[preidx], bounds_error=False, 
+                fill_value=(0, sqrt_cov_ell[(*preidx, -1)])
+                )
+            
+            # interp1d returns as float64 always, but this recasts in assignment
+            sqrt_cov_k[preidx] = sqrt_cov_ell_func(modlmap)
+        
+        np.multiply(kmap, 0, out=kmap, where=sqrt_cov_k==0)
+        np.divide(kmap, sqrt_cov_k, out=kmap, where=sqrt_cov_k!=0)
 
     # get model
     wavs = fdw_kernels.k2wav(kmap, nthread=nthread)
@@ -975,10 +976,13 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
             (*wmap2.shape[:-1], *wmap.shape[-2:])
             )
 
-    return sqrt_cov_wavs, sqrt_cov_k
+    if rad_filt:
+        return sqrt_cov_wavs, sqrt_cov_k
+    else:
+        return sqrt_cov_wavs
 
 def get_fdw_noise_sim(fdw_kernels, sqrt_cov_wavs, preshape=None,
-                       sqrt_cov_k=None, seed=None, nthread=0, verbose=True):
+                      sqrt_cov_k=None, seed=None, nthread=0, verbose=True):
     """Draw a Guassian realization from the covariance corresponding to
     the square-root covariance wavelet maps in sqrt_cov_wavs.
 
@@ -1127,6 +1131,7 @@ def read_wavs(fname, extra_attrs=None, extra_datasets=None):
     with h5py.File(fname, 'r') as hfile:
 
         wavs = {}
+        extra_datasets_dict = {}
         for ikey, iset in hfile.items():
 
             imap = np.empty(iset.shape, iset.dtype)
@@ -1140,26 +1145,28 @@ def read_wavs(fname, extra_attrs=None, extra_datasets=None):
                 wcs = pywcs.WCS(header)
                 imap = enmap.ndmap(imap, wcs)
 
-            try:
+            try: # look for numeric style key
                 ikey = tuple([int(i) for i in ikey.split('_')])
-            except ValueError:
+                if len(ikey) == 1:
+                    ikey = ikey[0]
+                wavs[ikey] = imap
+            except ValueError: # otherwise it's extra
                 ikey = str(ikey)
-            # revert scalar keys to singleton (not tuple)
-            if len(ikey) == 1:
-                ikey = ikey[0]
-            wavs[ikey] = imap
+                extra_datasets_dict[ikey] = imap
 
         extra_attrs_dict = {}
         if extra_attrs is not None:
             for k in extra_attrs:
                 extra_attrs_dict[k] = hfile.attrs[k]
 
-        # any extra maps will have already been loaded into wavs, so 
-        # need to pop them out
-        extra_datasets_dict = {}
-        if extra_datasets is not None:
-            for k in extra_datasets:
-                extra_datasets_dict[k] = wavs.pop(k)
+        # any extra maps will have already been loaded into extra_datasets_dict
+        # so, if not requested, need to delete them out
+        if extra_datasets is None:
+            extra_datasets = {}
+        # get copy of keys so can delete while iterating
+        for k in list(extra_datasets_dict.keys()):
+            if k not in extra_datasets:
+                del extra_datasets_dict[k]
 
     # return
     if extra_attrs_dict == {} and extra_datasets_dict == {}:
