@@ -69,4 +69,4 @@ for s in splits:
     for m in maps:
         model.get_sim(s, m, alm=args.alm, write=True, verbose=True)
     model.delete_model(s)
-    model.delete_ivar_mask_obs(s)
+    model.delete_ivar(s)
