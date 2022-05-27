@@ -74,8 +74,26 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask_obs=None, mask_est=None, width
         imap *= np.sqrt(ivar)
 
     if mask_obs is None:
-        mask_obs = np.array([1])
-    mask_obs = mask_obs.astype(imap.dtype, copy=False)
+        mask_obs = np.array([1], dtype=imap.dtype)
+    else:
+        # the degrees per pixel, from the wcs
+        pix_deg_x, pix_deg_y = np.abs(imap.wcs.wcs.cdelt)
+        
+        # the pixels per apodization width. need to instatiate tiled_ndmap
+        # just to get apod width
+        imap = tiled_ndmap(imap, width_deg=width_deg, height_deg=height_deg)
+        pix_cross_x, pix_cross_y = imap.pix_cross_x, imap.pix_cross_y
+        imap = imap.to_ndmap()
+        width_deg_x, width_deg_y = pix_deg_x*pix_cross_x, pix_deg_y*pix_cross_y
+
+        # apodization width
+        width_deg_apod = np.sqrt((width_deg_x**2 + width_deg_y**2)/2)
+
+        # get apodized mask_obs
+        mask_obs = mask_obs.astype(bool, copy=False)
+        mask_obs = utils.cosine_apodize(mask_obs, width_deg_apod)
+        mask_obs = mask_obs.astype(imap.dtype, copy=False)
+
     if mask_est is None:
         mask_est = mask_obs
     if lmax is None:
