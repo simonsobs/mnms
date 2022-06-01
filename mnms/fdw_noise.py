@@ -872,6 +872,9 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
         Factor determining smoothing scale at each wavelet scale:
         FWHM = fact * pi / lmax, where lmax is the max wavelet ell., 
         by default 2
+    rad_filt : bool, optional
+        Whether to measure and apply a radial (Fourier) filter to map prior
+        to wavelet transform, by default True.
     nthread : int, optional
         Number of concurrent threads, by default 0. If 0, the result
         of mnms.utils.get_cpu_count()., by default 0.
@@ -880,11 +883,11 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
 
     Returns
     -------
-    dict, np.ndarray
+    dict, [np.ndarray]
         A dictionary holding wavelet maps of the square-root covariance, 
-        indexed by the wavelet key (radial index, azimuthal index). An
-        array of the same shape as the real Fourier transform of imap 
-        giving the square root signal power spectrum in Fourier space.
+        indexed by the wavelet key (radial index, azimuthal index). If
+        rad_filt, an array of the same shape as the real Fourier transform
+        of imap giving the square root signal power spectrum in Fourier space.
 
     Notes
     -----
@@ -899,6 +902,7 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
             f'Map shape: {imap.shape}\n'
             f'Num kernels: {len(fdw_kernels.kernels)}\n'
             f'Smoothing factor: {fwhm_fact}'
+            f'Radial filtering: {rad_filt}\n'
             )
 
     mask_obs = np.asanyarray(mask_obs, dtype=imap.dtype)

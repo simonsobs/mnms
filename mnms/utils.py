@@ -594,7 +594,7 @@ def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0
             lfilter = lfilter(np.arange(lmax+1)).astype(imap.dtype)
         
         # alm_c_utils.lmul cannot blindly broadcast filters and alms
-        lfilter = np.broadcast_to(lfilter, (*imap.shape[:-2], lfilter.shape[-1]))
+        lfilter = np.broadcast_to(lfilter[..., :lmax+1], (*imap.shape[:-2], lmax+1))
 
         # perform the filter
         alm = map2alm(imap, ainfo=ainfo, lmax=lmax, tweak=tweak)
