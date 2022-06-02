@@ -7,7 +7,7 @@ This codebase is under active-development -- we can't guarantee future commits w
 ## Dependencies
 Users wishing to filter data or generate noise simulations should have the following dependencies in their environment:
 * from `simonsobs`: `pixell`, `soapack`
-* from individuals: [`enlib`](https://github.com/amaurea/enlib), [`optweight`](https://github.com/AdriJD/optweight), [`orphics`](https://github.com/msyriac/orphics) 
+* from individuals: [`enlib`](https://github.com/amaurea/enlib), [`optweight`](https://github.com/AdriJD/optweight)
 * less-common distributions: `numba`
 * optional but good idea to have: `mpi4py`, `tqdm`
 
