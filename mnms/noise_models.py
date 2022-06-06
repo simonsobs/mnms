@@ -800,7 +800,8 @@ class NoiseModel(ABC):
             for i, qid in enumerate(self._qids):
                 fn = simio.get_sim_mask_fn(
                     qid, self._data_model, use_default_mask=self._use_default_mask,
-                    mask_version=self._mask_version, mask_name=self._mask_est_name, **self._kwargs
+                    mask_version=self._mask_version, mask_name=self._mask_est_name,
+                    **self._kwargs
                 )
                 mask = enmap.read_map(fn).astype(self._dtype, copy=False)
 

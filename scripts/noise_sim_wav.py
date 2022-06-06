@@ -11,8 +11,8 @@ parser.add_argument('--mask-version', dest='mask_version', type=str,
                     default=None, help='Look in mnms:mask_path/mask_version/ '
                     'for mask')
 
-parser.add_argument('--mask-name', dest='mask_name', type=str, default=None,
-                    help='Load mnms:mask_path/mask_version/mask_name.fits')
+parser.add_argument('--mask-est-name', dest='mask_est_name', type=str, default=None,
+                    help='Load mnms:mask_path/mask_version/mask_est_name.fits')
 
 parser.add_argument('--mask-obs-name', dest='mask_obs_name', type=str, default=None,
                     help='Load mnms:mask_path/mask_version/mask_obs_name.fits')
@@ -73,7 +73,6 @@ parser.add_argument('--maps-step', dest='maps_step', type=int, default=1,
 
 parser.add_argument('--map', dest='alm', default=True, 
                     action='store_false', help='Generate simulated maps instead of alms.')
-
 args = parser.parse_args()
 
 if args.data_model:
@@ -83,7 +82,7 @@ else:
     
 model = nm.WaveletNoiseModel(
     *args.qid, data_model=data_model, downgrade=args.downgrade, lmax=args.lmax, mask_version=args.mask_version,
-    mask_name=args.mask_name, mask_obs_name=args.mask_obs_name, union_sources=args.union_sources,
+    mask_est_name=args.mask_est_name, mask_obs_name=args.mask_obs_name, union_sources=args.union_sources,
     kfilt_lbounds=args.kfilt_lbounds, notes=args.notes,
     lamb=args.lamb, smooth_loc=args.smooth_loc, fwhm_fact=args.fwhm_fact)
 
