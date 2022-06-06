@@ -494,6 +494,10 @@ class KernelFactory:
         # the corners of fourier space, which are "beyond" lmax
         assert w_ells[-1, -1] == 1, \
             'radial kernels clipped, please adjust inputs (e.g. increase lmax)'
+
+        # cap lmax (for smoothing purposes) at lmax of pixelization
+        lmax_pixelization = utils.lmax_from_wcs(wcs)
+        lmaxs[lmaxs > lmax_pixelization] = lmax_pixelization
         self._lmaxs = lmaxs
 
         # in one go, we are going to get rad funcs, rad_kerns (sliced), 

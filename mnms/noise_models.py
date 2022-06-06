@@ -1733,6 +1733,7 @@ class WavFiltTile(NoiseModel):
         # 5. use corr_fact to get sim
 
 
+@register()
 class Interface(NoiseModel):
 
     def __init__(self, *qids, data_model=None, calibrated=True, downgrade=1,
