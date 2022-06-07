@@ -1266,8 +1266,8 @@ class TiledNoiseModel(NoiseModel):
     def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num; return as <str>"""
         return simio.get_tiled_sim_fn(
-            self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax,
-            split_num, sim_num, notes=self._notes, alm=alm, mask_obs=mask_obs, 
+            self._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, self._lmax, split_num,
+            sim_num, notes=self._notes, alm=alm, mask_obs=mask_obs, 
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
             kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
@@ -1306,7 +1306,7 @@ class WaveletNoiseModel(NoiseModel):
                  mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
                  fwhm_ivar=None, notes=None, dtype=None,
-                 lamb=1.3, smooth_loc=False, fwhm_fact=2, **kwargs):
+                 lamb=1.3, smooth_loc=False, fwhm_fact=16., fwhm_pivot=1000, **kwargs):
         """A WaveletNoiseModel object supports drawing simulations which capture scale-dependent, 
         spatially-varying map depth. They also capture the total noise power spectrum, and 
         array-array correlations.
@@ -1381,6 +1381,10 @@ class WaveletNoiseModel(NoiseModel):
         fwhm_fact : float, optional
             Factor determining smoothing scale at each wavelet scale:
             FWHM = fact * pi / lmax, where lmax is the max wavelet ell.
+        fwhm_pivot : int, optional
+            Above this scale, use fwhm_fact for each wavelet. Between
+            0 and fwhm_pivot, linearly interpolate from 2 to fwhm_fact.
+            By default 1000. 
         kwargs : dict, optional
             Optional keyword arguments to pass to simio.get_sim_mask_fn (currently just
             'galcut' and 'apod_deg'), by default None.
@@ -1411,11 +1415,12 @@ class WaveletNoiseModel(NoiseModel):
         self._lamb = lamb
         self._smooth_loc = smooth_loc
         self._fwhm_fact = fwhm_fact
+        self._fwhm_pivot = fwhm_pivot
 
     def _get_model_fn(self, split_num):
         """Get a noise model filename for split split_num; return as <str>"""
         return simio.get_wav_model_fn(
-            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, self._fwhm_fact, notes=self._notes, 
+            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, self._fwhm_fact, self._fwhm_pivot, notes=self._notes, 
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
             kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
@@ -1436,7 +1441,7 @@ class WaveletNoiseModel(NoiseModel):
         # method assumes 4d dmap
         sqrt_cov_mat, sqrt_cov_ell, w_ell = wav_noise.estimate_sqrt_cov_wav_from_enmap(
             dmap[:, 0], self._mask_obs, self._lmax, self._mask_est, lamb=self._lamb,
-            smooth_loc=self._smooth_loc, fwhm_fact=self._fwhm_fact
+            smooth_loc=self._smooth_loc, fwhm_fact=self._fwhm_fact, fwhm_pivot=self._fwhm_pivot
         )
 
         return {
@@ -1455,7 +1460,7 @@ class WaveletNoiseModel(NoiseModel):
     def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num; return as <str>"""
         return simio.get_wav_sim_fn(
-            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, self._fwhm_fact,
+            self._qids, split_num, self._lamb, self._lmax, self._smooth_loc, self._fwhm_fact, self._fwhm_pivot,
             sim_num, notes=self._notes, alm=alm, mask_obs=mask_obs, 
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
@@ -1506,7 +1511,7 @@ class FDWNoiseModel(NoiseModel):
                  mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
                  fwhm_ivar=None, notes=None, dtype=None,
-                 lamb=1.6, n=36, p=2, fwhm_fact=2., **kwargs):
+                 lamb=1.6, n=36, p=2, fwhm_fact=10., fwhm_pivot=1000,**kwargs):
         """An FDWNoiseModel object supports drawing simulations which capture direction- 
         and scale-dependent, spatially-varying map depth. The simultaneous direction- and
         scale-sensitivity is achieved through steerable wavelet kernels in Fourier space.
@@ -1586,6 +1591,10 @@ class FDWNoiseModel(NoiseModel):
         fwhm_fact : float, optional
             Factor determining smoothing scale at each wavelet scale:
             FWHM = fact * pi / lmax, where lmax is the max wavelet ell.
+        fwhm_pivot : int, optional
+            Above this scale, use fwhm_fact for each wavelet. Between
+            0 and fwhm_pivot, linearly interpolate from 2 to fwhm_fact.
+            By default 1000. 
         kwargs : dict, optional
             Optional keyword arguments to pass to simio.get_sim_mask_fn (currently just
             'galcut' and 'apod_deg'), by default None.
@@ -1622,6 +1631,7 @@ class FDWNoiseModel(NoiseModel):
         self._n = n
         self._p = p
         self._fwhm_fact = fwhm_fact      
+        self._fwhm_pivot = fwhm_pivot
 
         # build the kernels.
         #
@@ -1641,7 +1651,7 @@ class FDWNoiseModel(NoiseModel):
     def _get_model_fn(self, split_num):
         """Get a noise model filename for split split_num; return as <str>"""
         return simio.get_fdw_model_fn(
-            self._qids, split_num, self._lamb, self._n, self._p, self._fwhm_fact, self._lmax, notes=self._notes,
+            self._qids, split_num, self._lamb, self._n, self._p, self._fwhm_fact, self._fwhm_pivot, self._lmax, notes=self._notes,
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,
             kfilt_lbounds=self._kfilt_lbounds, fwhm_ivar=self._fwhm_ivar, **self._kwargs
@@ -1663,7 +1673,7 @@ class FDWNoiseModel(NoiseModel):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
         sqrt_cov_mat, sqrt_cov_k = fdw_noise.get_fdw_noise_covsqrt(
             self._fk, dmap, mask_obs=self._mask_obs, mask_est=self._mask_est,
-            fwhm_fact=self._fwhm_fact, nthread=0, verbose=verbose
+            fwhm_fact=self._fwhm_fact, fwhm_pivot=self._fwhm_pivot, nthread=0, verbose=verbose
         )
 
         return {
@@ -1680,7 +1690,7 @@ class FDWNoiseModel(NoiseModel):
     def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
         return simio.get_fdw_sim_fn(
-            self._qids, split_num, self._lamb, self._n, self._p, self._fwhm_fact, self._lmax,
+            self._qids, split_num, self._lamb, self._n, self._p, self._fwhm_fact, self._fwhm_pivot, self._lmax,
             sim_num, notes=self._notes, alm=alm, mask_obs=mask_obs, 
             data_model=self._data_model, mask_version=self._mask_version, bin_apod=self._use_default_mask, mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name, calibrated=self._calibrated, downgrade=self._downgrade, union_sources=self._union_sources,

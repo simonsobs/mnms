@@ -118,7 +118,7 @@ def get_tiled_sim_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, split_n
     fn += f'{mapalm}{str(sim_num).zfill(4)}.fits'
     return fn
 
-def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, notes=None, **kwargs):
+def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, fwhm_pivot, notes=None, **kwargs):
     """
     Determine filename for square-root wavelet covariance file.
 
@@ -137,6 +137,9 @@ def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, notes=No
         smaller along edge of mask.
     fwhm_fact : float
         Factor specifying smoothing FWHM per wavelet.
+    fwhm_pivot : int
+        Above this scale, use fwhm_fact for each wavelet. Between
+        0 and fwhm_pivot, linearly interpolate from 2 to fwhm_fact.
 
     Returns
     -------
@@ -169,10 +172,10 @@ def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, notes=No
     else:
         notes = f'_{notes}'
         
-    fn += f'lamb{lamb}{fwhm_str}_lmax{lmax}{smooth_loc}{notes}_set{split_num}.hdf5'
+    fn += f'lamb{lamb}{fwhm_str}_fwhm_pivot{fwhm_pivot}_lmax{lmax}{smooth_loc}{notes}_set{split_num}.hdf5'
     return fn
     
-def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, sim_num, alm=False,
+def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, fwhm_pivot, sim_num, alm=False,
                    mask_obs=True, notes=None, **kwargs):
     """
     Determine filename for simulated noise map.
@@ -192,6 +195,9 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, sim_num, a
         smaller along edge of mask.
     fwhm_fact : float
         Factor specifying smoothing FWHM per wavelet.
+    fwhm_pivot : int
+        Above this scale, use fwhm_fact for each wavelet. Between
+        0 and fwhm_pivot, linearly interpolate from 2 to fwhm_fact.
     sim_num : int
         Simulation number.
     alm : bool
@@ -235,14 +241,14 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, sim_num, a
     else:
         notes = f'_{notes}'
     
-    fn += f'lamb{lamb}{fwhm_str}_{mask_obs_str}lmax{lmax}{smooth_loc}{notes}_set{split_num}_'
+    fn += f'lamb{lamb}{fwhm_str}_fwhm_pivot{fwhm_pivot}_{mask_obs_str}lmax{lmax}{smooth_loc}{notes}_set{split_num}_'
 
     # prepare map num tags
     mapalm = 'alm' if alm else 'map'
     fn += f'{mapalm}{str(sim_num).zfill(4)}.fits'
     return fn
 
-def get_fdw_model_fn(qid, split_num, lamb, n, p, fwhm_fact, lmax, notes=None, **kwargs):
+def get_fdw_model_fn(qid, split_num, lamb, n, p, fwhm_fact, fwhm_pivot, lmax, notes=None, **kwargs):
     """
     Determine filename for square-root wavelet covariance file.
 
@@ -260,6 +266,9 @@ def get_fdw_model_fn(qid, split_num, lamb, n, p, fwhm_fact, lmax, notes=None, **
         The locality parameter of each azimuthal kernel.
     fwhm_fact : float
         Factor specifying smoothing FWHM per wavelet.
+    fwhm_pivot : int
+        Above this scale, use fwhm_fact for each wavelet. Between
+        0 and fwhm_pivot, linearly interpolate from 2 to fwhm_fact.
     lmax : int
         Max multipole.
 
@@ -282,10 +291,10 @@ def get_fdw_model_fn(qid, split_num, lamb, n, p, fwhm_fact, lmax, notes=None, **
     else:
         notes = f'_{notes}'
         
-    fn += f'lamb{lamb}_n{n}_p{p}_fwhm_fact{fwhm_fact}_lmax{lmax}{notes}_set{split_num}.hdf5'
+    fn += f'lamb{lamb}_n{n}_p{p}_fwhm_fact{fwhm_fact}_fwhm_pivot{fwhm_pivot}_lmax{lmax}{notes}_set{split_num}.hdf5'
     return fn
 
-def get_fdw_sim_fn(qid, split_num, lamb, n, p, fwhm_fact, lmax, sim_num, alm=False,
+def get_fdw_sim_fn(qid, split_num, lamb, n, p, fwhm_fact, fwhm_pivot, lmax, sim_num, alm=False,
                    mask_obs=True, notes=None, **kwargs):
     """
     Determine filename for simulated noise map.
@@ -304,6 +313,9 @@ def get_fdw_sim_fn(qid, split_num, lamb, n, p, fwhm_fact, lmax, sim_num, alm=Fal
         The locality parameter of each azimuthal kernel.
     fwhm_fact : float
         Factor specifying smoothing FWHM per wavelet.
+    fwhm_pivot : int
+        Above this scale, use fwhm_fact for each wavelet. Between
+        0 and fwhm_pivot, linearly interpolate from 2 to fwhm_fact.
     lmax : int
         Max multipole.
     sim_num : int
@@ -337,7 +349,7 @@ def get_fdw_sim_fn(qid, split_num, lamb, n, p, fwhm_fact, lmax, sim_num, alm=Fal
     else:
         notes = f'_{notes}'
     
-    fn += f'lamb{lamb}_n{n}_p{p}_fwhm_fact{fwhm_fact}_{mask_obs_str}lmax{lmax}{notes}_set{split_num}_'
+    fn += f'lamb{lamb}_n{n}_p{p}_fwhm_fact{fwhm_fact}_fwhm_pivot{fwhm_pivot}_{mask_obs_str}lmax{lmax}{notes}_set{split_num}_'
 
     # prepare map num tags
     mapalm = 'alm' if alm else 'map'

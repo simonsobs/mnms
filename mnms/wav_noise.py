@@ -89,7 +89,8 @@ def rand_enmap_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, mask, lmax, w_ell,
     return utils.alm2map(alm, shape=mask.shape, wcs=mask.wcs, dtype=dtype, ainfo=ainfo)
 
 def estimate_sqrt_cov_wav_from_enmap(imap, mask_obs, lmax, mask_est, lamb=1.3,
-                                     smooth_loc=False, fwhm_fact=2):
+                                     smooth_loc=False, fwhm_fact=2,
+                                     fwhm_pivot=1000):
     """
     Estimate wavelet-based covariance matrix given noise enmap.
 
@@ -112,6 +113,10 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_obs, lmax, mask_est, lamb=1.3,
     fwhm_fact : float, optional
         Factor determining smoothing scale at each wavelet scale:
         FWHM = fact * pi / lmax, where lmax is the max wavelet ell.
+    fwhm_pivot : int, optional
+        Above this scale, use fwhm_fact for each wavelet. Between
+        0 and fwhm_pivot, linearly interpolate from 2 to fwhm_fact.
+        By default 1000. 
 
     Returns
     -------
@@ -186,7 +191,8 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_obs, lmax, mask_est, lamb=1.3,
                                            dtype=type_utils.to_real(alm_obs.dtype))
     cov_wav = noise_utils.estimate_cov_wav(alm_obs, ainfo, w_ell, [0, 2], diag=False,
                                            features=features, minfo_features=minfo_features,
-                                           wav_template=wav_template, fwhm_fact=fwhm_fact)
+                                           wav_template=wav_template, fwhm_fact=fwhm_fact,
+                                           fwhm_pivot=fwhm_pivot)
     sqrt_cov_wav = mat_utils.wavmatpow(cov_wav, 0.5, return_diag=True, axes=[[0,1], [2,3]],
                                         inplace=True)
 

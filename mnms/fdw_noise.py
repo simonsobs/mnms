@@ -10,6 +10,8 @@ import astropy.wcs as pywcs
 import h5py
 
 
+FWHM_FACT_0 = 2
+
 class FDWKernels:
 
     def __init__(self, lamb, lmax, lmin, lmax_j, n, p, shape, wcs,
@@ -851,7 +853,8 @@ def get_az_func(n, p, j):
     return w_phi
 
 def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1, 
-                          fwhm_fact=2, rad_filt=True, nthread=0, verbose=True):
+                          fwhm_fact=2, fwhm_pivot=1000, rad_filt=True,
+                          nthread=0, verbose=True):
     """Generate square-root covariance information for the signal in imap.
     The covariance matrix is assumed to be block-diagonal in wavelet kernels,
     neglecting correlations due to their overlap. Kernels are managed by 
@@ -875,7 +878,11 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
     fwhm_fact : int, optional
         Factor determining smoothing scale at each wavelet scale:
         FWHM = fact * pi / lmax, where lmax is the max wavelet ell., 
-        by default 2
+        by default 2.
+    fwhm_pivot : int, optional
+        Above this scale, use fwhm_fact for each wavelet. Between
+        0 and fwhm_pivot, linearly interpolate from 2 to fwhm_fact.
+        By default 1000. 
     rad_filt : bool, optional
         Whether to measure and apply a radial (Fourier) filter to map prior
         to wavelet transform, by default True.
@@ -964,8 +971,16 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
         wmap2 /= fdw_kernels.mean_sqs[idx]
         wmap2 = enmap.ndmap(wmap2, wmap.wcs)
 
+        # get fwhm_fact(l) callable
+        def _fwhm_fact(l):
+            if 0 <= l and l < fwhm_pivot:
+                return FWHM_FACT_0 + l * (fwhm_fact - FWHM_FACT_0) / fwhm_pivot
+            else:
+                return fwhm_fact
+
         # smooth them
-        fwhm = fwhm_fact * np.pi / fdw_kernels.lmaxs[idx]
+        _lmax = fdw_kernels.lmaxs[idx]
+        fwhm = _fwhm_fact(_lmax) * np.pi / _lmax
         utils.smooth_gauss(wmap2, fwhm, method='map', mode=['constant', 'wrap'])
         
         # raise to 0.5 power. need to do some reshaping to allow use of
