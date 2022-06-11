@@ -578,7 +578,7 @@ class NoiseModel(ABC):
         # get the conservative mask for estimating the harmonic filter used to whiten
         # the difference map
         if self._mask_est is None:
-            self._mask_est = self.get_mask_est(min_threshold=1e-4)
+            self._mask_est = self.get_mask_est()
 
         # get the observed-pixels mask
         if self._mask_obs is None:
@@ -784,7 +784,7 @@ class NoiseModel(ABC):
         return inpaint.inpaint_noise_catalog(imap, ivar, mask_bool, catalog, inplace=inplace, 
                                              seed=seed)
 
-    def get_mask_est(self, min_threshold=1e-3, max_threshold=1.):
+    def get_mask_est(self, min_threshold=1e-4, max_threshold=1.):
         """Load the data mask from disk according to instance attributes.
 
         Returns

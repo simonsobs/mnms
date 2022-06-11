@@ -203,81 +203,189 @@ def _plot_stats_hist_by_tile(clmap, mask=None, f_sky=0.5, mapidx=0, polidx=0, le
         else:
             plt.close()
 
-def get_Cl_ratio(data_map, sim_map, mask_est=1, ledges=None, lmax=5400,
-                 binwidth=None, method='curvedsky', ylim=None, plot=True,
-                 show=False, save_path=None, tweak=False):
-    """Returns the ratio of Cls for the two maps masked with the given window.
+def get_cl_diffs(data_maps, sim_maps, mask_est_data=1, mask_est_sim=1, 
+                 lmax=None, mean_ledges=None, data_mean_axis=None, 
+                 sim_mean_axis=None, axis_labels=None,  binwidth=None, 
+                 ylim_auto=None, ylim_cross=None, show=False, save_path=None,
+                 tweak=False):
+    """Get comparisons of power spectra in data and sims. Other than an axis
+    to average over, data and sims must have the same components (but not
+    map shapes). Given those components, generates all auto- and cross-spectra
+    for data and sims separately. Then, for auto-spectra, generates spectra
+    ratio plots (sim / data); for cross-spectra, generates correlation 
+    difference plots (sim - data).
 
     Parameters
     ----------
-    data_map : ndmap
-        The data map.
-    sim_map : ndmap
-        The simulated map to compare to the data map.
-    mask_est : ndmap
-        A common mask to apply to both maps.
+    data_maps : (..., ny, nx) enmap.ndmap
+        Data maps. One axis may be identified for averaging over.
+    sim_maps : (..., ny, nx) enmap.ndmap
+        Data maps. One axis may be identified for averaging over. Other than
+        averaging axis and map shape, must have same shape as data_maps.
+    mask_est_data : (ny, nx) enmap.ndmap, optional
+        An apodization mask for the data maps, by default 1.
+    mask_est_sim : (ny, nx) enmap.ndmap, optional
+        An apodization mask for the sim maps, by default 1.
     lmax : int, optional
-        The maximum ell of the harmonic transform, by default 6000
-    plot : bool, optional
-        Whether to generate a plot of the ratio vs ell, by default True
+        Bandlimit of comparison, by default None. If None, data_maps and
+        sim_maps must have same ring spacing in wcs, and lmax set to 
+        bandlimit of that wcs.
+    mean_ledges : [low, high), optional
+        Bandpass over which to evaluate averages, by default None. If None, set
+        to [0, lmax).
+    data_mean_axis : int, optional
+        Axis in data_maps to average spectra over, by default None.
+    sim_mean_axis : int, optional
+        Axis in sim_maps to average spectra over, by default None.
+    axis_labels : iterable of iterables, optional
+        For axes not in mean axes or map axes, labels to assign to each
+        component, by default None.
+    binwidth : int, optional
+        Width in ell to take uniform sliding tophat over, by default None.
+    ylim_auto : (low, high), optional
+        Limits of y-axis for power spectra ratio plots, by default None.
+    ylim_cross : (low, high), optional
+        Limits of y-axis for correlation difference plots, by default None.
     show : bool, optional
-        Whether to show the plot, by default False
+        Whether to send plot to screen, by default False.
     save_path : path-like, optional
-        If provided, saves the plot to the path, by default None
+        Filename of plots, by default None. If None, plot is not saved.
+    tweak : bool, optional
+        To pass to utils.map2alm, by default False.
 
     Returns
     -------
-    float
-        The mean of the ratio (sim/data)
+    dict
+        The power spectra ratios and correlation differences, indexed by 
+        component pairs.
     """
-    if ledges is None:
-        ledges = [0, lmax]
-    assert len(ledges) > 1
-    ledges = np.array(ledges)
+    # make data maps and sim maps at least 3d to take spinny SHT
+    data_maps = np.asanyarray(data_maps)
+    sim_maps = np.asanyarray(sim_maps)
+    data_maps = utils.atleast_nd(data_maps, 3)
+    sim_maps = utils.atleast_nd(sim_maps, 3)
 
-    alm_data = curvedsky.map2alm(data_map*mask_est, lmax=lmax, tweak=tweak)
-    alm_sim = curvedsky.map2alm(sim_map*mask_est, lmax=lmax, tweak=tweak)
+    data_pmap = enmap.pixsizemap(mask_est_data.shape, mask_est_data.wcs)
+    data_w2 = np.sum((mask_est_data**2)*data_pmap) / np.pi / 4.
 
-    Cl_data = curvedsky.alm2cl(alm_data)
-    Cl_sim = curvedsky.alm2cl(alm_sim)
+    sim_pmap = enmap.pixsizemap(mask_est_sim.shape, mask_est_sim.wcs)
+    sim_w2 = np.sum((mask_est_sim**2)*sim_pmap) / np.pi / 4.
 
+    if lmax is None:
+        lmax = utils.lmax_from_wcs(data_maps.wcs)
+        assert lmax == utils.lmax_from_wcs(sim_maps.wcs)
+
+    if mean_ledges is None:
+        mean_ledges = [0, lmax]
+    assert len(mean_ledges) == 2
+
+    # move mean axis to 0'th index
+    if data_mean_axis is None:
+        data_maps = data_maps[None]
+        data_mean_axis = 0
+    data_maps = np.moveaxis(data_maps, data_mean_axis, 0)
+    ndata = len(data_maps)
+    
+    if sim_mean_axis is None:
+        sim_maps = sim_maps[None]
+        sim_mean_axis = 0
+    sim_maps = np.moveaxis(sim_maps, sim_mean_axis, 0)
+    nsim = len(sim_maps)
+
+    preshape = data_maps.shape[1:-2]
+    assert preshape == sim_maps.shape[1:-2]
+
+    if axis_labels is None:
+        axis_labels = [range(d) for d in preshape]
+    for i, d in enumerate(preshape):
+        assert len(axis_labels[i]) == d
+
+    # get all autos and crosses
+    data_y = {}
+    for data_map in data_maps:
+        data_alm = utils.map2alm(data_map * mask_est_data, lmax=lmax, tweak=tweak)
+
+        for preidx1 in np.ndindex(preshape):
+            for preidx2 in np.ndindex(preshape):
+                if (preidx2, preidx1) in data_y and preidx2 != preidx1:
+                    continue
+                if (preidx1, preidx2) not in data_y:
+                    data_y[(preidx1, preidx2)] = 0
+                data_y[(preidx1, preidx2)] += curvedsky.alm2cl(data_alm[preidx1], data_alm[preidx2]) / ndata / data_w2
+
+    sim_y = {}
+    for sim_map in sim_maps:
+        sim_alm = utils.map2alm(sim_map * mask_est_sim, lmax=lmax, tweak=tweak)
+
+        for preidx1 in np.ndindex(preshape):
+            for preidx2 in np.ndindex(preshape):
+                if (preidx2, preidx1) in sim_y and preidx2 != preidx1:
+                    continue
+                if (preidx1, preidx2) not in sim_y:
+                    sim_y[(preidx1, preidx2)] = 0
+                sim_y[(preidx1, preidx2)] += curvedsky.alm2cl(sim_alm[preidx1], sim_alm[preidx2]) / nsim / sim_w2
+
+    # smooth averages
     if binwidth is not None:
-        ndimage.uniform_filter(Cl_data, size=binwidth, output=Cl_data, mode='nearest')
-        ndimage.uniform_filter(Cl_sim, size=binwidth, output=Cl_sim, mode='nearest')
+        for v in data_y.values():
+           ndimage.uniform_filter(v, size=binwidth, output=v, mode='nearest') 
+        for v in sim_y.values():
+           ndimage.uniform_filter(v, size=binwidth, output=v, mode='nearest')
 
-    y_full = Cl_sim/Cl_data
-    out = []
+    out = {}
+    for preidx1 in np.ndindex(preshape):
+        for preidx2 in np.ndindex(preshape):
+            if (preidx2, preidx1) in out:
+                continue
 
-    # filter by ell for each pair of ell edges
-    for i in range(len(ledges)-1):
-        lmin = ledges[i]
-        lmax = ledges[i+1] 
-        y = y_full[lmin:lmax+1] # go up to *and include* lmax
-        x = np.linspace(lmin, lmax, len(y))
-        bias = np.where(x > 1/2, (2*x+1)/(2*x-1), 1)
+            # autos take ratio
+            if preidx1 == preidx2:
+                y = sim_y[(preidx1, preidx2)] / data_y[(preidx1, preidx2)]
 
-        if plot:
-            _, ax = plt.subplots()
-            ax.axhline(y=1, ls='--', color='k', label='unity')
-            ax.axhline(y=np.mean(y/bias), color='k', label=f'mean={np.mean(y/bias):0.3f}')
-            ax.plot(x, y/bias)
-            ax.set_xlabel('$\ell$', fontsize=16)
-            ax.set_ylabel('$C^{sim}/C^{data}$', fontsize=16)
-            if ylim is not None:
-                ax.set_ylim(*ylim)
-            plt.legend()
-            plt.title(f'$\ell_{{min}}={lmin}, \ell_{{max}}={lmax}$')
-            fn = f'_lmin{lmin}_lmax{lmax}.png'
-            if save_path is not None:
-                plt.savefig(save_path + fn, bbox_inches='tight')
-            if show:
-                plt.show()
+            # crosses get corr difference
             else:
-                plt.close()
+                y = sim_y[(preidx1, preidx2)] / np.sqrt(sim_y[(preidx1, preidx1)] * sim_y[(preidx2, preidx2)])
+                y -= data_y[(preidx1, preidx2)] / np.sqrt(data_y[(preidx1, preidx1)] * data_y[(preidx2, preidx2)])
+            out[(preidx1, preidx2)] = y
 
-        out.append(np.mean(y/bias))
+    for k, y in out.items():
+        preidx1, preidx2 = k    
+        mean = y[mean_ledges[0]:mean_ledges[1]].mean()
+        
+        ylim = None
+        if preidx1 == preidx2:
+            ylabel = '$C_{\ell,sim}/C_{\ell,data}$'
+            if ylim_auto is not None:
+                ylim = ylim_auto
+            nominal = 1
+        else:
+            ylabel = '$r_{\ell,sim} - r_{\ell,data}$'
+            if ylim_cross is not None:
+                ylim = ylim_cross
+            nominal = 0
 
-    return np.array(out), y_full, Cl_sim, Cl_data
+        leg1_label = ', '.join(axis_labels[i][j] for i, j in enumerate(preidx1))
+        leg2_label = ', '.join(axis_labels[i][j] for i, j in enumerate(preidx2))
+
+        _, ax = plt.subplots()
+        ax.axhline(y=nominal, ls='--', color='k')
+        ax.axhline(y=mean, color='k', label=f'$mean,{mean_ledges[0]}\leq\ell<{mean_ledges[1]}={mean:0.3f}$')
+        ax.plot(np.arange(lmax+1), y)
+        ax.set_xlabel('$\ell$', fontsize=16)
+        ax.set_ylabel(ylabel, fontsize=16)
+        if ylim is not None:
+            ax.set_ylim(*ylim)
+        plt.legend()
+        plt.title(rf'${leg1_label}\times {leg2_label}$')
+
+        if save_path is not None:
+            plt.savefig(save_path + f'_{leg1_label}_{leg2_label}.png', bbox_inches='tight')
+        if show:
+            plt.show()
+        else:
+            plt.close()
+
+    return out
 
 ### OLD ###
 
