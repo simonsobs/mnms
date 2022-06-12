@@ -129,6 +129,9 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_obs, lmax, mask_est, lamb=1.3,
     noise the generated noise needs to be filtered by sqrt(cov_ell) and
     masked using the pixel mask.
     """
+    # get correct dims
+    assert imap.ndim <= 4, f'imap must have <=4 dims, got {imap.ndim}'
+    imap = utils.atleast_nd(imap, 4)
 
     if utils.lmax_from_wcs(imap.wcs) < lmax:
         raise ValueError(f'Pixelization input map (cdelt : {imap.wcs.wcs.cdelt} '
@@ -151,7 +154,7 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_obs, lmax, mask_est, lamb=1.3,
     ainfo = sharp.alm_info(lmax)
     alm = utils.map2alm(imap * mask_est, ainfo=ainfo)
 
-    # Determine diagonal pseudo spectra from normal alm for filtering.
+    # Determine correlated pseudo spectra for filtering.
     ncomp, npol = alm.shape[:2]
     n_ell = np.zeros((ncomp, npol, npol, ainfo.lmax + 1))
     sqrt_cov_ell = np.zeros_like(n_ell)

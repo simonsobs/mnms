@@ -39,9 +39,18 @@ def test_concurrent_normal():
     assert np.all(true == conc)
 
 def test_concurrent_einsum():
-    a = np.random.randn(1000,10,10,3,4)
-    b = np.random.randn(1000,10,3,4)
-    einsum = '...abyx, ...byx -> ...ayx'
-    true = np.einsum(einsum, a, b)
-    conc = utils.concurrent_einsum(einsum, a, b)
+    a = np.random.randn(1000,3,3,30,40)
+    b = np.random.randn(1000,3,30,40)
+    true = np.einsum(
+        '...abyx, ...byx -> ...ayx', a, b)
+    conc = utils.concurrent_einsum(
+        '...abyx, ...byx -> ...ayx', a, b, flatten_axes=[0])
+    assert np.all(true == conc)
+
+    a = np.random.randn(1000,3,3,30,40)
+    b = np.random.randn(1000,3,30,40)
+    true = np.einsum(
+        '...abyx, ...byx -> ...ayx', a, b)
+    conc = utils.concurrent_einsum(
+        '...ab, ...b -> ...a', a, b)
     assert np.all(true == conc)

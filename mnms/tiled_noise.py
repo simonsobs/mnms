@@ -291,7 +291,7 @@ def get_tiled_noise_sim(covsqrt, ivar=None, sqrt_cov_ell=None, rfft=True, num_ar
 
     # multiply random draws by the covsqrt to get the sim
     omap = utils.concurrent_einsum(
-        '...abyx, ...byx -> ...ayx', covsqrt, omap, nchunks=100, nthread=nthread
+        '...abyx, ...byx -> ...ayx', covsqrt, omap, flatten_axes=[0], nthread=nthread
         )
     omap = enmap.samewcs(omap, covsqrt)
 
