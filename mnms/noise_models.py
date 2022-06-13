@@ -578,7 +578,7 @@ class NoiseModel(ABC):
         # get the conservative mask for estimating the harmonic filter used to whiten
         # the difference map
         if self._mask_est is None:
-            self._mask_est = self.get_mask_est(min_threshold=1e-4)
+            self._mask_est = self.get_mask_est()
 
         # get the observed-pixels mask
         if self._mask_obs is None:
@@ -784,7 +784,7 @@ class NoiseModel(ABC):
         return inpaint.inpaint_noise_catalog(imap, ivar, mask_bool, catalog, inplace=inplace, 
                                              seed=seed)
 
-    def get_mask_est(self, min_threshold=1e-3, max_threshold=1.):
+    def get_mask_est(self, min_threshold=1e-4, max_threshold=1.):
         """Load the data mask from disk according to instance attributes.
 
         Returns
@@ -848,7 +848,7 @@ class NoiseModel(ABC):
     def _keep_ivar(self, split_num, ivar):
         """Store a dictionary of ivars in instance attributes under key split_num"""
         if split_num not in self._ivar_dict:
-            print(f'Storing ivar, mask_obs for split {split_num} into memory')
+            print(f'Storing ivar for split {split_num} into memory')
             self._ivar_dict[split_num] = ivar
 
     def _keep_cfact(self, split_num, cfact):

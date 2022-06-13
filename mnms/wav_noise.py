@@ -15,8 +15,8 @@ def rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax, w_ell,
     ---------
     sqrt_cov_wav : wavtrans.Wav object
         (nwav, nwav) diagonal block covariance matrix of flattened noise.
-    sqrt_cov_ell : (ncomp, npol, npol, nell) array
-        Square root of noise covariance diagonal in multipole.
+    sqrt_cov_ell : (ncomp, npol, ncomp, npol, nell) array
+        Square root of noise covariance in multipole.
     lmax : int
         Bandlimit for output noise covariance.
     w_ell : (nwav, nell) array
@@ -37,7 +37,6 @@ def rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax, w_ell,
     ainfo = sharp.alm_info(lmax)
 
     preshape = sqrt_cov_wav.preshape
-    ncomp = preshape[0]
     alm_draw = np.zeros(preshape[:2] + (ainfo.nelem,), dtype=dtype)
 
     sqrt_cov_wav_op = operators.WavMatVecWav(sqrt_cov_wav, power=1, inplace=True,
@@ -48,10 +47,10 @@ def rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax, w_ell,
     rand_wav = sqrt_cov_wav_op(wav_uni)
     wavtrans.wav2alm(rand_wav, alm_draw, ainfo, [0, 2], w_ell)
 
-    for cidx in range(ncomp):
-        sqrt_cov_ell_op = operators.EllMatVecAlm(
-            ainfo, sqrt_cov_ell[cidx], power=1, inplace=True)
-        sqrt_cov_ell_op(alm_draw[cidx])
+    # Apply N_ell^0.5 filter.
+    alm_draw = utils.ell_filter_correlated(
+        alm_draw, 'harmonic', sqrt_cov_ell, ainfo=ainfo, lmax=lmax
+        )
 
     return alm_draw, ainfo
 
@@ -65,8 +64,8 @@ def rand_enmap_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, mask, lmax, w_ell,
     ---------
     sqrt_cov_wav : wavtrans.Wav object
         (nwav, nwav) diagonal block covariance matrix of flattened noise.
-    sqrt_cov_ell : (ncomp, npol, npol, nell) array
-        Square root of noise covariance diagonal in multipole.
+    sqrt_cov_ell : (ncomp, npol, ncomp, npol, nell) array
+        Square root of noise covariance in multipole.
     mask : (npol, ny, nx) or (ny, ny) enmap
         Sky mask.
     lmax : int
@@ -122,8 +121,8 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_obs, lmax, mask_est, lamb=1.3,
     -------
     sqrt_cov_wav : wavtrans.Wav object
         (nwav, nwav) diagonal block covariance matrix of flattened noise.
-    sqrt_cov_ell : (ncomp, npol, npol, nell) array
-        Square root of noise covariance diagonal in multipole.
+    sqrt_cov_ell : (ncomp, npol, ncomp, npol, nell) array
+        Square root of noise covariance in multipole.
     w_ell : (nwav, nell) array
         Wavelet kernels.
 
@@ -134,6 +133,9 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_obs, lmax, mask_est, lamb=1.3,
     noise the generated noise needs to be filtered by sqrt(cov_ell) and
     masked using the pixel mask.
     """
+    # get correct dims
+    assert imap.ndim <= 4, f'imap must have <=4 dims, got {imap.ndim}'
+    imap = utils.atleast_nd(imap, 4)
 
     if utils.lmax_from_wcs(imap.wcs) < lmax:
         raise ValueError(f'Pixelization input map (cdelt : {imap.wcs.wcs.cdelt} '
@@ -156,27 +158,16 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_obs, lmax, mask_est, lamb=1.3,
     ainfo = sharp.alm_info(lmax)
     alm = utils.map2alm(imap * mask_est, ainfo=ainfo)
 
-    # Determine diagonal pseudo spectra from normal alm for filtering.
-    ncomp, npol = alm.shape[:2]
-    n_ell = np.zeros((ncomp, npol, npol, ainfo.lmax + 1))
-    sqrt_cov_ell = np.zeros_like(n_ell)
-
-    for cidx in range(ncomp):
-        n_ell[cidx] = ainfo.alm2cl(alm[cidx,:,None,:], alm[cidx,None,:,:])
-        n_ell[cidx] *= np.eye(3)[:,:,np.newaxis]
+    # Determine correlated pseudo spectra for filtering.
+    sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', 0.5, mask_est=mask_est)
+    inv_sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', -0.5, mask_est=mask_est)
 
     # Re-use buffer from first alm for second alm.
+    # Apply inverse N_ell^0.5 filter.
     alm_obs = utils.map2alm(imap * mask_obs, alm=alm, ainfo=ainfo)
-
-    for cidx in range(ncomp):
-        # Filter by sqrt of inverse diagonal spectrum from first alm.
-        sqrt_icov_ell = operators.EllMatVecAlm(ainfo, n_ell[cidx], power=-0.5,
-                                               inplace=True)
-        sqrt_icov_ell(alm_obs[cidx])
-
-        # Determine and apply inverse N_ell filter.
-        sqrt_cov_ell_op = operators.EllMatVecAlm(ainfo, n_ell[cidx], power=0.5)
-        sqrt_cov_ell[cidx] = sqrt_cov_ell_op.m_ell
+    alm_obs = utils.ell_filter_correlated(
+        alm_obs, 'harmonic', inv_sqrt_cov_ell, ainfo=ainfo, lmax=lmax
+        )
 
     # Get wavelet kernels and estimate wavelet covariance.
     lmin = 10

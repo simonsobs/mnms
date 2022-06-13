@@ -912,7 +912,7 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
         print(
             f'Map shape: {imap.shape}\n'
             f'Num kernels: {len(fdw_kernels.kernels)}\n'
-            f'Smoothing factor: {fwhm_fact}'
+            f'Smoothing factor: {fwhm_fact}\n'
             f'Radial filtering: {rad_filt}\n'
             )
 
@@ -923,42 +923,20 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
     kmap = utils.rfft(imap * mask_obs, nthread=nthread)
 
     if rad_filt:
-        # first measure N_ell and get its square root. because we work in
-        # Fourier space, need to turn this into a callable for non-integer
-        # scales in order to perform flattening. 
-        # 
-        # NOTE: measuring through SHTs is fine, because just need
-        # approximate shape (and it will be a very close approximation
-        # to the shape using DFTs). It is nicer because we don't need to 
-        # use arbitrary bin sizes.
-        lmax_meas = utils.lmax_from_wcs(imap.wcs) 
-        pmap = enmap.pixsizemap(imap.shape, imap.wcs)
-        mask_est = np.broadcast_to(mask_est, imap.shape[-2:], subok=True)
-        w2 = np.sum((mask_est**2)*pmap) / np.pi / 4.   
-        sqrt_cov_ell = np.sqrt(
-            curvedsky.alm2cl(
-                utils.map2alm(imap * mask_est, lmax=lmax_meas, spin=0)
-                ) / w2
+        # measure correlated pseudo spectra for filtering
+        lmax = utils.lmax_from_wcs(imap.wcs) 
+        alm = utils.map2alm(imap * mask_est, lmax=lmax, spin=0)
+        sqrt_cov_k = utils.get_ps_mat(
+            alm, 'fourier', 0.5, mask_est=mask_est, shape=imap.shape, wcs=imap.wcs
+            )
+        inv_sqrt_cov_k = utils.get_ps_mat(
+            alm, 'fourier', -0.5, mask_est=mask_est, shape=imap.shape, wcs=imap.wcs
+            )
+        
+        # filter
+        kmap = utils.ell_filter_correlated(
+            kmap, 'fourier', inv_sqrt_cov_k, nthread=nthread
         )
-        
-        # get filters over k, apply them
-        sqrt_cov_k = enmap.empty(kmap.shape, kmap.wcs, kmap.real.dtype)
-        modlmap = imap.modlmap().astype(imap.dtype, copy=False) # modlmap is np.float64 always...
-        modlmap = modlmap[..., :modlmap.shape[-1]//2+1] # need "real" modlmap
-        assert kmap.shape[-2:] == modlmap.shape, \
-            'kmap map shape and modlmap shape must match'
-
-        for preidx in np.ndindex(imap.shape[:-2]):
-            sqrt_cov_ell_func = interp1d(
-                np.arange(lmax_meas+1), sqrt_cov_ell[preidx], bounds_error=False, 
-                fill_value=(0, sqrt_cov_ell[(*preidx, -1)])
-                )
-            
-            # interp1d returns as float64 always, but this recasts in assignment
-            sqrt_cov_k[preidx] = sqrt_cov_ell_func(modlmap)
-        
-        np.multiply(kmap, 0, out=kmap, where=sqrt_cov_k==0)
-        np.divide(kmap, sqrt_cov_k, out=kmap, where=sqrt_cov_k!=0)
 
     # get model
     wavs = fdw_kernels.k2wav(kmap, nthread=nthread)
@@ -1063,9 +1041,9 @@ def get_fdw_noise_sim(fdw_kernels, sqrt_cov_wavs, preshape=None,
         
     # filter kmap directly in Fourier space
     if sqrt_cov_k is not None:
-        wcs = kmap.wcs # concurrent op clobbers wcs
-        kmap = utils.concurrent_op(np.multiply, kmap, sqrt_cov_k, nthread=nthread)
-        kmap = enmap.ndmap(kmap, wcs)
+        kmap = utils.ell_filter_correlated(
+            kmap, 'fourier', sqrt_cov_k, nthread=nthread
+            )
 
     return utils.irfft(kmap, n=fdw_kernels.shape[-1], nthread=nthread)
 
