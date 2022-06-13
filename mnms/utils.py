@@ -573,7 +573,7 @@ def get_ps_mat(inp, outbasis, e, mask_est=None, shape=None, wcs=None):
     inp : (*preshape, nelem) np.ndarray
         Input alm's to generate auto- and cross-spectra.
     outbasis : str
-        The basis of the power spectrum matrix, either 'harmonic' or 'fourier.
+        The basis of the power spectrum matrix, either 'harmonic' or 'fourier'.
         If 'fourier', only the 'real-fft' modes.
     e : scalar
         Matrix power.
@@ -589,12 +589,24 @@ def get_ps_mat(inp, outbasis, e, mask_est=None, shape=None, wcs=None):
     Returns
     -------
     (*preshape, *preshape, lmax+1) or (*preshape, *preshape, ky, kx) array-like
-        Power spectrum matrix raised to power e in either harmonic or map-space.
+        Power spectrum matrix raised to power e in either harmonic or fourier-space.
 
     Raises
     ------
     ValueError
         If basis not 'harmonic' or 'fourier'.
+
+    Notes
+    -----
+    If outbasis is 'fourier', the radial power spectrum given by the alm's is 
+    projected onto the Fourier modes by (a) assigning ly, lx coordinates to 
+    each mode according to map geometry, (b) building 1d interoplants for each
+    component of the correlated, radial power spectrum, (c) evaluating the
+    interpolants at each mode's modulus, sqrt(ly**2 + lx**2).
+    
+    In order to extend interpolants to the "corners" of Fourier space that
+    exceed the harmonic bandlimit, the last value of each power spectrum
+    component is returned for all calls to scales greater than the bandlimit.
     """
     if outbasis not in ('harmonic', 'fourier'):
         raise ValueError('Only harmonic or fourier basis supported')
@@ -729,6 +741,7 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
         out = concurrent_einsum(
             '...ab, ...b -> ...a', lfilter_mat, inp, nthread=nthread
             )
+        out = enmap.ndmap(out, inp.wcs)
 
     elif inbasis == 'map':
         if map2basis == 'harmonic':

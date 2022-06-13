@@ -298,7 +298,8 @@ def get_cl_diffs(data_maps, sim_maps, mask_est_data=1, mask_est_sim=1,
     if axis_labels is None:
         axis_labels = [range(d) for d in preshape]
     for i, d in enumerate(preshape):
-        assert len(axis_labels[i]) == d
+        assert len(axis_labels[i]) == d, \
+            f'Got {len(axis_labels[i])}, expected {d}'
 
     # get all autos and crosses
     data_y = {}
@@ -364,8 +365,8 @@ def get_cl_diffs(data_maps, sim_maps, mask_est_data=1, mask_est_sim=1,
                 ylim = ylim_cross
             nominal = 0
 
-        leg1_label = ', '.join(axis_labels[i][j] for i, j in enumerate(preidx1))
-        leg2_label = ', '.join(axis_labels[i][j] for i, j in enumerate(preidx2))
+        leg1_label = ', '.join(str(axis_labels[i][j]) for i, j in enumerate(preidx1))
+        leg2_label = ', '.join(str(axis_labels[i][j]) for i, j in enumerate(preidx2))
 
         _, ax = plt.subplots()
         ax.axhline(y=nominal, ls='--', color='k')

@@ -47,8 +47,9 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask_obs=None, mask_est=None, width
         that are 'unmasked' are measured. The number of correlated components in each tile
         is equal to the number of array 'qids' * number of Stokes polarizations. Each 'pixel' is
         the Fourier-space 'sqrt' power in that mode.
-        2. An ndarray of shape (num_arrays, num_splits=1, num_pol, nell) 'sqrt_ell' used to
-        flatten the input map in harmonic space. 
+        2. An ndarray of shape
+        (num_arrays, num_splits=1, num_pol, num_arrays, num_splits=1, num_pol, nell)
+        correlated 'sqrt_ell' used to flatten the input map in harmonic space. 
 
     Raises
     ------
@@ -106,12 +107,14 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask_obs=None, mask_est=None, width
                 f'{lmax}. Lower lmax or downgrade map less.'
                 )
 
-    # we need to filter per-split, since >2-split arrays have widely-varying
-    # noise power spectra.
+    # measure correlated pseudo spectra for filtering
     # imap is also masked, as part of the filtering.
-    imap, sqrt_cov_ell = utils.ell_flatten(
-        imap, mask_obs=mask_obs, mask_est=mask_est,
-        return_sqrt_cov=True, per_split=True, mode='curvedsky', lmax=lmax
+    alm = utils.map2alm(imap * mask_est, lmax=lmax)
+    sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', 0.5, mask_est=mask_est)
+    inv_sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', -0.5, mask_est=mask_est)
+
+    imap = utils.ell_filter_correlated(
+        imap * mask_obs, 'map', inv_sqrt_cov_ell, lmax=lmax, 
         )
 
     # get the tiled data, apod window
@@ -199,8 +202,8 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask_obs=None, mask_est=None, width
 
     return imap.sametiles(omap), sqrt_cov_ell
 
-def get_tiled_noise_sim(covsqrt, ivar=None, sqrt_cov_ell=None, rfft=True, num_arrays=None,
-                        nthread=0, seed=None, verbose=True):
+def get_tiled_noise_sim(covsqrt, ivar=None, sqrt_cov_ell=None, rfft=True,
+                        num_arrays=None, nthread=0, seed=None, verbose=True):
     """Get a noise sim from a tiled noise model of a given data split. The sim is *not* masked, 
     but is only nonzero in regions of unmasked tiles. 
 
@@ -216,8 +219,10 @@ def get_tiled_noise_sim(covsqrt, ivar=None, sqrt_cov_ell=None, rfft=True, num_ar
         Data inverse-variance maps, by default None. Used modulate noise sim in final step.
         Also used to infer num_arrays.
     sqrt_cov_ell : ndarray, optional
-        An ndarray of shape (num_arrays, num_splits=1, num_pol, nell) 'sqrt_ell' used to
-        unflatten the simulated map in harmonic space, by default None.
+        An ndarray of shape
+        (num_arrays, num_splits=1, num_pol, num_arrays, num_splits=1, num_pol, nell)
+        correlated 'sqrt_ell' used to unflatten the simulated map in harmonic space,
+        by default None. Also sets the bandlimit of the filtering operation.
     rfft : bool, optional
         Whether to use rfft's as opposed to fft's when going from Fourier to map space. Should
         match the value of the 'rfft' kwarg passed to get_tiled_noise_covsqrt, by default True.
@@ -315,16 +320,14 @@ def get_tiled_noise_sim(covsqrt, ivar=None, sqrt_cov_ell=None, rfft=True, num_ar
     # filter maps
     if sqrt_cov_ell is not None:
         # extract the particular split from sqrt_cov_ell
-        assert (num_arrays, 1, num_pol) == sqrt_cov_ell.shape[:-1], \
-            'sqrt_cov_ell shape does not match (num_arrays, num_splits=1, num_pol, ...)'
-        sqrt_cov_ell = sqrt_cov_ell[:, 0]
+        assert (num_arrays, 1, num_pol, num_arrays, 1, num_pol) == sqrt_cov_ell.shape[:-1], \
+            'sqrt_cov_ell shape does not match (num_arrays, num_splits=1, num_pol, num_arrays, num_splits=1, num_pol, ...)'
         
         # determine lmax from sqrt_cov_ell, and build the lfilter
-        lmax = min(utils.lmax_from_wcs(omap.wcs), sqrt_cov_ell.shape[-1]-1)
-        lfilter = sqrt_cov_ell[..., :lmax+1]
+        lmax = sqrt_cov_ell.shape[-1] - 1
         
         # do the filtering
-        omap = utils.ell_filter(omap, lfilter, mode='curvedsky', lmax=lmax)
+        omap = utils.ell_filter_correlated(omap, 'map', sqrt_cov_ell, lmax=lmax)
 
     # add axis for split (1)
     omap = omap.reshape((num_arrays, 1, num_pol, *omap.shape[-2:]))

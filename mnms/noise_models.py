@@ -848,7 +848,7 @@ class NoiseModel(ABC):
     def _keep_ivar(self, split_num, ivar):
         """Store a dictionary of ivars in instance attributes under key split_num"""
         if split_num not in self._ivar_dict:
-            print(f'Storing ivar, mask_obs for split {split_num} into memory')
+            print(f'Storing ivar for split {split_num} into memory')
             self._ivar_dict[split_num] = ivar
 
     def _keep_cfact(self, split_num, cfact):
