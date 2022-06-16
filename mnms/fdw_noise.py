@@ -853,8 +853,8 @@ def get_az_func(n, p, j):
     return w_phi
 
 def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1, 
-                          fwhm_fact=2, fwhm_pivot=1000, rad_filt=True,
-                          nthread=0, verbose=True):
+                          fwhm_fact=2, rad_filt=True, nthread=0,
+                          verbose=True):
     """Generate square-root covariance information for the signal in imap.
     The covariance matrix is assumed to be block-diagonal in wavelet kernels,
     neglecting correlations due to their overlap. Kernels are managed by 
@@ -875,14 +875,12 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
     mask_est : array-like, optional
         An analysis mask in which to measure the power spectrum of imap,
         by default 1.
-    fwhm_fact : int, optional
+    fwhm_fact : scalar or callable, optional
         Factor determining smoothing scale at each wavelet scale:
         FWHM = fact * pi / lmax, where lmax is the max wavelet ell., 
-        by default 2.
-    fwhm_pivot : int, optional
-        Above this scale, use fwhm_fact for each wavelet. Between
-        0 and fwhm_pivot, linearly interpolate from 2 to fwhm_fact.
-        By default 1000. 
+        by default 2. Can also be a function specifying this factor
+        for a given ell. Function must accept a single scalar ell
+        value and return one.
     rad_filt : bool, optional
         Whether to measure and apply a radial (Fourier) filter to map prior
         to wavelet transform, by default True.
@@ -938,8 +936,16 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
             kmap, 'fourier', inv_sqrt_cov_k, nthread=nthread
         )
 
-    # get model
     wavs = fdw_kernels.k2wav(kmap, nthread=nthread)
+
+    # get fwhm_fact(l) callable
+    def _fwhm_fact(l):
+        if callable(fwhm_fact):
+            return fwhm_fact(l)
+        else:
+            return fwhm_fact
+
+    # get model
     sqrt_cov_wavs = {}
     for idx, wmap in wavs.items():
         # get outer prod of wavelet maps with normalization factor
@@ -948,13 +954,6 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
         wmap2 = np.einsum('ayx, byx -> abyx', wmap, wmap)
         wmap2 /= fdw_kernels.mean_sqs[idx]
         wmap2 = enmap.ndmap(wmap2, wmap.wcs)
-
-        # get fwhm_fact(l) callable
-        def _fwhm_fact(l):
-            if 0 <= l and l < fwhm_pivot:
-                return FWHM_FACT_0 + l * (fwhm_fact - FWHM_FACT_0) / fwhm_pivot
-            else:
-                return fwhm_fact
 
         # smooth them
         _lmax = fdw_kernels.lmaxs[idx]

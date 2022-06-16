@@ -31,9 +31,17 @@ parser.add_argument('--n', dest='n', type=int, default=36,
 parser.add_argument('--p', dest='p', type=int, default=2,
                     help='The locality parameter of each azimuthal kernel.')
 
-parser.add_argument('--fwhm-fact', dest='fwhm_fact', type=float, default=2., 
-                    help='Factor determining smoothing scale at each wavelet scale: '
-                    'FWHM = fact * pi / lmax, where lmax is the max wavelet ell.')
+parser.add_argument('--fwhm-fact-pt1', dest='fwhm_fact_pt1', nargs='+', type=float, default=[1350, 10.], 
+                    help='First point in determining smoothing scale at each wavelet scale: '
+                    'FWHM = fwhm_fact * pi / lmax, where lmax is the max wavelet ell. See '
+                    'utils.get_fwhm_fact_func_from_pts for functional form. Format of '
+                    'argument is --fwhm-fact-pt1 lmax fwhm_fact')
+
+parser.add_argument('--fwhm-fact-pt2', dest='fwhm_fact_pt2', nargs='+', type=float, default=[5400, 16.], 
+                    help='First point in determining smoothing scale at each wavelet scale: '
+                    'FWHM = fwhm_fact * pi / lmax, where lmax is the max wavelet ell. See '
+                    'utils.get_fwhm_fact_func_from_pts for functional form. Format of '
+                    'argument is --fwhm-fact-pt2 lmax fwhm_fact')
 
 parser.add_argument('--union-sources', dest='union_sources', type=str, default=None,
                     help="Version string for soapack's union sources. E.g. " 
@@ -67,7 +75,7 @@ model = nm.FDWNoiseModel(
     *args.qid, data_model=data_model, downgrade=args.downgrade, lmax=args.lmax, mask_version=args.mask_version,
     mask_est_name=args.mask_est_name, mask_obs_name=args.mask_obs_name, union_sources=args.union_sources,
     kfilt_lbounds=args.kfilt_lbounds, notes=args.notes,
-    lamb=args.lamb, n=args.n, p=args.p, fwhm_fact=args.fwhm_fact)
+    lamb=args.lamb, n=args.n, p=args.p, fwhm_fact_pt1=args.fwhm_fact_pt1, fwhm_fact_pt2=args.fwhm_fact_pt2)
 
 # get split nums
 if args.auto_split:

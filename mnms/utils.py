@@ -1445,6 +1445,50 @@ def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
         return np.piecewise(ell, condlist, funclist)
     return lfunc1, lfunc2
 
+def get_fwhm_fact_func_from_pts(pt1, pt2, pt0_y=2.):
+    """Generate a piecewise linear function over l from a point on the y-axis,
+    and two more points at positive l.
+
+    Parameters
+    ----------
+    pt1 : (l, y) tuple
+        The first point.
+    pt2 : (l, y) tuple
+        The second point.
+    pt0_y : scalar, optional
+        The y-intercept, by default 2.
+
+    Returns
+    -------
+    callable
+        A function of l that takes scalar values only.
+
+    Notes
+    -----
+    All supplied l values must be strictly increasing. All supplied y values
+    must also be strictly increasing. Between l=0 and the first point, the
+    function is a line. After the first point, the function is the line 
+    intercepting the first and second points and extending with the same slope
+    indefinitely.
+    """
+    # check that pts are increasing in x and y
+    assert pt0_y >= 0, \
+        'pt0_y must be positive semi-definite'
+    assert pt1[0] > 0 and pt2[0] > pt1[0], \
+        'x values must be strictly increasing'
+    assert pt1[1] > pt0_y and pt2[1] > pt1[1], \
+        'y values must be strictly increasing'
+
+    # build function
+    def f(l):
+        assert l >= 0, 'l must be positive semi-definite'
+        if 0 <= l and l < pt1[0]:
+            return pt0_y + (pt1[1] - pt0_y) / pt1[0] * l
+        else:
+            return pt1[1] + (pt2[1] - pt1[1]) / (pt2[0] - pt1[0]) * (l - pt1[0])
+    
+    return f
+
 # from pixell/fft.py
 def get_cpu_count():
     """Number of available threads, either from environment variable 'OMP_NUM_THREADS' or physical CPU cores"""
@@ -2059,6 +2103,10 @@ def eshow(x, *args, fname=None, return_plots=False, **kwargs):
     if return_plots:
         return res
 
+### EXTERNAL FUNCTIONS ###
+# we copy/slightly modify some atomic functions from other ACT members'
+# repos to avoid bulky, unneccessary dependencies
+
 # ~copied from orphics.maps, want to avoid dependency on orphics
 def crop_center(img, cropy, cropx=None):
     cropx = cropy if cropx is None else cropx
@@ -2090,9 +2138,10 @@ def pickup_filter(imap, vk_mask=None, hk_mask=None):
     """
 
     ly, lx = enmap.laxes(imap.shape, imap.wcs)
+    lx = lx[..., :lx.shape[-1]//2+1]
 
    # filtered_map = map.copy()
-    ft = enmap.fft(imap)
+    ft = rfft(imap)
     
     if vk_mask is not None:
         id_vk = np.where((lx > vk_mask[0]) & (lx < vk_mask[1]))
@@ -2101,7 +2150,7 @@ def pickup_filter(imap, vk_mask=None, hk_mask=None):
         id_hk = np.where((ly > hk_mask[0]) & (ly < hk_mask[1]))
         ft[..., id_hk, :] = 0.
 
-    return enmap.ifft(ft).real
+    return irfft(ft)
 
 # copied from https://github.com/amaurea/tenki/blob/master/filter_pickup.py,
 # commit 2ddafa9; don't want tenki dependencies
@@ -2140,6 +2189,8 @@ def build_filter(shape, wcs, lbounds, dtype=np.float32):
     f *= 1 - (np.exp(-0.5*(ly/ycut)**2)[:, None] * np.exp(-0.5*(lx/xcut)**2)[None, :])
     return f
 
+# copied from https://github.com/amaurea/tenki/blob/master/filter_pickup.py,
+# commit 2ddafa9; don't want tenki dependencies
 def filter_weighted(imap, ivar, filter, tol=1e-4, ref=0.9):
     """Filter imap with the given 2D (real-) Fourier-space filter,
     while weighing spatially with ivar.

@@ -4,7 +4,35 @@ from mnms import utils
 
 config = sints.dconfig['mnms']
 
-def get_sim_mask_fn(qid, data_model, use_default_mask=True, mask_version=None, mask_name=None, galcut=None, apod_deg=None):
+def get_sim_mask_fn(qid, data_model, use_default_mask=False, mask_version=None, mask_name=None, galcut=None, apod_deg=None):
+    """Get filename of a mask.
+
+    Parameters
+    ----------
+    qid : str
+        Array identifier.
+    data_model : soapack.DataModel
+        DataModel instance to help load raw products.
+    use_default_mask : bool, optional
+        Whether to load a soapack-internal mask, by default False.
+    mask_version : str, optional
+        If use_default_mask is False, look in this subdirectory of the
+        mnms masks folder, by default None.
+    mask_name : str, optional
+        If use_default_mask is False, look for this user-defined mask
+        in the mnms mask directory mask_version folder, by default None.
+    galcut : scalar, optional
+        galcut parameter to pass to data_model.get_binary_apodized_mask_fname,
+        by default None.
+    apod_deg : scalar, optional
+        apod_deg parameter to pass to data_model.get_binary_apodized_mask_fname,
+        by default None.
+
+    Returns
+    -------
+    fn : str
+        Absolute path for file.
+    """
     if use_default_mask:
         if galcut is None and apod_deg is None:
             return data_model.get_binary_apodized_mask_fname(qid, version=mask_version)
@@ -21,10 +49,50 @@ def get_sim_mask_fn(qid, data_model, use_default_mask=True, mask_version=None, m
             mask_name += '.fits'
         return f'{fbase}{mask_version}/{mask_name}'
 
-def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=True,
+def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=False,
                      mask_est_name=None, galcut=None, apod_deg=None, mask_obs_name=None, calibrated=None,
                      downgrade=None, union_sources=None, kfilt_lbounds=None, fwhm_ivar=None):
-    """
+    """Get base filename of an mnms product.
+
+    Parameters
+    ----------
+    qid : str
+        Array identifier.
+    data_model : soapack.DataModel
+        DataModel instance to help load raw products.
+    mask_version : str, optional
+        If use_default_mask is False, look in this subdirectory of the
+        mnms masks folder, by default None.
+    bin_apod : bool, optional
+        Whether a soapack-internal power spectrum estimate mask was
+        loaded, by default False.
+    mask_est_name : str, optional
+        Name of harmonic filter estimate mask file, by default None. This
+        mask was used if bin_apod is False.
+    galcut : scalar, optional
+        galcut parameter to pass to data_model.get_binary_apodized_mask_fname,
+        by default None.
+    apod_deg : scalar, optional
+        apod_deg parameter to pass to data_model.get_binary_apodized_mask_fname,
+        by default None.
+    mask_obs_name : str, optional
+        Name of observed mask file, by default None.
+    calibrated : bool, optional
+        Whether to load calibrated raw data, by default True.
+    downgrade : int, optional
+        The factor to downgrade map pixels by, by default 1.
+    union_sources : str, optional
+        A soapack source catalog, by default None.
+    kfilt_lbounds : size-2 iterable, optional
+        The ly, lx scale for an ivar-weighted Gaussian kspace filter,
+        by default None.
+    fwhm_ivar : float, optional
+        FWHM in degrees of Gaussian smoothing applied to ivar maps.
+
+    Returns
+    -------
+    fn : str
+        Absolute path for file.
     """
     qid = '_'.join(qid)
 
@@ -73,6 +141,29 @@ def _get_sim_fn_root(qid, data_model, mask_version=None, bin_apod=True,
     return fn
 
 def get_tiled_model_fn(qid, split_num, width_deg, height_deg, delta_ell_smooth, lmax, notes=None, **kwargs):
+    """Determine filename for square-root covariance file.
+
+
+    Parameters
+    ----------
+    qid : str
+        Array identifier.
+    split_num : int
+        Split index.
+    width_deg : scalar
+        Tile width in degrees.
+    height_deg : scalar
+        Tile height in degrees.
+    delta_ell_smooth : scalar
+        Side length in 2D Fourier space of smoothing kernel.
+    lmax : int
+        Max multipole.
+
+    Returns
+    -------
+    fn : str
+        Absolute path for file.
+    """
     # cast to floating point for consistency
     width_deg = float(width_deg)
     height_deg = float(height_deg)
@@ -92,6 +183,34 @@ def get_tiled_model_fn(qid, split_num, width_deg, height_deg, delta_ell_smooth, 
 
 def get_tiled_sim_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, split_num, sim_num, alm=False, 
                      mask_obs=True, notes=None, **kwargs):
+    """_summary_
+
+    Parameters
+    ----------
+    qid : str
+        Array identifier.
+    width_deg : scalar
+        Tile width in degrees.
+    height_deg : scalar
+        Tile height in degrees.
+    delta_ell_smooth : scalar
+        Side length in 2D Fourier space of smoothing kernel.
+    lmax : int
+        Max multipole.
+    split_num : int
+        Split index.
+    sim_num : int
+        Simulation number.
+    alm : bool
+        Whether filename ends in "map" (False) or "alm" (True)
+    mask_obs : bool
+        Is the sim masked by the mask_observed.
+
+    Returns
+    -------
+    fn : str
+        Absolute path for file.
+    """
     # cast to floating point for consistency
     width_deg = float(width_deg)
     height_deg = float(height_deg)
@@ -118,9 +237,9 @@ def get_tiled_sim_fn(qid, width_deg, height_deg, delta_ell_smooth, lmax, split_n
     fn += f'{mapalm}{str(sim_num).zfill(4)}.fits'
     return fn
 
-def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, fwhm_pivot, notes=None, **kwargs):
+def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact_pt1, fwhm_fact_pt2, notes=None, **kwargs):
     """
-    Determine filename for square-root wavelet covariance file.
+    Determine filename for square-root covariance file.
 
     Arguments
     ---------
@@ -135,11 +254,10 @@ def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, fwhm_piv
     smooth_loc : bool
         If set, use smoothing kernel that varies over the map, 
         smaller along edge of mask.
-    fwhm_fact : float
-        Factor specifying smoothing FWHM per wavelet.
-    fwhm_pivot : int
-        Above this scale, use fwhm_fact for each wavelet. Between
-        0 and fwhm_pivot, linearly interpolate from 2 to fwhm_fact.
+    fwhm_fact_pt1 : float, optional
+        First point in building piecewise linear function of ell.
+    fwhm_fact_pt2 : int, optional
+        Second point in building piecewise linear function of ell.
 
     Returns
     -------
@@ -161,10 +279,11 @@ def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, fwhm_piv
         smooth_loc = '_smoothloc'
 
     # allow for possibility of no fwhm_fact
-    if fwhm_fact == 2.:
+    if fwhm_fact_pt1[1] == 2. and fwhm_fact_pt2[1] == 2.:
         fwhm_str = ''
     else:
-        fwhm_str = f'_fwhm_fact{fwhm_fact}'
+        fwhm_str = f'_fwhm_fact_pt1_{fwhm_fact_pt1[0]}_{fwhm_fact_pt1[1]}'
+        fwhm_str += f'_fwhm_fact_pt2_{fwhm_fact_pt2[0]}_{fwhm_fact_pt2[1]}'
 
     # allow for possibility of no notes
     if notes is None:
@@ -172,10 +291,10 @@ def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, fwhm_piv
     else:
         notes = f'_{notes}'
         
-    fn += f'lamb{lamb}{fwhm_str}_fwhm_pivot{fwhm_pivot}_lmax{lmax}{smooth_loc}{notes}_set{split_num}.hdf5'
+    fn += f'lamb{lamb}{fwhm_str}_lmax{lmax}{smooth_loc}{notes}_set{split_num}.hdf5'
     return fn
     
-def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, fwhm_pivot, sim_num, alm=False,
+def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact_pt1, fwhm_fact_pt2, sim_num, alm=False,
                    mask_obs=True, notes=None, **kwargs):
     """
     Determine filename for simulated noise map.
@@ -193,11 +312,10 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, fwhm_pivot
     smooth_loc : bool
         If set, use smoothing kernel that varies over the map, 
         smaller along edge of mask.
-    fwhm_fact : float
-        Factor specifying smoothing FWHM per wavelet.
-    fwhm_pivot : int
-        Above this scale, use fwhm_fact for each wavelet. Between
-        0 and fwhm_pivot, linearly interpolate from 2 to fwhm_fact.
+    fwhm_fact_pt1 : float, optional
+        First point in building piecewise linear function of ell.
+    fwhm_fact_pt2 : int, optional
+        Second point in building piecewise linear function of ell.
     sim_num : int
         Simulation number.
     alm : bool
@@ -230,10 +348,11 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, fwhm_pivot
         smooth_loc = '_smoothloc'
 
     # allow for possibility of no fwhm_fact
-    if fwhm_fact == 2.:
+    if fwhm_fact_pt1[1] == 2. and fwhm_fact_pt2[1] == 2.:
         fwhm_str = ''
     else:
-        fwhm_str = f'_fwhm_fact{fwhm_fact}'
+        fwhm_str = f'_fwhm_fact_pt1_{fwhm_fact_pt1[0]}_{fwhm_fact_pt1[1]}'
+        fwhm_str += f'_fwhm_fact_pt2_{fwhm_fact_pt2[0]}_{fwhm_fact_pt2[1]}'
 
     # allow for possibility of no notes
     if notes is None:
@@ -241,16 +360,16 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact, fwhm_pivot
     else:
         notes = f'_{notes}'
     
-    fn += f'lamb{lamb}{fwhm_str}_fwhm_pivot{fwhm_pivot}_{mask_obs_str}lmax{lmax}{smooth_loc}{notes}_set{split_num}_'
+    fn += f'lamb{lamb}{fwhm_str}_{mask_obs_str}lmax{lmax}{smooth_loc}{notes}_set{split_num}_'
 
     # prepare map num tags
     mapalm = 'alm' if alm else 'map'
     fn += f'{mapalm}{str(sim_num).zfill(4)}.fits'
     return fn
 
-def get_fdw_model_fn(qid, split_num, lamb, n, p, fwhm_fact, fwhm_pivot, lmax, notes=None, **kwargs):
+def get_fdw_model_fn(qid, split_num, lamb, n, p, fwhm_fact_pt1, fwhm_fact_pt2, lmax, notes=None, **kwargs):
     """
-    Determine filename for square-root wavelet covariance file.
+    Determine filename for square-root covariance file.
 
     Arguments
     ---------
@@ -264,11 +383,10 @@ def get_fdw_model_fn(qid, split_num, lamb, n, p, fwhm_fact, fwhm_pivot, lmax, no
         Bandlimit (in radians per azimuthal radian) of the directional kernels.
     p : int
         The locality parameter of each azimuthal kernel.
-    fwhm_fact : float
-        Factor specifying smoothing FWHM per wavelet.
-    fwhm_pivot : int
-        Above this scale, use fwhm_fact for each wavelet. Between
-        0 and fwhm_pivot, linearly interpolate from 2 to fwhm_fact.
+    fwhm_fact_pt1 : float, optional
+        First point in building piecewise linear function of ell.
+    fwhm_fact_pt2 : int, optional
+        Second point in building piecewise linear function of ell.
     lmax : int
         Max multipole.
 
@@ -285,16 +403,19 @@ def get_fdw_model_fn(qid, split_num, lamb, n, p, fwhm_fact, fwhm_pivot, lmax, no
     fn = config['covmat_path']
     fn += _get_sim_fn_root(qid, **kwargs)
 
+    fwhm_str = f'_fwhm_fact_pt1_{fwhm_fact_pt1[0]}_{fwhm_fact_pt1[1]}'
+    fwhm_str += f'_fwhm_fact_pt2_{fwhm_fact_pt2[0]}_{fwhm_fact_pt2[1]}'
+
     # allow for possibility of no notes
     if notes is None:
         notes = ''
     else:
         notes = f'_{notes}'
         
-    fn += f'lamb{lamb}_n{n}_p{p}_fwhm_fact{fwhm_fact}_fwhm_pivot{fwhm_pivot}_lmax{lmax}{notes}_set{split_num}.hdf5'
+    fn += f'lamb{lamb}_n{n}_p{p}{fwhm_str}_lmax{lmax}{notes}_set{split_num}.hdf5'
     return fn
 
-def get_fdw_sim_fn(qid, split_num, lamb, n, p, fwhm_fact, fwhm_pivot, lmax, sim_num, alm=False,
+def get_fdw_sim_fn(qid, split_num, lamb, n, p, fwhm_fact_pt1, fwhm_fact_pt2, lmax, sim_num, alm=False,
                    mask_obs=True, notes=None, **kwargs):
     """
     Determine filename for simulated noise map.
@@ -311,11 +432,10 @@ def get_fdw_sim_fn(qid, split_num, lamb, n, p, fwhm_fact, fwhm_pivot, lmax, sim_
         Bandlimit (in radians per azimuthal radian) of the directional kernels.
     p : int
         The locality parameter of each azimuthal kernel.
-    fwhm_fact : float
-        Factor specifying smoothing FWHM per wavelet.
-    fwhm_pivot : int
-        Above this scale, use fwhm_fact for each wavelet. Between
-        0 and fwhm_pivot, linearly interpolate from 2 to fwhm_fact.
+    fwhm_fact_pt1 : float, optional
+        First point in building piecewise linear function of ell.
+    fwhm_fact_pt2 : int, optional
+        Second point in building piecewise linear function of ell.
     lmax : int
         Max multipole.
     sim_num : int
@@ -343,13 +463,16 @@ def get_fdw_sim_fn(qid, split_num, lamb, n, p, fwhm_fact, fwhm_pivot, lmax, sim_
     else:
         mask_obs_str = 'unmasked_'
 
+    fwhm_str = f'_fwhm_fact_pt1_{fwhm_fact_pt1[0]}_{fwhm_fact_pt1[1]}'
+    fwhm_str += f'_fwhm_fact_pt2_{fwhm_fact_pt2[0]}_{fwhm_fact_pt2[1]}'
+
     # allow for possibility of no notes
     if notes is None:
         notes = ''
     else:
         notes = f'_{notes}'
     
-    fn += f'lamb{lamb}_n{n}_p{p}_fwhm_fact{fwhm_fact}_fwhm_pivot{fwhm_pivot}_{mask_obs_str}lmax{lmax}{notes}_set{split_num}_'
+    fn += f'lamb{lamb}_n{n}_p{p}{fwhm_str}_{mask_obs_str}lmax{lmax}{notes}_set{split_num}_'
 
     # prepare map num tags
     mapalm = 'alm' if alm else 'map'
