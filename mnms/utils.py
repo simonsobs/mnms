@@ -1609,60 +1609,62 @@ def irfft(emap, omap=None, n=None, nthread=0, normalize=True, adjoint_fft=False)
     if norm != 1: res *= norm
     return res
 
-def write_alm(fn, alm, dtype=None):
+def write_alm(fn, alm):
     """Write alms to disk.
 
     Parameters
     ----------
     fn : str
-        Full filename to open; must be .fits.
+        Full filename to open; must be .fits or no extension in which
+        case .fits will be added.
     alm : (..., n_alm) array
         alms to be written.
-    dtype : numpy.dtype, optional
-        The dtype of the real and imaginary subpart of the buffer
-        to be written, by default None. If None, then the value
-        of alm.real.dtype.
+
+    Notes
+    -----
+    Unlike hp.write_alm, alm can be any shape. Also, the indexing scheme
+    is not written. It follows that of pixell.curvedsky, which is standard.
     """
-    if str(fn)[-5:] != '.fits':
-        fn = str(fn) + '.fits'
+    pheader = fits.Header()
+    pheader['HDU1'] = 'ALM_REAL'
+    pheader['HDU2'] = 'ALM_IMAG'
 
-    hp.write_alm(
-        fn, alm.reshape(-1, alm.shape[-1]), out_dtype=dtype, overwrite=True
-        )
+    phdu = fits.PrimaryHDU(header=pheader)
+    arhdu = fits.ImageHDU(alm.real)
+    aihdu = fits.ImageHDU(alm.imag)
+    hdul = fits.HDUList([phdu, arhdu, aihdu])
+    hdul.writeto(fn, overwrite=True)
 
-def read_alm(fn, preshape=None):
-    """Read alms from disk, and return with prescribed 'pre-pol'
-    shape.
+def read_alm(fn):
+    """Read alms from disk.
 
     Parameters
     ----------
     fn : str
-        Full filename to open; must be .fits.
-    preshape : iterable, optional
-        The desired pre-polarization shape of the alm buffer, eg
-        (num_arrays, num_splits), by default None. If None, array
-        will be read as-is from disk.
+        Full filename to open; must be .fits or no extension in which
+        case .fits will be added.
 
     Returns
     -------
-    (*preshape, num_pol, n_alm) array
+    (..., n_alm) array
         The correctly-shaped alms, with dtype as saved on disk.
+
+    Notes
+    -----
+    Unlike hp.read_alm, alm on disk can be any shape. Also, the indexing scheme
+    is not read. It is assumed to follow that of pixell.curvedsky, which is 
+    standard.
     """
-    if str(fn)[-5:] != '.fits':
-        fn = str(fn) + '.fits'
-
-    if not preshape:
-        preshape = ()
-
-    # get number of headers
     with fits.open(fn) as hdul:
-        num_hdu = len(hdul)
+        assert hdul[0].header['HDU1'] == 'ALM_REAL', \
+            'HDU1 must be ALM_REAL'
+        assert hdul[0].header['HDU2'] == 'ALM_IMAG', \
+            'HDU2 must be ALM_IMAG'
 
-    # load alms and restore preshape
-    out = np.array(
-        [hp.read_alm(fn, hdu=i) for i in range(1, num_hdu)]
-        )
-    return out.reshape(*preshape, -1, out.shape[-1])
+        real = hdul[1].data
+        imag = hdul[2].data
+    
+    return real + 1j*imag
 
 def hash_qid(qid, ndigits=9):
     """Turn a qid string into an ndigit hash, using hashlib.sha256 hashing"""

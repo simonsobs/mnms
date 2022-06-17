@@ -970,7 +970,7 @@ class NoiseModel(ABC):
         if write:
             fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_obs)
             if alm:
-                utils.write_alm(fn, sim, dtype=self._dtype)
+                utils.write_alm(fn, sim)
             else:
                 enmap.write_map(fn, sim)
 
@@ -1012,7 +1012,7 @@ class NoiseModel(ABC):
         try:
             if alm:
                 # we know the preshape is (num_arrays, num_splits=1)
-                return utils.read_alm(fn, preshape=(self._num_arrays, 1))
+                return utils.read_alm(fn)
             else:
                 return enmap.read_map(fn)
         except (FileNotFoundError, OSError) as e:
