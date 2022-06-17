@@ -1,5 +1,5 @@
-from pixell import enmap, curvedsky, fft as enfft, sharp, wcsutils
-from enlib import array_ops, bench
+from pixell import enmap, curvedsky, fft as enfft, sharp
+from enlib import array_ops
 from soapack import interfaces as sints
 from optweight import alm_c_utils
 
@@ -108,6 +108,23 @@ def get_take_indexing_obj(arr, indices, axis=None):
 
 # this is like enmap.partial_flatten except you give the axes you *want* to flatten
 def flatten_axis(imap, axis=None, pos=0):
+    """Flatten axes in input array and place in specified position.
+
+    Parameters
+    ----------
+    imap : array-like
+        Array to reshape
+    axis : iterable of int, optional
+        Axes in imap to be flattened, by default None. If None, returns
+        the entire array flattened.
+    pos : int, optional
+        The final position of the flattened axis, by default 0.
+
+    Returns
+    -------
+    array-like
+        View of imap with axes flattened and repositioned.
+    """
     if axis is None:
         return imap.reshape(-1)
     else:
@@ -546,6 +563,213 @@ def interp1d_bins(bins, y, return_vals=False, **interp1d_kwargs):
 def lmax_from_wcs(wcs):
     """Returns 180/wcs.cdelt[1]; this is twice the theoretical CAR bandlimit"""
     return int(180/np.abs(wcs.wcs.cdelt[1]))
+
+def get_ps_mat(inp, outbasis, e, mask_est=None, shape=None, wcs=None):
+    """Get a power spectrum matrix from input alm's, raised to a given
+    matrix power.
+
+    Parameters
+    ----------
+    inp : (*preshape, nelem) np.ndarray
+        Input alm's to generate auto- and cross-spectra.
+    outbasis : str
+        The basis of the power spectrum matrix, either 'harmonic' or 'fourier'.
+        If 'fourier', only the 'real-fft' modes.
+    e : scalar
+        Matrix power.
+    mask_est : (ny, nx) enmap.ndmap, optional
+        Mask applied to map before measuring input alm's, by default None. If
+        provided, power spectra matrix is normalized by sky fraction before
+        being raised to e.
+    shape : (..., ny, nx) tuple, optional
+        If 'fourier', the shape of the map-space, by default None.
+    wcs : astropy.wcs.WCS, optional
+        If 'fourier', the geometry of the map-space, by default None.
+
+    Returns
+    -------
+    (*preshape, *preshape, lmax+1) or (*preshape, *preshape, ky, kx) array-like
+        Power spectrum matrix raised to power e in either harmonic or fourier-space.
+
+    Raises
+    ------
+    ValueError
+        If basis not 'harmonic' or 'fourier'.
+
+    Notes
+    -----
+    If outbasis is 'fourier', the radial power spectrum given by the alm's is 
+    projected onto the Fourier modes by (a) assigning ly, lx coordinates to 
+    each mode according to map geometry, (b) building 1d interoplants for each
+    component of the correlated, radial power spectrum, (c) evaluating the
+    interpolants at each mode's modulus, sqrt(ly**2 + lx**2).
+    
+    In order to extend interpolants to the "corners" of Fourier space that
+    exceed the harmonic bandlimit, the last value of each power spectrum
+    component is returned for all calls to scales greater than the bandlimit.
+    """
+    if outbasis not in ('harmonic', 'fourier'):
+        raise ValueError('Only harmonic or fourier basis supported')
+
+    if mask_est is not None:
+        pmap = enmap.pixsizemap(mask_est.shape, mask_est.wcs)
+        w2 = np.sum((mask_est**2)*pmap) / np.pi / 4.   
+    else:
+        w2 = 1
+    
+    preshape = inp.shape[:-1]
+    ncomp = np.prod(preshape, dtype=int)
+    lmax = sharp.nalm2lmax(inp.shape[-1])
+    mat = np.empty((*preshape, *preshape, lmax+1), dtype=inp.real.dtype)
+
+    seen_pairs = []
+    for preidx1 in np.ndindex(preshape):
+        for preidx2 in np.ndindex(preshape):
+            if (preidx2, preidx1) in seen_pairs:
+                continue
+            seen_pairs.append((preidx1, preidx2))
+
+            mat[(*preidx1, *preidx2)] = curvedsky.alm2cl(inp[preidx1], inp[preidx2])
+            if preidx1 != preidx2:
+                mat[(*preidx2, *preidx1)] = mat[(*preidx1, *preidx2)]
+
+    mat /= w2
+    mat = mat.reshape(ncomp, ncomp, -1)
+    mat = eigpow(mat, e, axes=[0, 1])
+    mat = mat.reshape(*preshape, *preshape, -1)
+    
+    if outbasis == 'harmonic':
+        out = mat
+    elif outbasis == 'fourier':
+        out = enmap.empty((*preshape, *preshape, shape[-2], shape[-1]//2+1), wcs, inp.real.dtype) # need "real" matrix
+        modlmap = enmap.modlmap(shape, wcs).astype(inp.real.dtype, copy=False) # modlmap is np.float64 always...
+        modlmap = modlmap[..., :shape[-1]//2+1] # need "real" modlmap
+    
+        seen_pairs = []
+        for preidx1 in np.ndindex(preshape):
+            for preidx2 in np.ndindex(preshape):
+                if (preidx2, preidx1) in seen_pairs:
+                    continue
+                seen_pairs.append((preidx1, preidx2))
+
+                ell_func = interp1d(
+                    np.arange(lmax+1), mat[(*preidx1, *preidx2)], bounds_error=False, 
+                    fill_value=(0, mat[(*preidx1, *preidx2, -1)])
+                    )
+            
+                # interp1d returns as float64 always, but this recasts in assignment
+                out[(*preidx1, *preidx2)] = ell_func(modlmap)
+                if preidx1 != preidx2:
+                    out[(*preidx2, *preidx1)] = out[(*preidx1, *preidx2)]
+
+    return out
+
+def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic', 
+                          ainfo=None, lmax=None, nthread=0, tweak=False):
+    """Multiply map data by correlation matrix in frequency space.
+
+    Parameters
+    ----------
+    inp : (*preshape, ...) array-like
+        Input map data as either a map, fourier transform, or alm's.
+    inbasis : str
+        'harmonic', 'fourier', 'map', denoting space of inp.
+    lfilter_mat : (*preshape, *preshape, ...) array-like
+        Matrix to apply to inp. If harmonic basis, only lmax+1 elements. If
+        fourier basis, must be over the 'real-fft' modes.
+    map2basis : str, optional
+        'harmonic' or 'fourier', by default 'harmonic'. If inbasis is 'map',
+        inp is transformed into map2basis before this function is recalled
+        in that basis. Therefore, lfilter_mat must be provided in that basis.
+    ainfo : sharp.alm_info, optional
+        Info for inp if inbasis is 'harmonic', by default None. Also used in
+        SHT if inbasis is 'map' and 'map2basis' is 'harmonic'.
+    lmax : int, optional
+        Bandlimit of alm's if inbasis is 'harmonic', by default None. Also used
+        in SHT if inbasis is 'map' and 'map2basis' is 'harmonic'.
+    nthread : int, optional
+        Number of threads to use in filtering if inbasis is 'fourier', by
+        default 0. If 0, the number of available cores. Also used in rFFT
+        if inbasis is 'map' and 'map2basis' is 'fourier'.
+    tweak : bool, optional
+        To pass to map2alm if inbasis is 'map' and map2basis is 'harmonic',
+        by default False.
+
+    Returns
+    -------
+    (*preshape, ...) array-like
+        Filtered input data in input space.
+
+    Raises
+    ------
+    ValueError
+        If inbasis is not 'harmonic', 'fourier', or 'map', or if inbasis is
+        'map' and map2basis is not 'harmonic' or 'fourier'.
+    """
+    inshape = inp.shape
+
+    if inbasis == 'harmonic':
+        inp = atleast_nd(inp, 2)
+        preshape = inshape[:-1]
+        postshape = inshape[-1]
+        ncomp = np.prod(preshape, dtype=int)
+        inp = inp.reshape(ncomp, postshape)
+
+        # user must ensure this broadcasting of lfilter_mat is both possible
+        # and correct 
+        lfilter_mat = lfilter_mat.reshape(ncomp, ncomp, -1) 
+
+        # do filtering
+        if ainfo is None:
+            if lmax is None:
+                raise ValueError('If ainfo is None, must provide lmax')
+            ainfo = sharp.alm_info(lmax)
+        out = alm_c_utils.lmul(inp, lfilter_mat, ainfo, inplace=False)
+
+    elif inbasis == 'fourier':
+        inp = atleast_nd(inp, 3)
+        preshape = inshape[:-2]
+        postshape = inshape[-2:]
+        ncomp = np.prod(preshape, dtype=int)
+        inp = inp.reshape(ncomp, *postshape)
+
+        # user must ensure this broadcasting of lfilter_mat is both possible
+        # and correct 
+        lfilter_mat = lfilter_mat.reshape(ncomp, ncomp, *postshape)
+
+        # do filtering. concurrent loop over pixels
+        out = concurrent_einsum(
+            '...ab, ...b -> ...a', lfilter_mat, inp, nthread=nthread
+            )
+        out = enmap.ndmap(out, inp.wcs)
+
+    elif inbasis == 'map':
+        if map2basis == 'harmonic':
+            alm_inp = map2alm(inp, ainfo=ainfo, lmax=lmax, tweak=tweak)
+            filtered_alm = ell_filter_correlated(
+                alm_inp, 'harmonic', lfilter_mat, ainfo=ainfo, lmax=lmax
+                )
+            out = alm2map(
+                filtered_alm, shape=inshape, wcs=inp.wcs, dtype=inp.dtype, ainfo=ainfo
+                )
+        
+        # lfilter_mat in fourier space assumes real fft
+        elif map2basis == 'fourier':
+            k_inp = rfft(inp, nthread=nthread)
+            filtered_k = ell_filter_correlated(
+                k_inp, 'fourier', lfilter_mat, nthread=nthread
+            )
+            out = irfft(filtered_k, n=inshape[-1], nthread=nthread)
+        
+        else:
+            raise ValueError('If map basis, map2basis must be harmonic or fourier')
+
+    else:
+        raise ValueError('Only harmonic, fourier, or map basis supported')
+
+    # reshape
+    out = out.reshape(inshape)
+    return out
 
 # further extended here for ffts
 def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0, tweak=False):
@@ -1221,6 +1445,49 @@ def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
         return np.piecewise(ell, condlist, funclist)
     return lfunc1, lfunc2
 
+def get_fwhm_fact_func_from_pts(pt1, pt2, pt0_y=2.):
+    """Generate a piecewise linear function over l from a point on the y-axis,
+    and two more points at positive l.
+
+    Parameters
+    ----------
+    pt1 : (l, y) iterable
+        The first point.
+    pt2 : (l, y) iterable
+        The second point.
+    pt0_y : scalar, optional
+        The y-intercept, by default 2.
+
+    Returns
+    -------
+    callable
+        A function of l that takes scalar values only.
+
+    Notes
+    -----
+    All supplied l values must be strictly increasing. All supplied y values
+    must be increasing. Between l=0 and the first point, the function is a line.
+    After the first point, the function is the line intercepting the first and
+    second points and extending with the same slope indefinitely.
+    """
+    # check that pts are increasing in x and y
+    assert pt0_y >= 0, \
+        'pt0_y must be positive semi-definite'
+    assert pt1[0] > 0 and pt2[0] > pt1[0], \
+        'x values must be strictly increasing'
+    assert pt1[1] >= pt0_y and pt2[1] >= pt1[1], \
+        'y values must be increasing'
+
+    # build function
+    def f(l):
+        assert l >= 0, 'l must be positive semi-definite'
+        if 0 <= l and l < pt1[0]:
+            return pt0_y + (pt1[1] - pt0_y) / pt1[0] * l
+        else:
+            return pt1[1] + (pt2[1] - pt1[1]) / (pt2[0] - pt1[0]) * (l - pt1[0])
+    
+    return f
+
 # from pixell/fft.py
 def get_cpu_count():
     """Number of available threads, either from environment variable 'OMP_NUM_THREADS' or physical CPU cores"""
@@ -1356,7 +1623,7 @@ def concurrent_op(op, a, b, *args, flatten_axes=[-2,-1],
     a = atleast_nd(a, maxdim)
     b = atleast_nd(b, maxdim)
 
-    # now get the shape of the subspace to flatten
+    # get the shape of the subspace to flatten
     oshape_axes_a = [a.shape[i] for i in flatten_axes]
     oshape_axes_b = [b.shape[i] for i in flatten_axes]
     assert oshape_axes_a == oshape_axes_b, \
@@ -1395,22 +1662,27 @@ def concurrent_op(op, a, b, *args, flatten_axes=[-2,-1],
 
     return out
 
-def concurrent_einsum(subscripts, a, b, *args, chunk_axis_a=0, chunk_axis_b=0, nchunks=100, nthread=0, **kwargs):
-    """A concurrent version of np.einsum, operating on only two buffers
-    at a time.
+def concurrent_einsum(subscripts, a, b, *args, flatten_axes=[-2, -1],
+                      nchunks=100, nthread=0, **kwargs):
+    """Perform a tensor multiplication concurrently, according to the provided 
+    einstein summation subscripts. Subscript notation follows that of
+    np.einsum. 
 
     Parameters
     ----------
     subscripts : str
-        Einstein summation string to pass to np.einsum
-    a : array-like
-        First tensor.
-    b : array-like
-        Second tensor.
-    chunk_axis_a : int, optional
-        The axis of a to loop over concurrently, by default 0.
-    chunk_axis_b : int, optional
-        The axis of b to loop over concurrently, by default 0.
+        Einstein summation subscript to provide to np.einsum. See flatten_axes
+        for more information.
+    a :  ndarray
+        The first array in the operation.
+    b : ndarray
+        The second array in the operation.
+    flatten_axes : iterable of int
+        Axes in a and b to flatten and concurrently apply subscript over
+        in chunks. These axes must have the same shape in a and b. Note that
+        these axes will internally be moved to the 0 position for concurrent
+        operations. Therefore, subscripts must be written to respect the 
+        shape of a and b after the axis flattening and moving step.
     nchunks : int, optional
         The number of chunks to loop over concurrently, by default 100.
     nthread : int, optional
@@ -1420,19 +1692,25 @@ def concurrent_einsum(subscripts, a, b, *args, chunk_axis_a=0, chunk_axis_b=0, n
     Returns
     -------
     ndarray
-        The result of np.einsum(subscripts, a, b), except with the axis
-        corresponding to the a, b chunk axes located at axis-0.
+        The result of np.einsum(subscripts, a, b, *args, **kwargs).
 
     Notes
     -----
-    The chunk axes must not be involved in the Einstein summation of subscripts;
-    rather, they should be axes properly looped over. For maximum efficiency,
-    they should be long. They must be of equal size in a and b.
+    The flatten axes are what a user might expect to naively 'loop over'. For
+    maximum efficiency, they should be have as many elements as possible.
     """
-    # move axes to standard positions
-    a = np.moveaxis(a, chunk_axis_a, 0)
-    b = np.moveaxis(b, chunk_axis_b, 0)
-    assert a.shape[0] == b.shape[0], f'Size of chunk axis must be equal, got {a.shape[0]} and {b.shape[0]}'
+    # get the shape of the subspace to flatten
+    oshape_axes_a = [a.shape[i] for i in flatten_axes]
+    oshape_axes_b = [b.shape[i] for i in flatten_axes]
+    assert oshape_axes_a == oshape_axes_b, \
+        f'a and b must share shape in {flatten_axes} axes, got\n' \
+        f'{oshape_axes_a} and {oshape_axes_b}'
+    oshape_axes = oshape_axes_a
+
+    # move axes to axis 0 position
+    # NOTE: very important to do 0, else the strides slow down the workers
+    a = flatten_axis(a, axis=flatten_axes, pos=0)
+    b = flatten_axis(b, axis=flatten_axes, pos=0)
 
     # get size per chunk draw
     totalsize = a.shape[0]
@@ -1454,7 +1732,9 @@ def concurrent_einsum(subscripts, a, b, *args, chunk_axis_a=0, chunk_axis_b=0, n
     fs = [executor.submit(_fill, i*chunksize, (i+1)*chunksize) for i in range(nchunks)]
     futures.wait(fs)
 
-    # return
+    # reshape and return
+    out = out.reshape(*oshape_axes, *out_test.shape)
+    out = np.moveaxis(out, range(len(oshape_axes)), flatten_axes)
     return out
 
 def eigpow(A, e, axes=[-2, -1]):
@@ -1824,6 +2104,10 @@ def eshow(x, *args, fname=None, return_plots=False, **kwargs):
     if return_plots:
         return res
 
+### EXTERNAL FUNCTIONS ###
+# we copy/slightly modify some atomic functions from other ACT members'
+# repos to avoid bulky, unneccessary dependencies
+
 # ~copied from orphics.maps, want to avoid dependency on orphics
 def crop_center(img, cropy, cropx=None):
     cropx = cropy if cropx is None else cropx
@@ -1855,9 +2139,10 @@ def pickup_filter(imap, vk_mask=None, hk_mask=None):
     """
 
     ly, lx = enmap.laxes(imap.shape, imap.wcs)
+    lx = lx[..., :lx.shape[-1]//2+1]
 
    # filtered_map = map.copy()
-    ft = enmap.fft(imap)
+    ft = rfft(imap)
     
     if vk_mask is not None:
         id_vk = np.where((lx > vk_mask[0]) & (lx < vk_mask[1]))
@@ -1866,7 +2151,7 @@ def pickup_filter(imap, vk_mask=None, hk_mask=None):
         id_hk = np.where((ly > hk_mask[0]) & (ly < hk_mask[1]))
         ft[..., id_hk, :] = 0.
 
-    return enmap.ifft(ft).real
+    return irfft(ft)
 
 # copied from https://github.com/amaurea/tenki/blob/master/filter_pickup.py,
 # commit 2ddafa9; don't want tenki dependencies
@@ -1905,6 +2190,8 @@ def build_filter(shape, wcs, lbounds, dtype=np.float32):
     f *= 1 - (np.exp(-0.5*(ly/ycut)**2)[:, None] * np.exp(-0.5*(lx/xcut)**2)[None, :])
     return f
 
+# copied from https://github.com/amaurea/tenki/blob/master/filter_pickup.py,
+# commit 2ddafa9; don't want tenki dependencies
 def filter_weighted(imap, ivar, filter, tol=1e-4, ref=0.9):
     """Filter imap with the given 2D (real-) Fourier-space filter,
     while weighing spatially with ivar.
