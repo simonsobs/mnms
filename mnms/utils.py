@@ -1451,9 +1451,9 @@ def get_fwhm_fact_func_from_pts(pt1, pt2, pt0_y=2.):
 
     Parameters
     ----------
-    pt1 : (l, y) tuple
+    pt1 : (l, y) iterable
         The first point.
-    pt2 : (l, y) tuple
+    pt2 : (l, y) iterable
         The second point.
     pt0_y : scalar, optional
         The y-intercept, by default 2.

@@ -1306,7 +1306,7 @@ class WaveletNoiseModel(NoiseModel):
                  mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
                  fwhm_ivar=None, notes=None, dtype=None,
-                 lamb=1.3, smooth_loc=False, fwhm_fact_pt1=(1350, 10.), fwhm_fact_pt2=(5400, 16.),
+                 lamb=1.3, smooth_loc=False, fwhm_fact_pt1=[1350, 10.], fwhm_fact_pt2=[5400, 16.],
                  **kwargs):
         """A WaveletNoiseModel object supports drawing simulations which capture scale-dependent, 
         spatially-varying map depth. They also capture the total noise power spectrum, and 
@@ -1379,12 +1379,12 @@ class WaveletNoiseModel(NoiseModel):
         smooth_loc : bool, optional
             If passed, use smoothing kernel that varies over the map, smaller along edge of 
             mask, by default False.
-        fwhm_fact_pt1 : float, optional
+        fwhm_fact_pt1 : (int, float), optional
             First point in building piecewise linear function of ell. Function gives factor
             determining smoothing scale at each wavelet scale: FWHM = fact * pi / lmax,
             where lmax is the max wavelet ell. See utils.get_fwhm_fact_func_from_pts
             for functional form.
-        fwhm_fact_pt2 : int, optional
+        fwhm_fact_pt2 : (int, float), optional
             Second point in building piecewise linear function of ell. Function gives factor
             determining smoothing scale at each wavelet scale: FWHM = fact * pi / lmax,
             where lmax is the max wavelet ell. See utils.get_fwhm_fact_func_from_pts
@@ -1418,8 +1418,8 @@ class WaveletNoiseModel(NoiseModel):
         # save model-specific info
         self._lamb = lamb
         self._smooth_loc = smooth_loc
-        self._fwhm_fact_pt1 = fwhm_fact_pt1
-        self._fwhm_fact_pt2 = fwhm_fact_pt2
+        self._fwhm_fact_pt1 = list(fwhm_fact_pt1)
+        self._fwhm_fact_pt2 = list(fwhm_fact_pt2)
         self._fwhm_fact_func = utils.get_fwhm_fact_func_from_pts(
             fwhm_fact_pt1, fwhm_fact_pt2
             )
@@ -1518,7 +1518,7 @@ class FDWNoiseModel(NoiseModel):
                  mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
                  fwhm_ivar=None, notes=None, dtype=None,
-                 lamb=1.6, n=36, p=2, fwhm_fact_pt1=(1350, 10.), fwhm_fact_pt2=(5400, 16.),
+                 lamb=1.6, n=36, p=2, fwhm_fact_pt1=[1350, 10.], fwhm_fact_pt2=[5400, 16.],
                  **kwargs):
         """An FDWNoiseModel object supports drawing simulations which capture direction- 
         and scale-dependent, spatially-varying map depth. The simultaneous direction- and
@@ -1596,12 +1596,12 @@ class FDWNoiseModel(NoiseModel):
         p : int
             The locality parameter of each azimuthal kernel. In other words,
             each kernel is of the form cos^p((n+1)/(p+1)*phi).
-        fwhm_fact_pt1 : float, optional
+        fwhm_fact_pt1 : (int, float), optional
             First point in building piecewise linear function of ell. Function gives factor
             determining smoothing scale at each wavelet scale: FWHM = fact * pi / lmax,
             where lmax is the max wavelet ell. See utils.get_fwhm_fact_func_from_pts
             for functional form.
-        fwhm_fact_pt2 : int, optional
+        fwhm_fact_pt2 : (int, float), optional
             Second point in building piecewise linear function of ell. Function gives factor
             determining smoothing scale at each wavelet scale: FWHM = fact * pi / lmax,
             where lmax is the max wavelet ell. See utils.get_fwhm_fact_func_from_pts
@@ -1641,8 +1641,8 @@ class FDWNoiseModel(NoiseModel):
         self._lamb = lamb
         self._n = n
         self._p = p
-        self._fwhm_fact_pt1 = fwhm_fact_pt1
-        self._fwhm_fact_pt2 = fwhm_fact_pt2
+        self._fwhm_fact_pt1 = list(fwhm_fact_pt1)
+        self._fwhm_fact_pt2 = list(fwhm_fact_pt2)
         self._fwhm_fact_func = utils.get_fwhm_fact_func_from_pts(
             fwhm_fact_pt1, fwhm_fact_pt2
             )

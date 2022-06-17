@@ -264,9 +264,13 @@ def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact_pt1, fwhm
     fn : str
         Absolute path for file.
     """
-    # cast to floating point for consistency
+    # cast for consistency
     lamb = float(lamb)
-
+    fwhm_fact_pt1[0] = int(fwhm_fact_pt1[0])
+    fwhm_fact_pt2[0] = int(fwhm_fact_pt2[0])
+    fwhm_fact_pt1[1] = float(fwhm_fact_pt1[1])
+    fwhm_fact_pt2[1] = float(fwhm_fact_pt2[1])
+    
     # get root fn
     fn = config['covmat_path']
     fn += _get_sim_fn_root(qid, **kwargs)
@@ -327,8 +331,12 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact_pt1, fwhm_f
     fn : str
         Absolute path for file.
     """
-    # cast to floating point for consistency
+    # cast for consistency
     lamb = float(lamb)
+    fwhm_fact_pt1[0] = int(fwhm_fact_pt1[0])
+    fwhm_fact_pt2[0] = int(fwhm_fact_pt2[0])
+    fwhm_fact_pt1[1] = float(fwhm_fact_pt1[1])
+    fwhm_fact_pt2[1] = float(fwhm_fact_pt2[1])
 
     # get root fn
     fn = config['maps_path']
@@ -393,8 +401,12 @@ def get_fdw_model_fn(qid, split_num, lamb, n, p, fwhm_fact_pt1, fwhm_fact_pt2, l
     fn : str
         Absolute path for file.
     """
-    # cast to floating point for consistency
+    # cast for consistency
     lamb = float(lamb)
+    fwhm_fact_pt1[0] = int(fwhm_fact_pt1[0])
+    fwhm_fact_pt2[0] = int(fwhm_fact_pt2[0])
+    fwhm_fact_pt1[1] = float(fwhm_fact_pt1[1])
+    fwhm_fact_pt2[1] = float(fwhm_fact_pt2[1])
 
     # get root fn
     fn = config['covmat_path']
@@ -447,8 +459,12 @@ def get_fdw_sim_fn(qid, split_num, lamb, n, p, fwhm_fact_pt1, fwhm_fact_pt2, lma
     fn : str
         Absolute path for file.
     """
-    # cast to floating point for consistency
+    # cast for consistency
     lamb = float(lamb)
+    fwhm_fact_pt1[0] = int(fwhm_fact_pt1[0])
+    fwhm_fact_pt2[0] = int(fwhm_fact_pt2[0])
+    fwhm_fact_pt1[1] = float(fwhm_fact_pt1[1])
+    fwhm_fact_pt2[1] = float(fwhm_fact_pt2[1])
 
     # get root fn
     fn = config['maps_path']
