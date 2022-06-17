@@ -1466,18 +1466,17 @@ def get_fwhm_fact_func_from_pts(pt1, pt2, pt0_y=2.):
     Notes
     -----
     All supplied l values must be strictly increasing. All supplied y values
-    must also be strictly increasing. Between l=0 and the first point, the
-    function is a line. After the first point, the function is the line 
-    intercepting the first and second points and extending with the same slope
-    indefinitely.
+    must be increasing. Between l=0 and the first point, the function is a line.
+    After the first point, the function is the line intercepting the first and
+    second points and extending with the same slope indefinitely.
     """
     # check that pts are increasing in x and y
     assert pt0_y >= 0, \
         'pt0_y must be positive semi-definite'
     assert pt1[0] > 0 and pt2[0] > pt1[0], \
         'x values must be strictly increasing'
-    assert pt1[1] > pt0_y and pt2[1] > pt1[1], \
-        'y values must be strictly increasing'
+    assert pt1[1] >= pt0_y and pt2[1] >= pt1[1], \
+        'y values must be increasing'
 
     # build function
     def f(l):

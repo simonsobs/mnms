@@ -266,7 +266,6 @@ def get_wav_model_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact_pt1, fwhm
     """
     # cast to floating point for consistency
     lamb = float(lamb)
-    fwhm_fact = float(fwhm_fact)
 
     # get root fn
     fn = config['covmat_path']
@@ -330,7 +329,6 @@ def get_wav_sim_fn(qid, split_num, lamb, lmax, smooth_loc, fwhm_fact_pt1, fwhm_f
     """
     # cast to floating point for consistency
     lamb = float(lamb)
-    fwhm_fact = float(fwhm_fact)
 
     # get root fn
     fn = config['maps_path']
@@ -397,7 +395,6 @@ def get_fdw_model_fn(qid, split_num, lamb, n, p, fwhm_fact_pt1, fwhm_fact_pt2, l
     """
     # cast to floating point for consistency
     lamb = float(lamb)
-    fwhm_fact = float(fwhm_fact)
 
     # get root fn
     fn = config['covmat_path']
@@ -452,7 +449,6 @@ def get_fdw_sim_fn(qid, split_num, lamb, n, p, fwhm_fact_pt1, fwhm_fact_pt2, lma
     """
     # cast to floating point for consistency
     lamb = float(lamb)
-    fwhm_fact = float(fwhm_fact)
 
     # get root fn
     fn = config['maps_path']
