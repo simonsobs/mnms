@@ -312,7 +312,7 @@ def get_cl_diffs(data_maps, sim_maps, mask_est_data=1, mask_est_sim=1,
                     continue
                 if (preidx1, preidx2) not in data_y:
                     data_y[(preidx1, preidx2)] = 0
-                data_y[(preidx1, preidx2)] += curvedsky.alm2cl(data_alm[preidx1], data_alm[preidx2]) / ndata / data_w2
+                data_y[(preidx1, preidx2)] += utils.alm2cl(data_alm[preidx1], data_alm[preidx2]) / ndata / data_w2
 
     sim_y = {}
     for sim_map in sim_maps:
@@ -324,7 +324,7 @@ def get_cl_diffs(data_maps, sim_maps, mask_est_data=1, mask_est_sim=1,
                     continue
                 if (preidx1, preidx2) not in sim_y:
                     sim_y[(preidx1, preidx2)] = 0
-                sim_y[(preidx1, preidx2)] += curvedsky.alm2cl(sim_alm[preidx1], sim_alm[preidx2]) / nsim / sim_w2
+                sim_y[(preidx1, preidx2)] += utils.alm2cl(sim_alm[preidx1], sim_alm[preidx2]) / nsim / sim_w2
 
     # smooth averages
     if binwidth is not None:

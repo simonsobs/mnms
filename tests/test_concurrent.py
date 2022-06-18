@@ -1,5 +1,6 @@
 from mnms import utils
 import numpy as np
+from scipy import ndimage
 
 def test_concurrent_add():
     op = np.add
@@ -53,4 +54,17 @@ def test_concurrent_einsum():
         '...abyx, ...byx -> ...ayx', a, b)
     conc = utils.concurrent_einsum(
         '...ab, ...b -> ...a', a, b)
+    assert np.all(true == conc)
+
+def test_concurrent_gaussian_filter():
+    a = np.random.randn(2,3,4,500,500)
+    true = np.empty_like(a)
+    for preidx in np.ndindex(a.shape[:-2]):
+        ndimage.gaussian_filter(
+            a[preidx], (100, 100), output=true[preidx],
+            mode=['constant', 'wrap']
+            )
+    conc = utils.concurrent_gaussian_filter(
+        a, (100, 100), flatten_axes=[0, 1, 2], mode=['constant', 'wrap']
+    )
     assert np.all(true == conc)

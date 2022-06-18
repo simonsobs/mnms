@@ -1,4 +1,5 @@
 from pixell import enmap, curvedsky, fft as enfft, sharp
+import healpy as hp
 from enlib import array_ops
 from soapack import interfaces as sints
 from optweight import alm_c_utils
@@ -629,7 +630,7 @@ def get_ps_mat(inp, outbasis, e, mask_est=None, shape=None, wcs=None):
                 continue
             seen_pairs.append((preidx1, preidx2))
 
-            mat[(*preidx1, *preidx2)] = curvedsky.alm2cl(inp[preidx1], inp[preidx2])
+            mat[(*preidx1, *preidx2)] = alm2cl(inp[preidx1], inp[preidx2], method='healpy')
             if preidx1 != preidx2:
                 mat[(*preidx2, *preidx1)] = mat[(*preidx1, *preidx2)]
 
@@ -959,7 +960,7 @@ def ell_flatten(imap, mask_obs=1, mask_est=1, return_sqrt_cov=True, per_split=Tr
 
         # since filtering maps by their own power only need diagonal
         alm = map2alm(imap*mask_est, ainfo=ainfo, lmax=lmax, tweak=tweak)
-        cl = curvedsky.alm2cl(alm, ainfo=ainfo)
+        cl = alm2cl(alm)
         if not per_split:
             cl = cl.mean(axis=-3, keepdims=True)
 
@@ -1028,6 +1029,51 @@ def map2alm(imap, alm=None, ainfo=None, lmax=None, **kwargs):
             imap[preidx], alm=alm[preidx], ainfo=ainfo, lmax=lmax, **kwargs
             )
     return alm
+
+def alm2cl(alm1, alm2=None, method='curvedsky'):
+    """Wrapper around common alm2cl methods. Only takes auto-spectra of
+    supplied alms.
+
+    Parameters
+    ----------
+    alm1 : (..., nalm) array-like
+        First alm in leg.
+    alm2 : (..., nalm), optional
+        Second alm in leg, by default None. Must have same shape as alm1.
+    method : str, optional
+        Either 'curvedsky' or 'healpy', by default 'curvedsky.' The main
+        difference is 'pixell.curvedsky' uses multithreading and is faster
+        but does not return identical results for identical inputs.
+
+    Returns
+    -------
+    (..., lmax+1) array-like
+        Auto-spectra of supplied alm's.
+    """
+    if alm2 is not None:
+        assert alm1.shape == alm2.shape, \
+            'Supplied alms must have same shapes'
+    
+    lmax = sharp.nalm2lmax(alm1.shape[-1])
+    preshape = alm1.shape[:-1]
+    out = np.empty((*preshape, lmax+1), dtype=alm1.real.dtype)
+
+    if method == 'curvedsky':
+        op = curvedsky.alm2cl
+    elif method == 'healpy':
+        op = hp.alm2cl
+
+        alm1 = alm1.astype(np.complex128, copy=False)
+        if alm2 is not None:
+            alm2 = alm2.astype(np.complex128, copy=False)
+
+    for preidx in np.ndindex(preshape):
+        if alm2 is not None:
+            out[preidx] = op(alm1[preidx], alm2[preidx])
+        else:
+            out[preidx] = op(alm1[preidx])
+
+    return out
 
 def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, **kwargs):
     """A wrapper around pixell.curvedsky.alm2map that performs proper
@@ -1420,15 +1466,62 @@ def smooth_gauss(imap, fwhm, mask=None, inplace=True, method='curvedsky',
 
         # NOTE: 'nearest', 'wrap' only works for full sky maps. for 
         # maps much smaller than full sky, should be 'nearest', 'nearest'
-        for preidx in np.ndindex(imap.shape[:-2]):
-            ndimage.gaussian_filter(
-                imap[preidx], sigma_pix, output=imap[preidx], **method_kwargs
-                )
+        concurrent_gaussian_filter(imap, sigma_pix, **method_kwargs)
     
     if mask is not None:
         imap *= mask
 
     return imap
+
+def concurrent_gaussian_filter(a, sigma_pix, *args, flatten_axes=[0], 
+                               nthread=0, **kwargs):
+    """Perform scipy.ndimage.gaussian_filter concurrently. Always inplace.
+
+    Parameters
+    ----------
+    a : array-like
+        Array to be filtered.
+    sigma_pix : scalar or iterable of scalar
+        Number of elements per standard deviation along each axis to filter.
+    flatten_axes : iterable of int
+        Axes in a to flatten and concurrently apply filtering over in chunks.
+        Note that these axes will internally be moved to the 0 position for
+        concurrent operations. Therefore, sigma_pix must be written to respect
+        the shape of a excluding the flatten_axes.
+    nthread : int, optional
+        The number of threads, by default 0.
+        If 0, use output of get_cpu_count().
+
+    Returns
+    -------
+    array-like
+        Filtered input array, inplace.
+    """
+    # get the shape of the subspace to flatten
+    oshape_axes = [a.shape[i] for i in flatten_axes]
+
+    # move axes to axis 0 position
+    # NOTE: very important to do 0, else the strides slow down the workers
+    a = flatten_axis(a, axis=flatten_axes, pos=0)
+    
+    # perform multithreaded execution
+    if nthread == 0:
+        nthread = get_cpu_count()
+    executor = futures.ThreadPoolExecutor(max_workers=nthread)
+
+    def _fill(idx):
+        ndimage.gaussian_filter(
+            a[idx], sigma_pix, *args, output=a[idx], **kwargs
+            )
+    
+    fs = [executor.submit(_fill, i) for i in range(a.shape[0])]
+    futures.wait(fs)
+
+    # reshape and return
+    a = a.reshape(*oshape_axes, *a.shape[1:])
+    a = np.moveaxis(a, range(len(oshape_axes)), flatten_axes)
+
+    return a
 
 def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
     lmin = center - width/2

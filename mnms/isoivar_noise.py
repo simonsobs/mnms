@@ -78,22 +78,16 @@ def get_isoivar_noise_covsqrt(imap, ivar=None, mask_est=1, verbose=True):
         for split in range(num_splits):
             alm_a = alms[map_index_1, split, pol_index_1]
             alm_b = alms[map_index_2, split, pol_index_2]
-            power += curvedsky.alm2cl(alm_a, alm_b)
+            power += utils.alm2cl(alm_a, alm_b)
         power /= num_splits
 
-        # smooth
-        power[~np.isfinite(power)] = 0
-        if N > 0:
-            power = utils.rolling_average(power, N)
-            bins = np.arange(len(power))
-            power = interp1d(bins, power, bounds_error=False, fill_value=0.)(ls)
         power[:2] = 0
 
         # assign
         Nl_1d[i] = power
 
     # normalize by area and return final object
-    w2 = np.sum((mask**2)*pmap) / np.pi / 4.
+    w2 = np.sum((mask_est**2)*pmap) / np.pi / 4.
     return enmap.ndmap(Nl_1d, wcs=imap.wcs) / w2
 
 def get_iso_curvedsky_noise_sim(covar, ivar=None, flat_triu_axis=0, oshape=None, num_arrays=None, lfunc=None, split=None, seed=None):

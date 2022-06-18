@@ -1,4 +1,4 @@
-from pixell import enmap, curvedsky
+from pixell import enmap
 from mnms import utils
 from optweight import wlm_utils
 
@@ -911,7 +911,7 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
             f'Map shape: {imap.shape}\n'
             f'Num kernels: {len(fdw_kernels.kernels)}\n'
             f'Smoothing factor: {fwhm_fact}\n'
-            f'Radial filtering: {rad_filt}\n'
+            f'Radial filtering: {rad_filt}'
             )
 
     mask_obs = np.asanyarray(mask_obs, dtype=imap.dtype)
@@ -951,14 +951,19 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
         # get outer prod of wavelet maps with normalization factor
         ncomp = np.prod(wmap.shape[:-2], dtype=int)
         wmap = wmap.reshape((ncomp, *wmap.shape[-2:]))
-        wmap2 = np.einsum('ayx, byx -> abyx', wmap, wmap)
+        wmap2 = utils.concurrent_einsum(
+            '...a, ...b -> ...ab', wmap, wmap, nthread=nthread
+            )
         wmap2 /= fdw_kernels.mean_sqs[idx]
         wmap2 = enmap.ndmap(wmap2, wmap.wcs)
 
         # smooth them
         _lmax = fdw_kernels.lmaxs[idx]
         fwhm = _fwhm_fact(_lmax) * np.pi / _lmax
-        utils.smooth_gauss(wmap2, fwhm, method='map', mode=['constant', 'wrap'])
+        utils.smooth_gauss(
+            wmap2, fwhm, method='map', flatten_axes=[0, 1],
+            nthread=nthread, mode=['constant', 'wrap']
+            )
         
         # raise to 0.5 power. need to do some reshaping to allow use of
         # chunked eigpow, along a flattened pixel axis
@@ -1030,7 +1035,8 @@ def get_fdw_noise_sim(fdw_kernels, sqrt_cov_wavs, preshape=None,
         wmap_sim = utils.concurrent_normal(
             size=wmap.shape[1:], seed=wseed, dtype=wmap.dtype, nthread=nthread
             )
-        np.einsum('abyx, byx -> ayx', wmap, wmap_sim, out=wmap_sim)
+        wmap_sim = utils.concurrent_einsum(
+            '...ab, ...b -> ...a', wmap, wmap_sim, nthread=nthread)
         wavs_sim[idx] = wmap_sim
 
     kmap = fdw_kernels.wav2k(wavs_sim, nthread=nthread)
