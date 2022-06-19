@@ -1736,26 +1736,11 @@ class FDWNoiseModel(NoiseModel):
         return utils.map2alm(sim, lmax=self._lmax)
 
 
-class WavFiltTile(NoiseModel):
+@register()
+class HarmMixNoiseModel(NoiseModel):
 
-    def __init__(self):
+    def __init__(self, noise_models, ell_centers, ell_widths, profile='cosine'):
         pass
-
-    def _get_model(self):
-        pass
-        # 1. get wavelet noise model including sqrt_cov_ell and wavelet maps
-        # 2. use sqrt_cov_ell to flatten noise maps
-        # 3. do map->alm->wav on noise maps, flatten using wavelet maps
-        # 4. do wav->alm->map to recover full-res flattened noise map
-        # 5. make tiled noise model
-
-    def _get_sim(self):
-        pass
-        # 1. draw tiled noise sim, stitch into flat map
-        # 2. do map->alm->wav, unflatten using wavelet maps
-        # 3. do wav->alm->map to recover full-res unflattened noise map
-        # 4. use sqrt_cov_ell to unflatten
-        # 5. use corr_fact to get sim
 
 
 @register()
@@ -1864,3 +1849,25 @@ class Interface(NoiseModel):
     
     def _get_sim_alm(self, *args, **kwargs):
         raise NotImplementedError('Interface class only exposes base methods')
+
+
+class WavFiltTile(NoiseModel):
+
+    def __init__(self):
+        pass
+
+    def _get_model(self):
+        pass
+        # 1. get wavelet noise model including sqrt_cov_ell and wavelet maps
+        # 2. use sqrt_cov_ell to flatten noise maps
+        # 3. do map->alm->wav on noise maps, flatten using wavelet maps
+        # 4. do wav->alm->map to recover full-res flattened noise map
+        # 5. make tiled noise model
+
+    def _get_sim(self):
+        pass
+        # 1. draw tiled noise sim, stitch into flat map
+        # 2. do map->alm->wav, unflatten using wavelet maps
+        # 3. do wav->alm->map to recover full-res unflattened noise map
+        # 4. use sqrt_cov_ell to unflatten
+        # 5. use corr_fact to get sim
