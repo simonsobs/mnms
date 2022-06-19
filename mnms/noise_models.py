@@ -1493,7 +1493,7 @@ class WaveletNoiseModel(NoiseModel):
 
         alm, ainfo = wav_noise.rand_alm_from_sqrt_cov_wav(
             sqrt_cov_mat, sqrt_cov_ell, self._lmax,
-            w_ell, dtype=np.complex64, seed=seed)
+            w_ell, dtype=np.complex64, seed=seed, nthread=0)
 
         # We always want shape (num_arrays, num_splits=1, num_pol, nelem).
         assert alm.ndim == 3, 'Alm must have shape (num_arrays, num_pol, nelem)'
