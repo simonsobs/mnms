@@ -1901,7 +1901,8 @@ def chunked_eigpow(A, e, axes=[-2, -1], chunk_axis=0, target_gb=5):
 
     return A
 
-def rfft(emap, omap=None, nthread=0, normalize=True, adjoint_ifft=False):
+# normalizations adapted from pixell.enmap
+def rfft(emap, omap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
     """Perform a 'real'-FFT: an FFT over a real-valued function, such
     that only half the usual frequency modes are required to recover
     the full information.
@@ -1931,17 +1932,27 @@ def rfft(emap, omap=None, nthread=0, normalize=True, adjoint_ifft=False):
     res  = enmap.samewcs(
         enfft.rfft(emap, omap, axes=[-2, -1], nthread=nthread), emap
         )
-    norm = 1
-    if normalize:
-        norm /= np.prod(emap.shape[-2:])**0.5
+
+    # array size norms
+    if normalize == 'forward':
+        norm = 1/np.prod(emap.shape[-2:])
+    elif normalize in ['ortho', 'phy', 'phys', 'physical']:
+        norm = 1/np.prod(emap.shape[-2:])**0.5
+    else:
+        norm = 1
+
+    # phys norms
     if normalize in ["phy","phys","physical"]:
         if adjoint_ifft: norm /= emap.pixsize()**0.5
         else:            norm *= emap.pixsize()**0.5
-    if norm != 1: res *= norm
+
+    if norm != 1:
+        res *= norm
     return res
 
 # NOTE: irfft overwrites the emap buffer!
-def irfft(emap, omap=None, n=None, nthread=0, normalize=True, adjoint_fft=False):
+# normalizations adapted from pixell.enmap
+def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=False):
     """Perform a 'real'-iFFT: an iFFT to recover a real-valued function, 
     over only half the usual frequency modes.
 
@@ -1973,13 +1984,22 @@ def irfft(emap, omap=None, n=None, nthread=0, normalize=True, adjoint_fft=False)
     res  = enmap.samewcs(
         enfft.irfft(emap, omap, n=n, axes=[-2, -1], nthread=nthread, normalize=False), emap
         )
-    norm = 1
-    if normalize:
-        norm /= np.prod(res.shape[-2:])**0.5
+    
+    # array size norms
+    if normalize == 'backward':
+        norm = 1/np.prod(res.shape[-2:])
+    elif normalize in ['ortho', 'phy', 'phys', 'physical']:
+        norm = 1/np.prod(res.shape[-2:])**0.5
+    else:
+        norm = 1
+
+    # phys norms
     if normalize in ["phy","phys","physical"]:
         if adjoint_fft: norm *= emap.pixsize()**0.5
         else:           norm /= emap.pixsize()**0.5
-    if norm != 1: res *= norm
+
+    if norm != 1:
+        res *= norm
     return res
 
 def write_alm(fn, alm):
