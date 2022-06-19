@@ -1032,6 +1032,8 @@ def get_fdw_noise_sim(fdw_kernels, sqrt_cov_wavs, preshape=None,
     for idx, wmap in sqrt_cov_wavs.items():
         if seed is not None:
             wseed = list(seed) + list(idx)
+        else:
+            wseed = seed
         wmap_sim = utils.concurrent_normal(
             size=wmap.shape[1:], seed=wseed, dtype=wmap.dtype, nthread=nthread
             )
