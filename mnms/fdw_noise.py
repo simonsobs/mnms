@@ -341,7 +341,8 @@ class Kernel:
             f'kmap must have same shape[-2:] as k_kernel, got\n' + \
             f'{kmap.shape} and {self._k_kernel.shape}'
 
-        wmap = utils.irfft(kmap, n=self._n, nthread=nthread) # destroys kmap buffer
+        # destroys kmap buffer
+        wmap = utils.irfft(kmap, n=self._n, normalize='backward', nthread=nthread) 
         wcs = self._k_kernel.wcs if use_kernel_wcs else kmap.wcs
         return enmap.ndmap(wmap, wcs)
 
@@ -374,7 +375,7 @@ class Kernel:
             f'wmap must have same shape[-1]//2+1 as k_kernel, got\n' + \
             f'{wmap.shape[-1]//2+1} and {self._k_kernel.shape[-1]}'
         
-        kmap = utils.rfft(wmap, nthread=nthread) 
+        kmap = utils.rfft(wmap, normalize='backward', nthread=nthread) 
         kmap *= self._k_kernel_conj
         # kmap = utils.concurrent_op(np.multiply, kmap, self._k_kernel_conj, nthread=nthread)
         # NOTE: the above actually has too much overhead, slower
