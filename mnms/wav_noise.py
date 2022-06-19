@@ -7,7 +7,7 @@ from optweight import mat_utils, wavtrans, map_utils
 import healpy as hp
 
 def rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax, w_ell,
-                               dtype=np.complex64, seed=None):
+                               dtype=np.complex64, seed=None, nthread=0):
     """
     Draw alm from square root of wavelet block diagonal covariance matrix.
 
@@ -25,6 +25,10 @@ def rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax, w_ell,
         Dtype of output alm.
     seed : int, optional
         Seed for random numbers.
+    nthread : int, optional
+        Number of concurrent threads, by default 0. If 0, the result
+        of mnms.utils.get_cpu_count()., by default 0. Only used in
+        drawing random numbers.
 
     Returns
     -------
@@ -41,8 +45,9 @@ def rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax, w_ell,
 
     sqrt_cov_wav_op = operators.WavMatVecWav(sqrt_cov_wav, power=1, inplace=True,
                                              op='aibjp, bjp -> aip')
-    wav_uni = noise_utils.unit_var_wav(
-        sqrt_cov_wav.get_minfos_diag(), preshape[:2], sqrt_cov_wav.dtype, seed=seed)
+    wav_uni = unit_var_wav(
+        sqrt_cov_wav.get_minfos_diag(), preshape[:2], sqrt_cov_wav.dtype,
+        seed=seed, nthread=nthread)
 
     rand_wav = sqrt_cov_wav_op(wav_uni)
     wavtrans.wav2alm(rand_wav, alm_draw, ainfo, [0, 2], w_ell)
@@ -53,6 +58,51 @@ def rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax, w_ell,
         )
 
     return alm_draw, ainfo
+
+# adapted from optweight.noise_utils.unit_var_wav but using
+# mnms.utils.concurrent_normal. this speeds up drawing sims
+# by ~20%
+def unit_var_wav(minfos, preshape, dtype, seed=None, nthread=0):
+    """
+    Create wavelet block vector with maps filled with unit-variance Gaussian
+    noise.
+    
+    Arguments
+    ---------
+    minfos : (ndiag) array-like of sharp.map_info objects
+        Map info objects describing each wavelet map.
+    preshape : tuple
+        First dimensions of the maps, i.e. map.shape = preshape + (npix,).
+    dtype : type
+        Dtype of maps.
+    seed : int or np.random._generator.Generator object, optional
+        Seed for np.random.seed.
+    nthread : int, optional
+        Number of concurrent threads, by default 0. If 0, the result
+        of mnms.utils.get_cpu_count()., by default 0. Only used in
+        drawing random numbers.
+
+    Returns
+    -------
+    wav_uni : wavtrans.Wav object
+        Block vector with unit-variance noise maps.
+    """
+    indices = np.arange(len(minfos))
+    wav_uni = wavtrans.Wav(1, preshape=preshape, dtype=dtype)
+
+    for widx in indices:
+        if seed is not None:
+            wseed = [*seed, widx]
+        else:
+            wseed = seed
+        
+        minfo = minfos[widx]
+        shape = preshape + (minfo.npix,)
+        m_arr = utils.concurrent_normal(size=shape, dtype=dtype, seed=wseed, nthread=nthread)
+        
+        wav_uni.add(widx, m_arr, minfo)
+
+    return wav_uni
 
 def rand_enmap_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, mask, lmax, w_ell,
                                  dtype=np.float32, seed=None):
@@ -226,21 +276,3 @@ def grow_mask(mask, lmax, radius=np.radians(0.5), fwhm=np.radians(0.5)):
     mask_out = curvedsky.alm2map(alm, mask_out, ainfo=ainfo)
 
     return mask_out
-
-def lmax_from_wcs(wcs):
-    """
-    Return lmax that pixelization of enmap can support. This
-    assumes CAR maps.
-
-    Parameters
-    ----------
-    wcs : astropy.wcs.wcs.WCS object
-        WCS object of enmap.
-
-    Returns
-    -------
-    lmax : int
-        Max multipole.
-    """
-
-    return int(180 / np.abs(wcs.wcs.cdelt[1]) / 2)
