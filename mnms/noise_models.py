@@ -869,8 +869,8 @@ class NoiseModel(ABC):
         return {}
 
     @abstractmethod
-    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
-        """Write sqrt_cov_mat, sqrt_cov_ell, and possibly more noise model variables to filename fn"""
+    def _write_model(self, fn, **kwargs):
+        """Write a dictionary of noise model variables to filename fn"""
         pass
 
     def get_sim(self, split_num, sim_num, alm=True, do_mask_obs=True,
@@ -1257,8 +1257,8 @@ class TiledNoiseModel(NoiseModel):
             'sqrt_cov_ell': sqrt_cov_ell
             }
 
-    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None):
-        """Write sqrt_cov_mat, sqrt_cov_ell, and possibly more noise model variables to filename fn"""
+    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
+        """Write a dictionary of noise model variables to filename fn"""
         tiled_ndmap.write_tiled_ndmap(
             fn, sqrt_cov_mat, extra_hdu={'SQRT_COV_ELL': sqrt_cov_ell}
         )
@@ -1292,9 +1292,9 @@ class TiledNoiseModel(NoiseModel):
             sim *= mask
         return sim
 
-    def _get_sim_alm(self, split_num, seed, ivar=None, mask=None, verbose=False, **kwargs):    
+    def _get_sim_alm(self, nm_dict, seed, ivar=None, mask=None, verbose=False, **kwargs):    
         """Return a masked alm sim from nm_dict, with seed <sequence of ints>"""
-        sim = self._get_sim(split_num, seed, ivar=ivar, mask=mask, verbose=verbose, **kwargs)
+        sim = self._get_sim(nm_dict, seed, ivar=ivar, mask=mask, verbose=verbose, **kwargs)
         return utils.map2alm(sim, lmax=self._lmax)
 
 
@@ -1457,8 +1457,8 @@ class WaveletNoiseModel(NoiseModel):
             'w_ell': w_ell
             }
 
-    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, w_ell=None):
-        """Write sqrt_cov_mat, sqrt_cov_ell, and possibly more noise model variables to filename fn"""
+    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, w_ell=None, **kwargs):
+        """Write a dictionary of noise model variables to filename fn"""
         wavtrans.write_wav(
             fn, sqrt_cov_mat, symm_axes=[[0, 1], [2, 3]],
             extra={'sqrt_cov_ell': sqrt_cov_ell, 'w_ell': w_ell}
@@ -1696,7 +1696,7 @@ class FDWNoiseModel(NoiseModel):
             }
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_k=None, **kwargs):
-        """Write sqrt_cov_mat, sqrt_cov_k, and possibly more noise model variables to filename fn"""
+        """Write a dictionary of noise model variables to filename fn"""
         fdw_noise.write_wavs(
             fn, sqrt_cov_mat, extra_datasets={'sqrt_cov_k': sqrt_cov_k}
         )
@@ -1740,7 +1740,77 @@ class FDWNoiseModel(NoiseModel):
 class HarmMixNoiseModel(NoiseModel):
 
     def __init__(self, noise_models, ell_centers, ell_widths, profile='cosine'):
+        self._noise_models = noise_models
+        self._ell_centers = ell_centers
+        self._ell_widths = ell_widths
+        self._profile = profile
+
+        self._lmax = noise_models[-1]._lmax
+        self._lprofs = utils.get_ell_trans_profiles(
+            ell_centers, ell_widths, self._lmax, profile=profile, e=0.5)
+
+        # need to perform some introspection of passed noise models to
+        # e.g. check lmaxs against stitching regions. assume order noise_models
+        # by increasing ell placement
+        assert len(noise_models) == len(ell_centers) + 1, \
+            f'Must be one more noise_models than ell_centers, got {len(noise_models)} and {len(ell_centers)}'
+        assert len(noise_models) == len(ell_widths) + 1, \
+            f'Must be one more noise_models than ell_widths, got {len(noise_models)} and {len(ell_widths)}'
+        for i, noise_model in enumerate(noise_models):
+            if i < len(ell_centers)-1:
+                top = ell_centers[i] + ell_widths[i]/2
+            else:
+                # the last region could be bandlimited by self._lmax
+                top = min(self._lmax, ell_centers[-1] + ell_widths[-1]/2)
+            
+            assert noise_model._lmax >= top, \
+                    f'Transition regions must bandlimit noise_models, got bandlimit of {top} ' + \
+                    f'in region {i}; noise_model {noise_model} with lmax {noise_model._lmax}'
+    
+    def _check_model_on_disk(self, split_num, generate=True):
         pass
+
+    def _get_model_fn(self, split_num):
+        """Get a noise model filename for split split_num; return as <str>"""
+
+    def _read_model(self, fn):
+        """Read a noise model with filename fn; return a dictionary of noise model variables"""
+
+    def _get_model(self, dmap, verbose=False, **kwargs):
+        """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
+
+    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_k=None, **kwargs):
+        """Write a dictionary of noise model variables to filename fn"""
+
+    def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
+        """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
+        fn = ''
+        for i, noise_model in enumerate(self._noise_models):
+            fn += noise_model._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=mask_obs)
+            if i < len(self._noise_models)-1:
+                fn += f'_lcenter{self._ell_centers[i]}_lwidth{self._ell_widths[i]}_prof{self._profile}_'
+
+    def _get_sim(self, nm_dict, seed, mask=None, verbose=False, **kwargs):
+        """Return a masked enmap.ndmap sim from nm_dict, with seed <sequence of ints>"""
+        # Get noise model variables 
+        sqrt_cov_mat = nm_dict['sqrt_cov_mat']
+        sqrt_cov_k = nm_dict['sqrt_cov_k']
+
+        sim = fdw_noise.get_fdw_noise_sim(
+            self._fk, sqrt_cov_mat, preshape=(self._num_arrays, -1),
+            sqrt_cov_k=sqrt_cov_k, seed=seed, nthread=0, verbose=verbose
+        )
+
+        # We always want shape (num_arrays, num_splits=1, num_pol, ny, nx).
+        assert sim.ndim == 4, 'Sim must have shape (num_arrays, num_pol, ny, nx)'
+        sim = sim.reshape(sim.shape[0], 1, *sim.shape[1:])
+
+        if mask is not None:
+            sim *= mask
+        return sim
+
+    def _get_sim_alm(self, nm_dict, seed, mask=None, verbose=False, **kwargs):
+        """Return a masked alm sim from nm_dict, with seed <sequence of ints>"""
 
 
 @register()
