@@ -1,7 +1,7 @@
 from mnms import simio, tiled_ndmap, utils, soapack_utils as s_utils, tiled_noise, wav_noise, fdw_noise, inpaint
-from pixell import enmap, wcsutils
+from pixell import enmap, wcsutils, sharp
 from enlib import bench
-from optweight import wavtrans
+from optweight import wavtrans, alm_c_utils
 
 import numpy as np
 
@@ -1479,7 +1479,7 @@ class WaveletNoiseModel(NoiseModel):
         # pass mask = None first to strictly generate alm, only mask if necessary
         alm, ainfo = self._get_sim_alm(nm_dict, seed, mask=None, return_ainfo=True, verbose=verbose, **kwargs)
         sim = utils.alm2map(alm, shape=self._shape, wcs=self._wcs,
-                            dtype=np.float32, ainfo=ainfo)
+                            dtype=self._dtype, ainfo=ainfo)
         if mask is not None:
             sim *= mask
         return sim
@@ -1501,7 +1501,7 @@ class WaveletNoiseModel(NoiseModel):
 
         if mask is not None:
             sim = utils.alm2map(alm, shape=self._shape, wcs=self._wcs,
-                                dtype=np.float32, ainfo=ainfo)
+                                dtype=self._dtype, ainfo=ainfo)
             sim *= mask
             utils.map2alm(sim, alm=alm, ainfo=ainfo)
         if return_ainfo:
@@ -1737,7 +1737,7 @@ class FDWNoiseModel(NoiseModel):
 
 
 @register()
-class HarmMixNoiseModel(NoiseModel):
+class HarmMixNoiseModel:
 
     def __init__(self, noise_models, ell_centers, ell_widths, profile='cosine'):
         self._noise_models = noise_models
@@ -1746,6 +1746,10 @@ class HarmMixNoiseModel(NoiseModel):
         self._profile = profile
 
         self._lmax = noise_models[-1]._lmax
+        self._shape = noise_models[-1]._shape
+        self._wcs = noise_models[-1]._wcs
+        self._dtype = noise_models[-1]._dtype
+
         self._lprofs = utils.get_ell_trans_profiles(
             ell_centers, ell_widths, self._lmax, profile=profile, e=0.5)
 
@@ -1767,20 +1771,75 @@ class HarmMixNoiseModel(NoiseModel):
                     f'Transition regions must bandlimit noise_models, got bandlimit of {top} ' + \
                     f'in region {i}; noise_model {noise_model} with lmax {noise_model._lmax}'
     
-    def _check_model_on_disk(self, split_num, generate=True):
-        pass
+    def get_model(self, *args, **kwargs):
+        for noise_model in self._noise_models:
+            noise_model.get_model(*args, **kwargs)
 
-    def _get_model_fn(self, split_num):
-        """Get a noise model filename for split split_num; return as <str>"""
+        # don't return anything (mainly memory motivated)
+        return None
 
-    def _read_model(self, fn):
-        """Read a noise model with filename fn; return a dictionary of noise model variables"""
+    def get_sim(self, split_num, sim_num, alm=True, do_mask_obs=True,
+                check_on_disk=True, check_mix_on_disk=True, generate=True,
+                generate_mix=True, keep_model=True, keep_ivar=True,
+                write=False, write_mix=False, verbose=False):
 
-    def _get_model(self, dmap, verbose=False, **kwargs):
-        """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
+        assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
 
-    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_k=None, **kwargs):
-        """Write a dictionary of noise model variables to filename fn"""
+        if check_mix_on_disk:
+            res = self._check_sim_on_disk(
+                split_num, sim_num, alm=alm, do_mask_obs=do_mask_obs, generate=generate,
+                generate_mix = generate_mix
+            )
+            if res is not False:
+                return res
+            else: # generate_mix == True and: generate == True or all sims exist on disk
+                pass
+
+        with bench.show(f'Generating noise sim for split {split_num}, map {sim_num}'):
+            if alm:
+                sim = self._get_sim_alm(
+                    split_num, sim_num, do_mask_obs=do_mask_obs,
+                    check_on_disk=check_on_disk, generate=generate, keep_model=keep_model,
+                    keep_ivar=keep_ivar, write=write, verbose=verbose
+                    )
+            else:
+                sim = self._get_sim(
+                    split_num, sim_num, do_mask_obs=do_mask_obs,
+                    check_on_disk=check_on_disk, generate=generate, keep_model=keep_model,
+                    keep_ivar=keep_ivar, write=write, verbose=verbose
+                    )
+
+        if write_mix:
+            fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_obs)
+            if alm:
+                utils.write_alm(fn, sim)
+            else:
+                enmap.write_map(fn, sim)
+
+        return sim
+
+    def _check_sim_on_disk(self, split_num, sim_num, alm=True, do_mask_obs=True, generate=True,
+                           generate_mix=True):
+        fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_obs)
+        try:
+            if alm:
+                # we know the preshape is (num_arrays, num_splits=1)
+                return utils.read_alm(fn)
+            else:
+                return enmap.read_map(fn)
+        except (FileNotFoundError, OSError) as e:
+            if generate_mix:
+                print(f'Sim for split {split_num}, map {sim_num} not found on-disk, generating instead')
+                for noise_model in self._noise_models:
+                    _ = noise_model._check_sim_on_disk(
+                        split_num, sim_num, alm=alm, do_mask_obs=do_mask_obs, generate=generate
+                    )
+                
+                # if we've gotten here, then either generate is True or all base sims exist on disk
+                return False
+            else:
+                print(f'Sim for split {split_num}, map {sim_num} not found on-disk, please generate it first')
+                raise FileNotFoundError(fn) from e
 
     def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
@@ -1789,29 +1848,39 @@ class HarmMixNoiseModel(NoiseModel):
             fn += noise_model._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=mask_obs)
             if i < len(self._noise_models)-1:
                 fn += f'_lcenter{self._ell_centers[i]}_lwidth{self._ell_widths[i]}_prof{self._profile}_'
+        return fn
 
-    def _get_sim(self, nm_dict, seed, mask=None, verbose=False, **kwargs):
+    def _get_sim(self, split_num, sim_num, do_mask_obs=True,
+                 check_on_disk=True, generate=True, keep_model=True,
+                 keep_ivar=True, write=False, verbose=False, **kwargs):
         """Return a masked enmap.ndmap sim from nm_dict, with seed <sequence of ints>"""
-        # Get noise model variables 
-        sqrt_cov_mat = nm_dict['sqrt_cov_mat']
-        sqrt_cov_k = nm_dict['sqrt_cov_k']
-
-        sim = fdw_noise.get_fdw_noise_sim(
-            self._fk, sqrt_cov_mat, preshape=(self._num_arrays, -1),
-            sqrt_cov_k=sqrt_cov_k, seed=seed, nthread=0, verbose=verbose
-        )
-
-        # We always want shape (num_arrays, num_splits=1, num_pol, ny, nx).
-        assert sim.ndim == 4, 'Sim must have shape (num_arrays, num_pol, ny, nx)'
-        sim = sim.reshape(sim.shape[0], 1, *sim.shape[1:])
-
-        if mask is not None:
-            sim *= mask
+        alm = self._get_sim_alm(
+            split_num, sim_num, do_mask_obs=do_mask_obs,
+            check_on_disk=check_on_disk, generate=generate, keep_model=keep_model,
+            keep_ivar=keep_ivar, write=write, verbose=verbose, **kwargs
+            )
+        sim = utils.alm2map(alm, shape=self._shape, wcs=self._wcs, dtype=self._dtype)
         return sim
 
-    def _get_sim_alm(self, nm_dict, seed, mask=None, verbose=False, **kwargs):
+    def _get_sim_alm(self, split_num, sim_num, do_mask_obs=True,
+                     check_on_disk=True, generate=True, keep_model=True,
+                     keep_ivar=True, write=False, verbose=False, **kwargs):
         """Return a masked alm sim from nm_dict, with seed <sequence of ints>"""
+        oainfo = sharp.alm_info(lmax=self._lmax)
+        mix_alm = 0
+        for i, noise_model in enumerate(self._noise_models):
+            alm = noise_model.get_sim(
+                split_num, sim_num, alm=True, do_mask_obs=do_mask_obs,
+                check_on_disk=check_on_disk, generate=generate, keep_model=keep_model,
+                keep_ivar=keep_ivar, write=write, verbose=verbose, **kwargs
+                )
+            iainfo = sharp.alm_info(nalm=alm.shape[-1])
+            alm = sharp.transfer_alm(iainfo, alm, oainfo)
+            
+            alm_c_utils.lmul(alm, self._lprofs[i], oainfo)
+            mix_alm += alm 
 
+        return mix_alm
 
 @register()
 class Interface(NoiseModel):
