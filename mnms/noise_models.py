@@ -1493,7 +1493,7 @@ class WaveletNoiseModel(NoiseModel):
 
         alm, ainfo = wav_noise.rand_alm_from_sqrt_cov_wav(
             sqrt_cov_mat, sqrt_cov_ell, self._lmax,
-            w_ell, dtype=np.complex64, seed=seed, nthread=0)
+            w_ell, dtype=np.result_type(1j, self._dtype), seed=seed, nthread=0)
 
         # We always want shape (num_arrays, num_splits=1, num_pol, nelem).
         assert alm.ndim == 3, 'Alm must have shape (num_arrays, num_pol, nelem)'
@@ -1737,7 +1737,7 @@ class FDWNoiseModel(NoiseModel):
 
 
 @register()
-class HarmMixNoiseModel:
+class HarmonicMixture:
 
     def __init__(self, noise_models, ell_centers, ell_widths, profile='cosine'):
         self._noise_models = noise_models
@@ -1832,7 +1832,7 @@ class HarmMixNoiseModel:
                 print(f'Sim for split {split_num}, map {sim_num} not found on-disk, generating instead')
                 for noise_model in self._noise_models:
                     _ = noise_model._check_sim_on_disk(
-                        split_num, sim_num, alm=alm, do_mask_obs=do_mask_obs, generate=generate
+                        split_num, sim_num, alm=True, do_mask_obs=do_mask_obs, generate=generate
                     )
                 
                 # if we've gotten here, then either generate is True or all base sims exist on disk
@@ -1877,7 +1877,7 @@ class HarmMixNoiseModel:
             iainfo = sharp.alm_info(nalm=alm.shape[-1])
             alm = sharp.transfer_alm(iainfo, alm, oainfo)
             
-            alm_c_utils.lmul(alm, self._lprofs[i], oainfo)
+            alm_c_utils.lmul(alm, self._lprofs[i], oainfo, inplace=True)
             mix_alm += alm 
 
         return mix_alm

@@ -260,8 +260,8 @@ def get_cl_diffs(data_maps, sim_maps, mask_est_data=1, mask_est_sim=1,
         component pairs.
     """
     # make data maps and sim maps at least 3d to take spinny SHT
-    data_maps = np.asanyarray(data_maps)
-    sim_maps = np.asanyarray(sim_maps)
+    data_maps = np.asanyarray(data_maps).squeeze()
+    sim_maps = np.asanyarray(sim_maps).squeeze()
     data_maps = utils.atleast_nd(data_maps, 3)
     sim_maps = utils.atleast_nd(sim_maps, 3)
 
