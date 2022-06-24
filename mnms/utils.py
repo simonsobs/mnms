@@ -1538,6 +1538,101 @@ def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
         return np.piecewise(ell, condlist, funclist)
     return lfunc1, lfunc2
 
+def get_ell_trans_profiles(ell_centers, ell_widths, lmax, profile='cosine',
+                           e=1, dtype=np.float32):
+    """Generate profiles over ell that smoothly transition from 1 to 0 (and
+    vice-versa) in defined regions. 
+
+    Parameters
+    ----------
+    ell_centers : iterable of int
+        The center locations of the transition regions. Must be in
+        strictly increasing order.
+    ell_widths : iterable of int
+        The widths of the transition regions. Must be greater than or
+        equal to 0, even; the iterable must be the same length as
+        ell_centers. Together with ell_centers, ell_widths must be
+        defined such that no regions overlap.
+    lmax : int
+        The maximum scale of the returned profiles.
+    profile : str, optional
+        The transition region shape, by default 'cosine'. Other supported
+        option is 'linear'.
+    e : int, optional
+        Power to raise profiles to, by default 1. For example, the Gaussian
+        admissibility criterion corresponds to e=0.5.
+    dtype : np.dtype, optional
+        The returned profile dtype, by default np.float32.
+
+    Returns
+    -------
+    (len(ell_centers)+1, lmax+1) ndarray
+        The profiles over all ells.
+
+    Raises
+    ------
+    ValueError
+        If ell_centers are not strictly increasing.
+    ValueError
+        If 'profile' is not 'cosine' or 'linear'.
+
+    Notes
+    -----
+    In addition to above restrictions, the profiles must satisfy that
+    np.sum(out**(1/e), axis=0) is 1. For example, for e=0.5, this is
+    the Gaussian admissibility criterion.
+    """
+    ell_infos = np.asarray([ell_centers, ell_widths], dtype=int).T
+    assert ell_infos.ndim == 2, 'ell_centers, ell_widths must be 1d'
+
+    ell = np.arange(lmax+1)
+    out = np.ones((ell_infos.shape[0]+1, lmax+1), dtype=dtype)
+    for i, ell_info in enumerate(ell_infos):
+        ell_center, ell_width = ell_info
+        assert ell_width%2 == 0, f'ell_widths must be even, got {ell_width}'
+        assert ell_width >= 0, f'ell_widths must be positive semi-definite, got {ell_width}'
+
+        top = ell_center + ell_width/2
+        bottom = ell_center - ell_width/2
+
+        # first check increasing ell_centers and no overlapping transfer regions
+        for j, other_ell_info in enumerate(ell_infos):
+            if i == j:
+                continue
+
+            other_ell_center, other_ell_width = other_ell_info
+            if other_ell_center > ell_center:
+                assert j > i, \
+                    f'ell_centers must be strictly increasing, conflict betweein {i} and {j}'
+                assert top <= other_ell_center - other_ell_width/2, \
+                    f'transfer regions cannot overlap, conflict between regions {i} and {j}'
+            elif other_ell_center < ell_center:
+                assert j < i, \
+                    f'ell_centers must be strictly increasing, conflict betweein {i} and {j}'
+                assert bottom >= other_ell_center + other_ell_width/2, \
+                    f'transfer regions cannot overlap, conflict between regions {i} and {j}'
+            else:
+                raise ValueError('ell_centers must be unique')
+
+        if ell_width == 0:
+            trans_prof = np.empty_like(ell)
+        elif profile == 'cosine':
+            trans_prof = (0.5 + 0.5*np.cos(np.pi/ell_width * (ell - bottom)))
+        elif profile == 'linear':
+            trans_prof = 1 - 1/(ell_width) * (ell - bottom)
+        else:
+            raise ValueError('only supported profiles are cosine and linear')
+        
+        trans_prof[ell <= bottom] = 1
+        trans_prof[ell > top] = 0
+        out[i] *= trans_prof**e
+        out[i+1] *= (1 - trans_prof)**e
+
+    assert np.all(np.sum(out**(1/e), axis=0) - 1 < 1e-6), \
+        f'Profile sum does not equal 1, max error is {np.max(np.abs(np.sum(out**(1/e), axis=0) - 1))}'
+    
+    return out
+
 def get_fwhm_fact_func_from_pts(pt1, pt2, pt0_y=2.):
     """Generate a piecewise linear function over l from a point on the y-axis,
     and two more points at positive l.

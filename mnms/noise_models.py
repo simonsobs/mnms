@@ -1,7 +1,7 @@
 from mnms import simio, tiled_ndmap, utils, soapack_utils as s_utils, tiled_noise, wav_noise, fdw_noise, inpaint
-from pixell import enmap, wcsutils
+from pixell import enmap, wcsutils, sharp
 from enlib import bench
-from optweight import wavtrans
+from optweight import wavtrans, alm_c_utils
 
 import numpy as np
 
@@ -869,8 +869,8 @@ class NoiseModel(ABC):
         return {}
 
     @abstractmethod
-    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
-        """Write sqrt_cov_mat, sqrt_cov_ell, and possibly more noise model variables to filename fn"""
+    def _write_model(self, fn, **kwargs):
+        """Write a dictionary of noise model variables to filename fn"""
         pass
 
     def get_sim(self, split_num, sim_num, alm=True, do_mask_obs=True,
@@ -1257,8 +1257,8 @@ class TiledNoiseModel(NoiseModel):
             'sqrt_cov_ell': sqrt_cov_ell
             }
 
-    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None):
-        """Write sqrt_cov_mat, sqrt_cov_ell, and possibly more noise model variables to filename fn"""
+    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
+        """Write a dictionary of noise model variables to filename fn"""
         tiled_ndmap.write_tiled_ndmap(
             fn, sqrt_cov_mat, extra_hdu={'SQRT_COV_ELL': sqrt_cov_ell}
         )
@@ -1292,9 +1292,9 @@ class TiledNoiseModel(NoiseModel):
             sim *= mask
         return sim
 
-    def _get_sim_alm(self, split_num, seed, ivar=None, mask=None, verbose=False, **kwargs):    
+    def _get_sim_alm(self, nm_dict, seed, ivar=None, mask=None, verbose=False, **kwargs):    
         """Return a masked alm sim from nm_dict, with seed <sequence of ints>"""
-        sim = self._get_sim(split_num, seed, ivar=ivar, mask=mask, verbose=verbose, **kwargs)
+        sim = self._get_sim(nm_dict, seed, ivar=ivar, mask=mask, verbose=verbose, **kwargs)
         return utils.map2alm(sim, lmax=self._lmax)
 
 
@@ -1457,8 +1457,8 @@ class WaveletNoiseModel(NoiseModel):
             'w_ell': w_ell
             }
 
-    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, w_ell=None):
-        """Write sqrt_cov_mat, sqrt_cov_ell, and possibly more noise model variables to filename fn"""
+    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, w_ell=None, **kwargs):
+        """Write a dictionary of noise model variables to filename fn"""
         wavtrans.write_wav(
             fn, sqrt_cov_mat, symm_axes=[[0, 1], [2, 3]],
             extra={'sqrt_cov_ell': sqrt_cov_ell, 'w_ell': w_ell}
@@ -1479,7 +1479,7 @@ class WaveletNoiseModel(NoiseModel):
         # pass mask = None first to strictly generate alm, only mask if necessary
         alm, ainfo = self._get_sim_alm(nm_dict, seed, mask=None, return_ainfo=True, verbose=verbose, **kwargs)
         sim = utils.alm2map(alm, shape=self._shape, wcs=self._wcs,
-                            dtype=np.float32, ainfo=ainfo)
+                            dtype=self._dtype, ainfo=ainfo)
         if mask is not None:
             sim *= mask
         return sim
@@ -1493,7 +1493,7 @@ class WaveletNoiseModel(NoiseModel):
 
         alm, ainfo = wav_noise.rand_alm_from_sqrt_cov_wav(
             sqrt_cov_mat, sqrt_cov_ell, self._lmax,
-            w_ell, dtype=np.complex64, seed=seed, nthread=0)
+            w_ell, dtype=np.result_type(1j, self._dtype), seed=seed, nthread=0)
 
         # We always want shape (num_arrays, num_splits=1, num_pol, nelem).
         assert alm.ndim == 3, 'Alm must have shape (num_arrays, num_pol, nelem)'
@@ -1501,7 +1501,7 @@ class WaveletNoiseModel(NoiseModel):
 
         if mask is not None:
             sim = utils.alm2map(alm, shape=self._shape, wcs=self._wcs,
-                                dtype=np.float32, ainfo=ainfo)
+                                dtype=self._dtype, ainfo=ainfo)
             sim *= mask
             utils.map2alm(sim, alm=alm, ainfo=ainfo)
         if return_ainfo:
@@ -1696,7 +1696,7 @@ class FDWNoiseModel(NoiseModel):
             }
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_k=None, **kwargs):
-        """Write sqrt_cov_mat, sqrt_cov_k, and possibly more noise model variables to filename fn"""
+        """Write a dictionary of noise model variables to filename fn"""
         fdw_noise.write_wavs(
             fn, sqrt_cov_mat, extra_datasets={'sqrt_cov_k': sqrt_cov_k}
         )
@@ -1736,27 +1736,279 @@ class FDWNoiseModel(NoiseModel):
         return utils.map2alm(sim, lmax=self._lmax)
 
 
-class WavFiltTile(NoiseModel):
+@register()
+class HarmonicMixture:
 
-    def __init__(self):
-        pass
+    def __init__(self, noise_models, ell_centers, ell_widths, profile='cosine'):
+        """A wrapper around instantiated NoiseModel instances that supports
+        mixing simulations from multiple instances as a function of ell.
 
-    def _get_model(self):
-        pass
-        # 1. get wavelet noise model including sqrt_cov_ell and wavelet maps
-        # 2. use sqrt_cov_ell to flatten noise maps
-        # 3. do map->alm->wav on noise maps, flatten using wavelet maps
-        # 4. do wav->alm->map to recover full-res flattened noise map
-        # 5. make tiled noise model
+        Parameters
+        ----------
+        noise_models : iterable of NoiseModel
+            A list of NoiseModel instances from which simulations are stitched.
+            Assumed to be ordered in increasing ell -- that is, the first
+            NoiseModel will have its outputs inserted in the lowest ell part
+            of the HarmonicMixture simulation; vice-versa for the last NoiseModel.
+            The last NoiseModel is therefore used to also define the lmax of the 
+            entire HarmonicMixture, as well as related metadata like the map-space
+            shape, wcs, and dtype.
+        ell_centers : iterable of int
+            Centers (in ell) of transition regions. Must be in strictly increasing 
+            order. Iterable must be one less in length than noise_models.
+        ell_widths : iterable of int
+            The widths of the transition regions. Must be greater than or
+            equal to 0, even; the iterable must be the same length as
+            ell_centers. Together with ell_centers, ell_widths must be
+            defined such that no transitions overlap. For all but the last
+            region, the top edge of the transition (ell_center + ell_width/2)
+            must be less than or equal to the lmax of each model in the
+            transition, to ensure the transition is fully covered by each model.
+            For the last region, this is true of the top edge or the lmax of the 
+            last NoiseModel, whichever is lesser.
+        profile : str, optional
+            The profile used to stitch simulations of each model in a transition
+            region, by default 'cosine'. Can also be 'linear'.
+        """
+        self._noise_models = noise_models
+        self._ell_centers = ell_centers
+        self._ell_widths = ell_widths
+        self._profile = profile
 
-    def _get_sim(self):
-        pass
-        # 1. draw tiled noise sim, stitch into flat map
-        # 2. do map->alm->wav, unflatten using wavelet maps
-        # 3. do wav->alm->map to recover full-res unflattened noise map
-        # 4. use sqrt_cov_ell to unflatten
-        # 5. use corr_fact to get sim
+        self._lmax = noise_models[-1]._lmax
+        self._shape = noise_models[-1]._shape
+        self._wcs = noise_models[-1]._wcs
+        self._dtype = noise_models[-1]._dtype
 
+        self._lprofs = utils.get_ell_trans_profiles(
+            ell_centers, ell_widths, self._lmax, profile=profile, e=0.5)
+
+        # need to perform some introspection of passed noise models to
+        # e.g. check lmaxs against stitching regions. assume order noise_models
+        # by increasing ell placement
+        assert len(noise_models) == len(ell_centers) + 1, \
+            f'Must be one more noise_models than ell_centers, got {len(noise_models)} and {len(ell_centers)}'
+        assert len(noise_models) == len(ell_widths) + 1, \
+            f'Must be one more noise_models than ell_widths, got {len(noise_models)} and {len(ell_widths)}'
+        for i, noise_model in enumerate(noise_models):
+            if i < len(ell_centers)-1:
+                top = ell_centers[i] + ell_widths[i]/2
+            else:
+                # the last region could be bandlimited by self._lmax
+                top = min(self._lmax, ell_centers[-1] + ell_widths[-1]/2)
+            
+            assert noise_model._lmax >= top, \
+                    f'Transition regions must bandlimit noise_models, got bandlimit of {top} ' + \
+                    f'in region {i}; noise_model {noise_model} with lmax {noise_model._lmax}'
+    
+    def get_model(self, *args, **kwargs):
+        """A wrapper around the HarmonicMixture's noise_model.get_model(...)
+        methods. All arguments are passed to each noise_model's call to 
+        get_model(...).
+        """
+        for noise_model in self._noise_models:
+            noise_model.get_model(*args, **kwargs)
+
+        # don't return anything (mainly memory motivated)
+        return None
+
+    def get_sim(self, split_num, sim_num, alm=True, do_mask_obs=True,
+                check_on_disk=True, check_mix_on_disk=True, generate=True,
+                generate_mix=True, keep_model=True, keep_ivar=True,
+                write=False, write_mix=False, verbose=False):
+        """A wrapper around the HarmonicMixture's noise_model.get_sim(...) 
+        methods, such that simulations from each noise_model are stitched
+        together with the specified profiles in harmonic space.
+
+        Parameters
+        ----------
+        split_num : int
+            The 0-based index of the split to simulate.
+        sim_num : int
+            The map index, used in the calls to each noise_model's get_sim(...).
+            Must be non-negative. If the HarmonicMixture sim is written to disk,
+            this will be recorded in the filename. There is a maximum of 9999, ie,
+            one cannot have more than 10_000 of the same sim, of the same split, 
+            from the same noise model (including the 'notes').
+        alm : bool, optional
+            Generate simulated alms instead of a simulated map, by default True.
+        do_mask_obs : bool, optional
+            Whether to collect masked sims from the noise_models, by default True.
+        check_on_disk : bool, optional
+            Whether to check for existing noise_model sims on disk, by default
+            True. If True, will only check for sims generated by each noise_model
+            with alm == True.
+        check_mix_on_disk : bool, optional
+            Whether to check for existing HarmonicMixture sims on disk, by default
+            True. These may be in either map or alm form.
+        generate : bool, optional
+            If check_on_disk but the sim is not found, let the noise_model instance
+            generate the sim on-the-fly, by default True.
+        generate_mix : bool, optional
+            If check_mix_on_disk but the HarmonicMixture sim is not found, let the 
+            HarmonicMixture proceed to attempt to gather sims from the noise_models,
+            by default True.
+        keep_model : bool, optional
+            Store loaded models for the noise_models in memory, by default True.
+        keep_ivar : bool, optional
+            Store loaded ivar maps for the noise_models in memory, by default True.
+        write : bool, optional
+            If a noise_model has generated a sim on-the-fly as a step in constructing
+            the HarmonicMixture sim, whether to save that noise_model sim to disk,
+            by default False.
+        write_mix : bool, optional
+            If the HarmonicMixture instance stitched a sim on-the-fly, whether to save
+            that mixture sim to disk, by default False.
+        verbose : bool, optional
+            Possibly print possibly helpful messages, by default False.
+
+        Returns
+        -------
+        enmap.ndmap
+            A sim of this HarmonicMixture with the specified sim num, with shape
+            (num_arrays, num_splits=1, num_pol, ny, nx), even if some of these
+            axes have size 1. As implemented, num_splits is always 1. 
+        """
+
+        assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
+
+        if check_mix_on_disk:
+            res = self._check_sim_on_disk(
+                split_num, sim_num, alm=alm, do_mask_obs=do_mask_obs, generate=generate,
+                generate_mix = generate_mix
+            )
+            if res is not False:
+                return res
+            else: # generate_mix == True and: generate == True or all sims exist on disk
+                pass
+
+        with bench.show(f'Generating noise sim for split {split_num}, map {sim_num}'):
+            if alm:
+                sim = self._get_sim_alm(
+                    split_num, sim_num, do_mask_obs=do_mask_obs,
+                    check_on_disk=check_on_disk, generate=generate, keep_model=keep_model,
+                    keep_ivar=keep_ivar, write=write, verbose=verbose
+                    )
+            else:
+                sim = self._get_sim(
+                    split_num, sim_num, do_mask_obs=do_mask_obs,
+                    check_on_disk=check_on_disk, generate=generate, keep_model=keep_model,
+                    keep_ivar=keep_ivar, write=write, verbose=verbose
+                    )
+
+        if write_mix:
+            fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_obs)
+            if alm:
+                utils.write_alm(fn, sim)
+            else:
+                enmap.write_map(fn, sim)
+
+        return sim
+
+    def _check_sim_on_disk(self, split_num, sim_num, alm=True, do_mask_obs=True, generate=True,
+                           generate_mix=True):
+        """Check if this HarmonicMixture's sim a given split, sim exists on-disk. 
+        If it does, return it. Depending on the 'generate_mix' kwarg, return either 
+        False or raise a FileNotFoundError if it does not exist on-disk. Likewise,
+        perform the same check for each of the HarmonicMixture's component
+        noise_models.
+
+        Parameters
+        ----------
+        split_num : int
+            The 0-based index of the split model to look for.
+        sim_num : int
+            The sim index number to look for.
+        alm : bool, optional
+            Whether the HarmonicMixture sim is stored as an alm or map, by default True.
+            It is always assumed that the possible on-disk component noise_model sims are
+            stored in alm format.
+        do_mask_obs : bool, optional
+            Whether to look for a masked HarmonicMixture and/or component noise_model
+            sims, by default True.
+        generate : bool, optional
+            Whether to allow component noise_models to generate not-on-disk sims on-the-fly,
+            by default True.
+        generate_mix : bool, optional
+            Whether to allow the HarmonicMixture to construct a stitched sim on-the-fly,
+            by default True.
+
+        Returns
+        -------
+        enmap.ndmap or bool
+            If the sim exists on-disk, return it. If 'generate_mix' is True and the 
+            sim does not exist on-disk, return False.
+
+        Raises
+        ------
+        FileNotFoundError
+            If 'generate_mix' is False and the sim does not exist on-disk.
+
+        FileNotFoundError
+            If 'generate' is False and the sim of a given component noise_model does not
+            exist on-disk.
+        """
+        fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_obs)
+        try:
+            if alm:
+                # we know the preshape is (num_arrays, num_splits=1)
+                return utils.read_alm(fn)
+            else:
+                return enmap.read_map(fn)
+        except (FileNotFoundError, OSError) as e:
+            if generate_mix:
+                print(f'Sim for split {split_num}, map {sim_num} not found on-disk, generating instead')
+                for noise_model in self._noise_models:
+                    _ = noise_model._check_sim_on_disk(
+                        split_num, sim_num, alm=True, do_mask_obs=do_mask_obs, generate=generate
+                    )
+                
+                # if we've gotten here, then either generate is True or all base sims exist on disk
+                return False
+            else:
+                print(f'Sim for split {split_num}, map {sim_num} not found on-disk, please generate it first')
+                raise FileNotFoundError(fn) from e
+
+    def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
+        """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
+        fn = ''
+        for i, noise_model in enumerate(self._noise_models):
+            fn += noise_model._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=mask_obs)
+            if i < len(self._noise_models)-1:
+                fn += f'_lcenter{self._ell_centers[i]}_lwidth{self._ell_widths[i]}_prof{self._profile}_'
+        return fn
+
+    def _get_sim(self, split_num, sim_num, do_mask_obs=True,
+                 check_on_disk=True, generate=True, keep_model=True,
+                 keep_ivar=True, write=False, verbose=False, **kwargs):
+        """Return a masked enmap.ndmap sim from nm_dict, with seed <sequence of ints>"""
+        alm = self._get_sim_alm(
+            split_num, sim_num, do_mask_obs=do_mask_obs,
+            check_on_disk=check_on_disk, generate=generate, keep_model=keep_model,
+            keep_ivar=keep_ivar, write=write, verbose=verbose, **kwargs
+            )
+        sim = utils.alm2map(alm, shape=self._shape, wcs=self._wcs, dtype=self._dtype)
+        return sim
+
+    def _get_sim_alm(self, split_num, sim_num, do_mask_obs=True,
+                     check_on_disk=True, generate=True, keep_model=True,
+                     keep_ivar=True, write=False, verbose=False, **kwargs):
+        """Return a masked alm sim from nm_dict, with seed <sequence of ints>"""
+        oainfo = sharp.alm_info(lmax=self._lmax)
+        mix_alm = 0
+        for i, noise_model in enumerate(self._noise_models):
+            alm = noise_model.get_sim(
+                split_num, sim_num, alm=True, do_mask_obs=do_mask_obs,
+                check_on_disk=check_on_disk, generate=generate, keep_model=keep_model,
+                keep_ivar=keep_ivar, write=write, verbose=verbose, **kwargs
+                )
+            iainfo = sharp.alm_info(nalm=alm.shape[-1])
+            alm = sharp.transfer_alm(iainfo, alm, oainfo)
+            
+            alm_c_utils.lmul(alm, self._lprofs[i], oainfo, inplace=True)
+            mix_alm += alm 
+
+        return mix_alm
 
 @register()
 class Interface(NoiseModel):
@@ -1864,3 +2116,25 @@ class Interface(NoiseModel):
     
     def _get_sim_alm(self, *args, **kwargs):
         raise NotImplementedError('Interface class only exposes base methods')
+
+
+class WavFiltTile(NoiseModel):
+
+    def __init__(self):
+        pass
+
+    def _get_model(self):
+        pass
+        # 1. get wavelet noise model including sqrt_cov_ell and wavelet maps
+        # 2. use sqrt_cov_ell to flatten noise maps
+        # 3. do map->alm->wav on noise maps, flatten using wavelet maps
+        # 4. do wav->alm->map to recover full-res flattened noise map
+        # 5. make tiled noise model
+
+    def _get_sim(self):
+        pass
+        # 1. draw tiled noise sim, stitch into flat map
+        # 2. do map->alm->wav, unflatten using wavelet maps
+        # 3. do wav->alm->map to recover full-res unflattened noise map
+        # 4. use sqrt_cov_ell to unflatten
+        # 5. use corr_fact to get sim
