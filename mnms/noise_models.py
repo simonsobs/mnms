@@ -1646,16 +1646,18 @@ class FDWNoiseModel(NoiseModel):
         self._fwhm_fact_func = utils.get_fwhm_fact_func_from_pts(
             fwhm_fact_pt1, fwhm_fact_pt2
             )
+        self._fk = None
 
-        # build the kernels.
-        #
+    def _get_kernels(self):
+        """Build the kernels. This is slow and so we only call it in the first
+        call to _get_model or _get_sim."""
         # there is no real significance to lmax=10_800 here. it will just be
         # used to build the kernel generating functions, specifically, to 
         # check that the last kernel is not "clipped"
         #
         # TODO: this is tuned to ACT DR6 and should be passable via a 
         # yaml file or equivalent
-        self._fk = fdw_noise.FDWKernels(
+        return fdw_noise.FDWKernels(
             self._lamb, 10_800, 10, 5300, self._n, self._p, self._shape,
             self._wcs, nforw=[0, 6, 6, 6, 6, 12, 12, 12, 12, 24, 24],
             nback=[18], pforw=[0, 6, 4, 2, 2, 12, 8, 4, 2, 12, 8],
@@ -1685,6 +1687,10 @@ class FDWNoiseModel(NoiseModel):
 
     def _get_model(self, dmap, verbose=False, **kwargs):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
+        if self._fk is None:
+            print('Building and storing FDWKernels')
+            self._fk = self._get_kernels()
+
         sqrt_cov_mat, sqrt_cov_k = fdw_noise.get_fdw_noise_covsqrt(
             self._fk, dmap, mask_obs=self._mask_obs, mask_est=self._mask_est,
             fwhm_fact=self._fwhm_fact_func, nthread=0, verbose=verbose
@@ -1713,6 +1719,10 @@ class FDWNoiseModel(NoiseModel):
 
     def _get_sim(self, nm_dict, seed, mask=None, verbose=False, **kwargs):
         """Return a masked enmap.ndmap sim from nm_dict, with seed <sequence of ints>"""
+        if self._fk is None:
+            print('Building and storing FDWKernels')
+            self._fk = self._get_kernels()
+
         # Get noise model variables 
         sqrt_cov_mat = nm_dict['sqrt_cov_mat']
         sqrt_cov_k = nm_dict['sqrt_cov_k']
