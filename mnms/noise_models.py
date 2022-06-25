@@ -1062,6 +1062,18 @@ class NoiseModel(ABC):
             print(f'Nothing to delete, no model in memory for split {split_num}')
 
     @property
+    def shape(self):
+        return self._shape
+    
+    @property
+    def wcs(self):
+        return self._wcs
+
+    @property
+    def dtype(self):
+        return self._dtype
+
+    @property
     def mask_est(self):
         return self._mask_est
 
@@ -2040,7 +2052,19 @@ class HarmonicMixture:
             alm_c_utils.lmul(alm, self._lprofs[i], oainfo, inplace=True)
             mix_alm += alm 
 
-        return mix_alm        
+        return mix_alm       
+
+    @property
+    def shape(self):
+        return self._shape
+    
+    @property
+    def wcs(self):
+        return self._wcs
+
+    @property
+    def dtype(self):
+        return self._dtype 
 
         
 @register()
