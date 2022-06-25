@@ -6,6 +6,7 @@ from optweight import wavtrans, alm_c_utils
 import numpy as np
 
 from abc import ABC, abstractmethod
+import os
 
 # expose only concrete noise models, helpful for namespace management in client
 # package development. NOTE: this design pattern inspired by the super-helpful
@@ -976,7 +977,8 @@ class NoiseModel(ABC):
 
         return sim
 
-    def _check_sim_on_disk(self, split_num, sim_num, alm=True, do_mask_obs=True, generate=True):
+    def _check_sim_on_disk(self, split_num, sim_num, alm=True, do_mask_obs=True,
+                           return_if_exists=True, generate=True):
         """Check if this NoiseModel's sim for a given split, sim exists on-disk. 
         If it does, return it. Depending on the 'generate' kwarg, return either 
         False or raise a FileNotFoundError if it does not exist on-disk.
@@ -992,6 +994,9 @@ class NoiseModel(ABC):
         do_mask_obs : bool, optional
             Whether the sim has been masked by this NoiseModel's mask_obs
             in map-space, by default True.
+        return_if_exists: bool, optional
+            If the sim exists on-disk, then return it. Otherwise, return True. By
+            default True.
         generate : bool, optional
             If the sim does not exist on-disk and 'generate' is True, then return
             False. If the sim does not exist on-disk and 'generate' is False, then
@@ -1009,19 +1014,21 @@ class NoiseModel(ABC):
             If 'generate' is False and the sim does not exist on-disk.
         """        
         fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_obs)
-        try:
-            if alm:
-                # we know the preshape is (num_arrays, num_splits=1)
-                return utils.read_alm(fn)
+        if os.path.isfile(fn):
+            if return_if_exists:
+                if alm:
+                    return utils.read_alm(fn)
+                else:
+                    return enmap.read_map(fn)
             else:
-                return enmap.read_map(fn)
-        except (FileNotFoundError, OSError) as e:
+                return True
+        else:
             if generate:
                 print(f'Sim for split {split_num}, map {sim_num} not found on-disk, generating instead')
                 return False
             else:
                 print(f'Sim for split {split_num}, map {sim_num} not found on-disk, please generate it first')
-                raise FileNotFoundError(fn) from e
+                raise FileNotFoundError(fn)
 
     @abstractmethod
     def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
@@ -1825,7 +1832,7 @@ class HarmonicMixture:
     def get_sim(self, split_num, sim_num, alm=True, do_mask_obs=True,
                 check_on_disk=True, check_mix_on_disk=True, generate=True,
                 generate_mix=True, keep_model=True, keep_ivar=True,
-                write=False, write_mix=False, verbose=False):
+                write=False, verbose=False):
         """A wrapper around the HarmonicMixture's noise_model.get_sim(...) 
         methods, such that simulations from each noise_model are stitched
         together with the specified profiles in harmonic space.
@@ -1866,9 +1873,6 @@ class HarmonicMixture:
             If a noise_model has generated a sim on-the-fly as a step in constructing
             the HarmonicMixture sim, whether to save that noise_model sim to disk,
             by default False.
-        write_mix : bool, optional
-            If the HarmonicMixture instance stitched a sim on-the-fly, whether to save
-            that mixture sim to disk, by default False.
         verbose : bool, optional
             Possibly print possibly helpful messages, by default False.
 
@@ -1878,6 +1882,11 @@ class HarmonicMixture:
             A sim of this HarmonicMixture with the specified sim num, with shape
             (num_arrays, num_splits=1, num_pol, ny, nx), even if some of these
             axes have size 1. As implemented, num_splits is always 1. 
+
+        Notes
+        -----
+        Writing the mixed sim to disk cannot yet be implemented due to filename 
+        too long errors.
         """
 
         assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
@@ -1906,6 +1915,8 @@ class HarmonicMixture:
                     keep_ivar=keep_ivar, write=write, verbose=verbose
                     )
 
+        # TODO: resolve File name too long error!
+        write_mix = False
         if write_mix:
             fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_obs)
             if alm:
@@ -1915,8 +1926,8 @@ class HarmonicMixture:
 
         return sim
 
-    def _check_sim_on_disk(self, split_num, sim_num, alm=True, do_mask_obs=True, generate=True,
-                           generate_mix=True):
+    def _check_sim_on_disk(self, split_num, sim_num, alm=True, do_mask_obs=True,
+                           return_if_exists=True, generate=True, generate_mix=True):
         """Check if this HarmonicMixture's sim a given split, sim exists on-disk. 
         If it does, return it. Depending on the 'generate_mix' kwarg, return either 
         False or raise a FileNotFoundError if it does not exist on-disk. Likewise,
@@ -1936,6 +1947,9 @@ class HarmonicMixture:
         do_mask_obs : bool, optional
             Whether to look for a masked HarmonicMixture and/or component noise_model
             sims, by default True.
+        return_if_exists: bool, optional
+            If the mixture sim exists on-disk, then return it. Otherwise, return True. By
+            default True.
         generate : bool, optional
             Whether to allow component noise_models to generate not-on-disk sims on-the-fly,
             by default True.
@@ -1952,41 +1966,49 @@ class HarmonicMixture:
         Raises
         ------
         FileNotFoundError
-            If 'generate_mix' is False and the sim does not exist on-disk.
+            If 'generate_mix' is False and the mixture sim does not exist on-disk.
 
         FileNotFoundError
             If 'generate' is False and the sim of a given component noise_model does not
             exist on-disk.
         """
         fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_obs)
-        try:
-            if alm:
-                # we know the preshape is (num_arrays, num_splits=1)
-                return utils.read_alm(fn)
+        if os.path.isfile(fn):
+            if return_if_exists:
+                if alm:
+                    return utils.read_alm(fn)
+                else:
+                    return enmap.read_map(fn)
             else:
-                return enmap.read_map(fn)
-        except (FileNotFoundError, OSError) as e:
+                return True
+        else:
             if generate_mix:
                 print(f'Sim for split {split_num}, map {sim_num} not found on-disk, generating instead')
                 for noise_model in self._noise_models:
                     _ = noise_model._check_sim_on_disk(
-                        split_num, sim_num, alm=True, do_mask_obs=do_mask_obs, generate=generate
+                        split_num, sim_num, alm=True, do_mask_obs=do_mask_obs,
+                        return_if_exists=False, generate=generate,
                     )
                 
                 # if we've gotten here, then either generate is True or all base sims exist on disk
                 return False
             else:
                 print(f'Sim for split {split_num}, map {sim_num} not found on-disk, please generate it first')
-                raise FileNotFoundError(fn) from e
+                raise FileNotFoundError(fn)
 
     def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
-        fn = ''
-        for i, noise_model in enumerate(self._noise_models):
-            fn += noise_model._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=mask_obs)
+        basefn = self._noise_models[0]._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=mask_obs)
+        fn = os.path.splitext(basefn)[0]
+
+        for i, noise_model in enumerate(self._noise_models[1:]):
             if i < len(self._noise_models)-1:
-                fn += f'_lcenter{self._ell_centers[i]}_lwidth{self._ell_widths[i]}_prof{self._profile}_'
-        return fn
+                fn += f'_lc{self._ell_centers[i]}_lw{self._ell_widths[i]}_{self._profile}_'
+            fn += utils.trim_shared_fn_tags(
+                basefn, noise_model._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=mask_obs)
+                )
+
+        return fn + '.fits'
 
     def _get_sim(self, split_num, sim_num, do_mask_obs=True,
                  check_on_disk=True, generate=True, keep_model=True,
@@ -2018,8 +2040,9 @@ class HarmonicMixture:
             alm_c_utils.lmul(alm, self._lprofs[i], oainfo, inplace=True)
             mix_alm += alm 
 
-        return mix_alm
+        return mix_alm        
 
+        
 @register()
 class Interface(NoiseModel):
 

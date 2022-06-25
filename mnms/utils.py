@@ -54,6 +54,35 @@ def get_default_data_model():
             )
     return getattr(sints, dm_name)()
 
+def trim_shared_fn_tags(basefn, ifn):
+    """Return joined tags in input that are not shared with those in a 
+    base filename.
+
+    Parameters
+    ----------
+    basefn : path-like
+        Base filename of form 'tag1_tag2_tag3
+    ifn : path_like 
+        Input filename of form 'tag2_tag1_tag4_tag5'
+
+    Returns
+    -------
+    str
+        In this case, 'tag4_tag5'
+    """
+    basefn = os.path.splitext(os.path.basename(basefn))[0]
+    ifn = os.path.splitext(os.path.basename(ifn))[0]
+
+    basetags = basefn.split('_')
+    itags = ifn.split('_')
+
+    otags = []
+    for itag in itags:
+        if itag not in basetags:
+            otags.append(itag)
+    
+    return '_'.join(otags)
+
 def get_default_mask_version():
     """Returns the mask version (string) depending on what is specified
     in the user's soapack config. If the 'mnms' block has a key
