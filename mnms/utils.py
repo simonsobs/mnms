@@ -594,14 +594,18 @@ def lmax_from_wcs(wcs):
     """Returns 180/wcs.cdelt[1]; this is twice the theoretical CAR bandlimit"""
     return int(180/np.abs(wcs.wcs.cdelt[1]))
 
-def get_ps_mat(inp, outbasis, e, mask_est=None, shape=None, wcs=None):
+def get_ps_mat(inp, outbasis, e, inbasis='harmonic', mask_est=None, 
+               shape=None, wcs=None):
     """Get a power spectrum matrix from input alm's, raised to a given
     matrix power.
 
     Parameters
     ----------
     inp : (*preshape, nelem) np.ndarray
-        Input alm's to generate auto- and cross-spectra.
+        Input alm's or fft's to generate auto- and cross-spectra.
+    inbasis : str
+        The basis of the input data, either 'harmonic' or 'fourier.' If
+        'fourier', assumed only the 'real-fft' modes.
     outbasis : str
         The basis of the power spectrum matrix, either 'harmonic' or 'fourier'.
         If 'fourier', only the 'real-fft' modes.
@@ -612,9 +616,9 @@ def get_ps_mat(inp, outbasis, e, mask_est=None, shape=None, wcs=None):
         provided, power spectra matrix is normalized by sky fraction before
         being raised to e.
     shape : (..., ny, nx) tuple, optional
-        If 'fourier', the shape of the map-space, by default None.
+        If outbasis or inbasis is 'fourier', the shape of the map-space, by default None.
     wcs : astropy.wcs.WCS, optional
-        If 'fourier', the geometry of the map-space, by default None.
+        If outbasis or inbasis is 'fourier', the geometry of the map-space, by default None.
 
     Returns
     -------
@@ -638,6 +642,8 @@ def get_ps_mat(inp, outbasis, e, mask_est=None, shape=None, wcs=None):
     exceed the harmonic bandlimit, the last value of each power spectrum
     component is returned for all calls to scales greater than the bandlimit.
     """
+    if inbasis not in ('harmonic', 'fourier'):
+        raise ValueError('Only harmonic or fourier basis supported')
     if outbasis not in ('harmonic', 'fourier'):
         raise ValueError('Only harmonic or fourier basis supported')
 
@@ -646,35 +652,13 @@ def get_ps_mat(inp, outbasis, e, mask_est=None, shape=None, wcs=None):
         w2 = np.sum((mask_est**2)*pmap) / np.pi / 4.   
     else:
         w2 = 1
-    
-    preshape = inp.shape[:-1]
-    ncomp = np.prod(preshape, dtype=int)
-    lmax = sharp.nalm2lmax(inp.shape[-1])
-    mat = np.empty((*preshape, *preshape, lmax+1), dtype=inp.real.dtype)
 
-    seen_pairs = []
-    for preidx1 in np.ndindex(preshape):
-        for preidx2 in np.ndindex(preshape):
-            if (preidx2, preidx1) in seen_pairs:
-                continue
-            seen_pairs.append((preidx1, preidx2))
+    if inbasis == 'harmonic':
+        preshape = inp.shape[:-1]
+        ncomp = np.prod(preshape, dtype=int)
+        lmax = sharp.nalm2lmax(inp.shape[-1])
+        mat = np.empty((*preshape, *preshape, lmax+1), dtype=inp.real.dtype)
 
-            mat[(*preidx1, *preidx2)] = alm2cl(inp[preidx1], inp[preidx2], method='healpy')
-            if preidx1 != preidx2:
-                mat[(*preidx2, *preidx1)] = mat[(*preidx1, *preidx2)]
-
-    mat /= w2
-    mat = mat.reshape(ncomp, ncomp, -1)
-    mat = eigpow(mat, e, axes=[0, 1])
-    mat = mat.reshape(*preshape, *preshape, -1)
-    
-    if outbasis == 'harmonic':
-        out = mat
-    elif outbasis == 'fourier':
-        out = enmap.empty((*preshape, *preshape, shape[-2], shape[-1]//2+1), wcs, inp.real.dtype) # need "real" matrix
-        modlmap = enmap.modlmap(shape, wcs).astype(inp.real.dtype, copy=False) # modlmap is np.float64 always...
-        modlmap = modlmap[..., :shape[-1]//2+1] # need "real" modlmap
-    
         seen_pairs = []
         for preidx1 in np.ndindex(preshape):
             for preidx2 in np.ndindex(preshape):
@@ -682,16 +666,88 @@ def get_ps_mat(inp, outbasis, e, mask_est=None, shape=None, wcs=None):
                     continue
                 seen_pairs.append((preidx1, preidx2))
 
-                ell_func = interp1d(
-                    np.arange(lmax+1), mat[(*preidx1, *preidx2)], bounds_error=False, 
-                    fill_value=(0, mat[(*preidx1, *preidx2, -1)])
-                    )
-            
-                # interp1d returns as float64 always, but this recasts in assignment
-                out[(*preidx1, *preidx2)] = ell_func(modlmap)
+                mat[(*preidx1, *preidx2)] = alm2cl(inp[preidx1], inp[preidx2], method='healpy')
                 if preidx1 != preidx2:
-                    out[(*preidx2, *preidx1)] = out[(*preidx1, *preidx2)]
+                    mat[(*preidx2, *preidx1)] = mat[(*preidx1, *preidx2)]
 
+        mat /= w2
+        mat = mat.reshape(ncomp, ncomp, -1)
+        mat = eigpow(mat, e, axes=[0, 1])
+        mat = mat.reshape(*preshape, *preshape, -1)
+        
+        if outbasis == 'harmonic':
+            out = mat
+        elif outbasis == 'fourier':
+            out = enmap.empty((*preshape, *preshape, shape[-2], shape[-1]//2+1), wcs, inp.real.dtype) # need "real" matrix
+            modlmap = enmap.modlmap(shape, wcs).astype(inp.real.dtype, copy=False) # modlmap is np.float64 always...
+            modlmap = modlmap[..., :shape[-1]//2+1] # need "real" modlmap
+        
+            seen_pairs = []
+            for preidx1 in np.ndindex(preshape):
+                for preidx2 in np.ndindex(preshape):
+                    if (preidx2, preidx1) in seen_pairs:
+                        continue
+                    seen_pairs.append((preidx1, preidx2))
+
+                    ell_func = interp1d(
+                        np.arange(lmax+1), mat[(*preidx1, *preidx2)], bounds_error=False, 
+                        fill_value=(0, mat[(*preidx1, *preidx2, -1)])
+                        )
+                
+                    # interp1d returns as float64 always, but this recasts in assignment
+                    out[(*preidx1, *preidx2)] = ell_func(modlmap)
+                    if preidx1 != preidx2:
+                        out[(*preidx2, *preidx1)] = out[(*preidx1, *preidx2)]
+    
+    elif inbasis == 'fourier':
+        preshape = inp.shape[:-2]
+        postshape = inp.shape[-2:]
+        ncomp = np.prod(preshape, dtype=int)
+        mat = np.empty((*preshape, *preshape, *postshape), dtype=inp.real.dtype)
+
+        seen_pairs = []
+        for preidx1 in np.ndindex(preshape):
+            for preidx2 in np.ndindex(preshape):
+                if (preidx2, preidx1) in seen_pairs:
+                    continue
+                seen_pairs.append((preidx1, preidx2))
+
+                mat[(*preidx1, *preidx2)] = (inp[preidx1] * np.conj(inp[preidx2])).real
+                if preidx1 != preidx2:
+                    mat[(*preidx2, *preidx1)] = mat[(*preidx1, *preidx2)]
+
+        mat /= w2
+        mat = mat.reshape(ncomp, ncomp, *postshape)
+        mat = eigpow(mat, e, axes=[0, 1])
+        mat = mat.reshape(*preshape, *preshape, *postshape)
+
+        # need to create the 1D spectra interpolants. what differs in outbasis
+        # is just how they are painted over the basis
+        modlmap = enmap.modlmap(shape, wcs).astype(inp.real.dtype, copy=False) # modlmap is np.float64 always...
+        modlmap = modlmap[..., :shape[-1]//2+1] # need "real" modlmap
+        delta = modlmap.min() * 2
+        ledges = np.arange(0, modlmap.max() + delta, delta)
+        mat = radial_bin(mat, modlmap, ledges)
+        
+        if outbasis == 'fourier':
+            out = enmap.empty((*preshape, *preshape, shape[-2], shape[-1]//2+1), wcs, inp.real.dtype) # need "real" matrix
+            seen_pairs = []
+            for preidx1 in np.ndindex(preshape):
+                for preidx2 in np.ndindex(preshape):
+                    if (preidx2, preidx1) in seen_pairs:
+                        continue
+                    seen_pairs.append((preidx1, preidx2))
+
+                    ell_func = interp1d_bins(ledges, mat[(*preidx1, *preidx2)], bounds_error=False)
+
+                    # interp1d returns as float64 always, but this recasts in assignment
+                    out[(*preidx1, *preidx2)] = ell_func(modlmap)
+                    if preidx1 != preidx2:
+                        out[(*preidx2, *preidx1)] = out[(*preidx1, *preidx2)]
+
+        elif outbasis == 'harmonic':
+            raise NotImplementedError("Can't go from fourier to harmonic easily")
+    
     return out
 
 def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic', 
