@@ -708,9 +708,8 @@ def get_ps_mat(inp, outbasis, e, inbasis='harmonic', mask_est=None,
         ledges = np.arange(0, modlmap.max() + delta, delta)
 
         preshape = inp.shape[:-2]
-        postshape = inp.shape[-2:]
         ncomp = np.prod(preshape, dtype=int)
-        mat = np.empty((*preshape, *preshape, *postshape), dtype=inp.real.dtype)
+        mat = np.empty((*preshape, *preshape, len(ledges)-1), dtype=inp.real.dtype)
 
         # NOTE: very important to bin, interpolate before taking eigpow!
         seen_pairs = []
@@ -720,21 +719,34 @@ def get_ps_mat(inp, outbasis, e, inbasis='harmonic', mask_est=None,
                     continue
                 seen_pairs.append((preidx1, preidx2))
 
-                ps = (inp[preidx1] * np.conj(inp[preidx2])).real
-                ps = radial_bin(ps, modlmap, ledges)
-
-                ell_func = interp1d_bins(ledges, ps, bounds_error=False)
-                mat[(*preidx1, *preidx2)] = ell_func(modlmap)
+                mat[(*preidx1, *preidx2)] = radial_bin(
+                    (inp[preidx1] * np.conj(inp[preidx2])).real, modlmap, ledges
+                    )
                 if preidx1 != preidx2:
                     mat[(*preidx2, *preidx1)] = mat[(*preidx1, *preidx2)]
         
         mat /= w2
-        mat = mat.reshape(ncomp, ncomp, *postshape)
+        mat = mat.reshape(ncomp, ncomp, -1)
         mat = eigpow(mat, e, axes=[0, 1])
-        mat = mat.reshape(*preshape, *preshape, *postshape)
+        mat = mat.reshape(*preshape, *preshape, -1)
 
         if outbasis == 'fourier':
-            out = mat
+            out = enmap.empty((*preshape, *preshape, shape[-2], shape[-1]//2+1), wcs, inp.real.dtype) # need "real" matrix
+            seen_pairs = []
+            for preidx1 in np.ndindex(preshape):
+                for preidx2 in np.ndindex(preshape):
+                    if (preidx2, preidx1) in seen_pairs:
+                        continue
+                    seen_pairs.append((preidx1, preidx2))
+
+                    ell_func = interp1d_bins(
+                        ledges, mat[(*preidx1, *preidx2)], bounds_error=False
+                        )
+
+                    # interp1d returns as float64 always, but this recasts in assignment
+                    out[(*preidx1, *preidx2)] = ell_func(modlmap)
+                    if preidx1 != preidx2:
+                        out[(*preidx2, *preidx1)] = out[(*preidx1, *preidx2)]
         elif outbasis == 'harmonic':
             raise NotImplementedError("Can't go from fourier to spinny harmonic easily")
     
