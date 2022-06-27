@@ -1695,13 +1695,13 @@ class FDWNoiseModel(NoiseModel):
     def _read_model(self, fn):
         """Read a noise model with filename fn; return a dictionary of noise model variables"""
         sqrt_cov_mat, extra_datasets = fdw_noise.read_wavs(
-            fn, extra_datasets=['sqrt_cov_k']
+            fn, extra_datasets=['sqrt_cov_ell']
         )
-        sqrt_cov_k = extra_datasets['sqrt_cov_k']
+        sqrt_cov_ell = extra_datasets['sqrt_cov_ell']
 
         return {
             'sqrt_cov_mat': sqrt_cov_mat,
-            'sqrt_cov_k': sqrt_cov_k
+            'sqrt_cov_ell': sqrt_cov_ell
             }
 
     def _get_model(self, dmap, verbose=False, **kwargs):
@@ -1710,20 +1710,20 @@ class FDWNoiseModel(NoiseModel):
             print('Building and storing FDWKernels')
             self._fk = self._get_kernels()
 
-        sqrt_cov_mat, sqrt_cov_k = fdw_noise.get_fdw_noise_covsqrt(
+        sqrt_cov_mat, sqrt_cov_ell = fdw_noise.get_fdw_noise_covsqrt(
             self._fk, dmap, mask_obs=self._mask_obs, mask_est=self._mask_est,
             fwhm_fact=self._fwhm_fact_func, nthread=0, verbose=verbose
         )
 
         return {
             'sqrt_cov_mat': sqrt_cov_mat,
-            'sqrt_cov_k': sqrt_cov_k
+            'sqrt_cov_ell': sqrt_cov_ell
             }
 
-    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_k=None, **kwargs):
+    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
         """Write a dictionary of noise model variables to filename fn"""
         fdw_noise.write_wavs(
-            fn, sqrt_cov_mat, extra_datasets={'sqrt_cov_k': sqrt_cov_k}
+            fn, sqrt_cov_mat, extra_datasets={'sqrt_cov_ell': sqrt_cov_ell}
         )
 
     def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
@@ -1744,11 +1744,11 @@ class FDWNoiseModel(NoiseModel):
 
         # Get noise model variables 
         sqrt_cov_mat = nm_dict['sqrt_cov_mat']
-        sqrt_cov_k = nm_dict['sqrt_cov_k']
+        sqrt_cov_ell = nm_dict['sqrt_cov_ell']
 
         sim = fdw_noise.get_fdw_noise_sim(
             self._fk, sqrt_cov_mat, preshape=(self._num_arrays, -1),
-            sqrt_cov_k=sqrt_cov_k, seed=seed, nthread=0, verbose=verbose
+            sqrt_cov_ell=sqrt_cov_ell, seed=seed, nthread=0, verbose=verbose
         )
 
         # We always want shape (num_arrays, num_splits=1, num_pol, ny, nx).
