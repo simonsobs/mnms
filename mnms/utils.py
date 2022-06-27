@@ -725,7 +725,7 @@ def get_ps_mat(inp, outbasis, e, inbasis='harmonic', mask_est=None,
         # is just how they are painted over the basis
         modlmap = enmap.modlmap(shape, wcs).astype(inp.real.dtype, copy=False) # modlmap is np.float64 always...
         modlmap = modlmap[..., :shape[-1]//2+1] # need "real" modlmap
-        delta = modlmap.min() * 2
+        delta = modlmap[modlmap > 0].min() * 2
         ledges = np.arange(0, modlmap.max() + delta, delta)
         mat = radial_bin(mat, modlmap, ledges)
         
