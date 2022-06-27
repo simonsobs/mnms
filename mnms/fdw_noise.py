@@ -923,11 +923,12 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
 
     if rad_filt:
         # measure correlated pseudo spectra for filtering
+        kmap_est = utils.rfft(imap * mask_est, nthread=nthread)
         sqrt_cov_k = utils.get_ps_mat(
-            kmap, 'fourier', 0.5, inbasis='fourier', mask_est=mask_est, shape=imap.shape, wcs=imap.wcs
+            kmap_est, 'fourier', 0.5, inbasis='fourier', mask_est=mask_est, shape=imap.shape, wcs=imap.wcs
             )
         inv_sqrt_cov_k = utils.get_ps_mat(
-            kmap, 'fourier', -0.5, inbasis='fourier', mask_est=mask_est, shape=imap.shape, wcs=imap.wcs
+            kmap_est, 'fourier', -0.5, inbasis='fourier', mask_est=mask_est, shape=imap.shape, wcs=imap.wcs
             )
         
         # filter
