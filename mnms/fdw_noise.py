@@ -919,23 +919,34 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
     mask_est = np.asanyarray(mask_est, dtype=imap.dtype)
 
     imap = utils.atleast_nd(imap, 3)
-    kmap = utils.rfft(imap * mask_obs, nthread=nthread)
+    # kmap = utils.rfft(imap * mask_obs, nthread=nthread)
 
     if rad_filt:
         # measure correlated pseudo spectra for filtering
-        kmap_est = utils.rfft(imap * mask_est, nthread=nthread)
-        sqrt_cov_k = utils.get_ps_mat(
-            kmap_est, 'fourier', 0.5, inbasis='fourier', mask_est=mask_est, shape=imap.shape, wcs=imap.wcs
-            )
-        inv_sqrt_cov_k = utils.get_ps_mat(
-            kmap_est, 'fourier', -0.5, inbasis='fourier', mask_est=mask_est, shape=imap.shape, wcs=imap.wcs
-            )
+        lmax = utils.lmax_from_wcs(imap.wcs) 
+        # alm = utils.map2alm(imap * mask_est, lmax=lmax, spin=0)
+        # sqrt_cov_k = utils.get_ps_mat(
+        #     alm, 'fourier', 0.5, mask_est=mask_est, shape=imap.shape, wcs=imap.wcs
+        #     )
+        # inv_sqrt_cov_k = utils.get_ps_mat(
+        #     alm, 'fourier', -0.5, mask_est=mask_est, shape=imap.shape, wcs=imap.wcs
+        #     )
         
-        # filter
-        kmap = utils.ell_filter_correlated(
-            kmap, 'fourier', inv_sqrt_cov_k, nthread=nthread
-        )
+        # # filter
+        # kmap = utils.ell_filter_correlated(
+        #     kmap, 'fourier', inv_sqrt_cov_k, nthread=nthread
+        # )
+        alm = utils.map2alm(imap * mask_est, lmax=lmax)
+        sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', 0.5, mask_est=mask_est)
+        inv_sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', -0.5, mask_est=mask_est)
 
+        imap = utils.ell_filter_correlated(
+            imap * mask_obs, 'map', inv_sqrt_cov_ell, lmax=lmax, 
+            )
+        kmap = utils.rfft(imap, nthread=nthread)
+    else:
+        kmap = utils.rfft(imap * mask_obs, nthread=nthread)
+        
     wavs = fdw_kernels.k2wav(kmap, nthread=nthread)
 
     # get fwhm_fact(l) callable
@@ -982,12 +993,12 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
             )
 
     if rad_filt:
-        return sqrt_cov_wavs, sqrt_cov_k
+        return sqrt_cov_wavs, sqrt_cov_ell
     else:
         return sqrt_cov_wavs
 
 def get_fdw_noise_sim(fdw_kernels, sqrt_cov_wavs, preshape=None,
-                      sqrt_cov_k=None, seed=None, nthread=0, verbose=True):
+                      sqrt_cov_ell=None, seed=None, nthread=0, verbose=True):
     """Draw a Guassian realization from the covariance corresponding to
     the square-root covariance wavelet maps in sqrt_cov_wavs.
 
@@ -1003,7 +1014,7 @@ def get_fdw_noise_sim(fdw_kernels, sqrt_cov_wavs, preshape=None,
     preshape : tuple, optional
         Reshape preceding dimensions of the sim to preshape, by default None.
         Preceding dimensions are those before the last two (the pixel axes).
-    sqrt_cov_k : np.ndarray, optional
+    sqrt_cov_ell : np.ndarray, optional
         An array of the same shape as the real Fourier transform of imap 
         giving the square root signal power spectrum in Fourier space,
         by default None. If provided, will be used to filter the sim in
@@ -1024,7 +1035,7 @@ def get_fdw_noise_sim(fdw_kernels, sqrt_cov_wavs, preshape=None,
     if verbose:
         print(
             f'Num kernels: {len(fdw_kernels.kernels)}\n'
-            f'Radial filtering: {sqrt_cov_k is not None}\n'
+            f'Radial filtering: {sqrt_cov_ell is not None}\n'
             f'Seed: {seed}'
             )
 
@@ -1045,14 +1056,15 @@ def get_fdw_noise_sim(fdw_kernels, sqrt_cov_wavs, preshape=None,
     if preshape is not None:
         kmap = kmap.reshape((*preshape, *kmap.shape[-2:]))
     preshape = kmap.shape[:-2]
+
+    omap = utils.irfft(kmap, n=fdw_kernels.shape[-1], nthread=nthread)
         
     # filter kmap directly in Fourier space
-    if sqrt_cov_k is not None:
-        kmap = utils.ell_filter_correlated(
-            kmap, 'fourier', sqrt_cov_k, nthread=nthread
-            )
+    if sqrt_cov_ell is not None:
+        lmax = sqrt_cov_ell.shape[-1] - 1
+        omap = utils.ell_filter_correlated(omap, 'map', sqrt_cov_ell, lmax=lmax)
 
-    return utils.irfft(kmap, n=fdw_kernels.shape[-1], nthread=nthread)
+    return omap
 
 # follows pixell.enmap.write_hdf recipe for writing wcs information
 def write_wavs(fname, wavs, extra_attrs=None, extra_datasets=None):
