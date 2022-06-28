@@ -854,7 +854,8 @@ def get_az_func(n, p, j):
     return w_phi
 
 def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1, 
-                          fwhm_fact=2, rad_filt=True, nthread=0,
+                          fwhm_fact=2, rad_filt=True, post_filt_downgrade=1,
+                          post_filt_downgrade_wcs=None, nthread=0,
                           verbose=True):
     """Generate square-root covariance information for the signal in imap.
     The covariance matrix is assumed to be block-diagonal in wavelet kernels,
@@ -907,6 +908,41 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
     (arr, pol, arr, pol, y, x) in each wavelet map. This is not exactly true:
     the preceding axes will be flattened in the output.
     """
+    mask_obs = np.asanyarray(mask_obs, dtype=imap.dtype)
+    mask_est = np.asanyarray(mask_est, dtype=imap.dtype)
+
+    imap = utils.atleast_nd(imap, 3)
+
+    if rad_filt:
+        # measure correlated pseudo spectra for filtering
+        lmax = utils.lmax_from_wcs(imap.wcs) 
+        alm = utils.map2alm(imap * mask_est, lmax=lmax)
+        sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', 0.5, mask_est=mask_est)
+        inv_sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', -0.5, mask_est=mask_est)
+
+        imap = utils.ell_filter_correlated(
+            imap * mask_obs, 'map', inv_sqrt_cov_ell, map2basis='harmonic', lmax=lmax
+            )
+
+        if post_filt_downgrade > 1:
+            assert isinstance(post_filt_downgrade, int), \
+                f'If downgrade is supplied, must be an int; got {type(post_filt_downgrade)}'
+            imap = utils.fourier_downgrade_cc_quad(imap, post_filt_downgrade)
+            # if imap is already downgraded, second downgrade may introduce
+            # 360-deg offset in RA, so we give option to overwrite wcs with
+            # right answer
+            if post_filt_downgrade_wcs is not None:
+                imap = enmap.ndmap(np.asarray(imap), post_filt_downgrade_wcs)
+            assert imap.shape[-2:] == fdw_kernels.shape, \
+                f'If downgrading after filtering, result map shape must match' + \
+                f' fdw_kernels shape; got {imap.shape[-2:]} and expected {fdw_kernels.shape}'
+            
+            sqrt_cov_ell = sqrt_cov_ell[..., :lmax//post_filt_downgrade+1]
+
+        kmap = utils.rfft(imap, nthread=nthread)
+    else:
+        kmap = utils.rfft(imap * mask_obs, nthread=nthread)
+
     if verbose:
         print(
             f'Map shape: {imap.shape}\n'
@@ -914,38 +950,6 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
             f'Smoothing factor: {fwhm_fact}\n'
             f'Radial filtering: {rad_filt}'
             )
-
-    mask_obs = np.asanyarray(mask_obs, dtype=imap.dtype)
-    mask_est = np.asanyarray(mask_est, dtype=imap.dtype)
-
-    imap = utils.atleast_nd(imap, 3)
-    # kmap = utils.rfft(imap * mask_obs, nthread=nthread)
-
-    if rad_filt:
-        # measure correlated pseudo spectra for filtering
-        lmax = utils.lmax_from_wcs(imap.wcs) 
-        # alm = utils.map2alm(imap * mask_est, lmax=lmax, spin=0)
-        # sqrt_cov_k = utils.get_ps_mat(
-        #     alm, 'fourier', 0.5, mask_est=mask_est, shape=imap.shape, wcs=imap.wcs
-        #     )
-        # inv_sqrt_cov_k = utils.get_ps_mat(
-        #     alm, 'fourier', -0.5, mask_est=mask_est, shape=imap.shape, wcs=imap.wcs
-        #     )
-        
-        # # filter
-        # kmap = utils.ell_filter_correlated(
-        #     kmap, 'fourier', inv_sqrt_cov_k, nthread=nthread
-        # )
-        alm = utils.map2alm(imap * mask_est, lmax=lmax)
-        sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', 0.5, mask_est=mask_est)
-        inv_sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', -0.5, mask_est=mask_est)
-
-        imap = utils.ell_filter_correlated(
-            imap * mask_obs, 'map', inv_sqrt_cov_ell, lmax=lmax, 
-            )
-        kmap = utils.rfft(imap, nthread=nthread)
-    else:
-        kmap = utils.rfft(imap * mask_obs, nthread=nthread)
         
     wavs = fdw_kernels.k2wav(kmap, nthread=nthread)
 
@@ -1059,7 +1063,7 @@ def get_fdw_noise_sim(fdw_kernels, sqrt_cov_wavs, preshape=None,
 
     omap = utils.irfft(kmap, n=fdw_kernels.shape[-1], nthread=nthread)
         
-    # filter kmap directly in Fourier space
+    # filter kmap in harmonic space
     if sqrt_cov_ell is not None:
         lmax = sqrt_cov_ell.shape[-1] - 1
         omap = utils.ell_filter_correlated(omap, 'map', sqrt_cov_ell, lmax=lmax)

@@ -711,7 +711,7 @@ def get_ps_mat(inp, outbasis, e, inbasis='harmonic', mask_est=None,
         ncomp = np.prod(preshape, dtype=int)
         mat = np.empty((*preshape, *preshape, len(ledges)-1), dtype=inp.real.dtype)
 
-        # NOTE: very important to bin, interpolate before taking eigpow!
+        # NOTE: very important to bin before taking eigpow!
         seen_pairs = []
         for preidx1 in np.ndindex(preshape):
             for preidx2 in np.ndindex(preshape):
@@ -1308,7 +1308,7 @@ def fourier_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None):
         for sel in sels:
             okmap[sel] = ikmap[sel]
 
-        # scale values by area factor, e.g. dg^0 if ivar maps.
+        # scale values by area factor, e.g. dg^2 if ivar maps.
         # the -0.5 is because of conventional fft normalization
         mult = dg ** (2*(area_pow-0.5))
 

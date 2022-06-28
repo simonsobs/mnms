@@ -114,7 +114,7 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask_obs=None, mask_est=None, width
     inv_sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', -0.5, mask_est=mask_est)
 
     imap = utils.ell_filter_correlated(
-        imap * mask_obs, 'map', inv_sqrt_cov_ell, lmax=lmax, 
+        imap * mask_obs, 'map', inv_sqrt_cov_ell, lmax=lmax
         )
 
     # get the tiled data, apod window

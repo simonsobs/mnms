@@ -1666,6 +1666,28 @@ class FDWNoiseModel(NoiseModel):
             fwhm_fact_pt1, fwhm_fact_pt2
             )
         self._fk = None
+        self._inm2 = Interface(
+            *qids, data_model=data_model, calibrated=calibrated, downgrade=downgrade//2,
+            lmax=2*self._lmax, mask_est=mask_est, mask_version=mask_version, mask_est_name=mask_est_name,
+            mask_obs=mask_obs, mask_obs_name=mask_obs_name, ivar_dict=ivar_dict, cfact_dict=cfact_dict,
+            dmap_dict=dmap_dict, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
+            fwhm_ivar=fwhm_ivar, notes=notes, dtype=dtype, **kwargs
+        )
+
+    def get_mask_obs(self):
+        return super().get_mask_obs(), self._inm2.get_mask_obs()
+
+    def get_mask_est(self):
+        return self._inm2.get_mask_est()
+
+    def get_ivar(self, split_num, mask=(True, True)):
+        return self._inm2.get_ivar(split_num, mask=mask[1])
+
+    def get_cfact(self, split_num, mask=(True, True)):
+        return self._inm2.get_cfact(split_num, mask=mask[1])
+
+    def get_dmap(self, split_num, mask=(True, True)):
+        return self._inm2.get_dmap(split_num, mask=mask[1])
 
     def _get_kernels(self):
         """Build the kernels. This is slow and so we only call it in the first
@@ -1711,8 +1733,9 @@ class FDWNoiseModel(NoiseModel):
             self._fk = self._get_kernels()
 
         sqrt_cov_mat, sqrt_cov_ell = fdw_noise.get_fdw_noise_covsqrt(
-            self._fk, dmap, mask_obs=self._mask_obs, mask_est=self._mask_est,
-            fwhm_fact=self._fwhm_fact_func, nthread=0, verbose=verbose
+            self._fk, dmap, mask_obs=self._mask_obs[1], mask_est=self._mask_est,
+            fwhm_fact=self._fwhm_fact_func, post_filt_downgrade=2, 
+            post_filt_downgrade_wcs=self._wcs, nthread=0, verbose=verbose
         )
 
         return {
@@ -1756,7 +1779,7 @@ class FDWNoiseModel(NoiseModel):
         sim = sim.reshape(sim.shape[0], 1, *sim.shape[1:])
 
         if mask is not None:
-            sim *= mask
+            sim *= mask[0]
         return sim
 
     def _get_sim_alm(self, nm_dict, seed, mask=None, verbose=False, **kwargs):
