@@ -854,9 +854,9 @@ def get_az_func(n, p, j):
     return w_phi
 
 def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1, 
-                          fwhm_fact=2, rad_filt=True, post_filt_downgrade=1,
-                          post_filt_downgrade_wcs=None, nthread=0,
-                          verbose=True):
+                          fwhm_fact=2, rad_filt=True, pre_filt_downgrade=1, 
+                          post_filt_downgrade=1, post_filt_downgrade_wcs=None,
+                          nthread=0, verbose=True):
     """Generate square-root covariance information for the signal in imap.
     The covariance matrix is assumed to be block-diagonal in wavelet kernels,
     neglecting correlations due to their overlap. Kernels are managed by 
@@ -884,8 +884,25 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
         for a given ell. Function must accept a single scalar ell
         value and return one.
     rad_filt : bool, optional
-        Whether to measure and apply a radial (Fourier) filter to map prior
+        Whether to measure and apply a radial (harmonic) filter to map prior
         to wavelet transform, by default True.
+    pre_filt_downgrade : int, optional
+        If rad_filt, downgrade the input data after filtering if
+        pre_filt_downgrade < post_filt_downgrade (pre_filt_downgrade and 
+        post_filt_downgrade refer to the absolute downgrade factor of data
+        before and after downgrading). Therefore, data will be downgraded by
+        the factor post_filt_downgrade/pre_filt_downgrade after filtering.
+        Also, if pre_filt_downgrade < post_filt_downgrade, then mask_obs and
+        mask_est must also broadcast with imap before filtering (e.g. be
+        compatible with absolute downgrade factor pre_filt_downgrade). By 
+        default 1.
+    post_filt_downgrade : int, optional
+        See pre_filt_downgrade. By default 1.
+    post_filt_downgrade_wcs : astropy.wcs.WCS, optional
+        If downgrading post-filtering, force the data to have this wcs. This
+        kwarg exists because if imap is already downgraded, downgrading a 
+        second time after filtering can erroneously result in a wcs that is 
+        shifted by 360 degrees.
     nthread : int, optional
         Number of concurrent threads, by default 0. If 0, the result
         of mnms.utils.get_cpu_count()., by default 0.
@@ -897,8 +914,8 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
     dict, [np.ndarray]
         A dictionary holding wavelet maps of the square-root covariance, 
         indexed by the wavelet key (radial index, azimuthal index). If
-        rad_filt, an array of the same shape as the real Fourier transform
-        of imap giving the square root signal power spectrum in Fourier space.
+        rad_filt, an array of the square root power spectrum in harmonic
+        space.
 
     Notes
     -----
@@ -921,23 +938,32 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
         inv_sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', -0.5, mask_est=mask_est)
 
         imap = utils.ell_filter_correlated(
-            imap * mask_obs, 'map', inv_sqrt_cov_ell, map2basis='harmonic', lmax=lmax
+            imap * mask_obs, 'map', inv_sqrt_cov_ell, lmax=lmax
             )
 
-        if post_filt_downgrade > 1:
-            assert isinstance(post_filt_downgrade, int), \
-                f'If downgrade is supplied, must be an int; got {type(post_filt_downgrade)}'
-            imap = utils.fourier_downgrade_cc_quad(imap, post_filt_downgrade)
+        if post_filt_downgrade > pre_filt_downgrade:
+            # this check probably not necessary but ok for now
+            post_filt_rel_downgrade = post_filt_downgrade / pre_filt_downgrade
+            assert post_filt_rel_downgrade.is_integer(), \
+                f'post_filt_downgrade / pre_filt_downgrade must be an int; got ' + \
+                f'{post_filt_rel_downgrade}'
+
+            imap = utils.fourier_downgrade_cc_quad(imap, int(post_filt_rel_downgrade))
+                
             # if imap is already downgraded, second downgrade may introduce
             # 360-deg offset in RA, so we give option to overwrite wcs with
             # right answer
             if post_filt_downgrade_wcs is not None:
                 imap = enmap.ndmap(np.asarray(imap), post_filt_downgrade_wcs)
+
+            # we need to explicitly check the shape because some default fdw_kernels
+            # slicing is Ellipsis
             assert imap.shape[-2:] == fdw_kernels.shape, \
                 f'If downgrading after filtering, result map shape must match' + \
                 f' fdw_kernels shape; got {imap.shape[-2:]} and expected {fdw_kernels.shape}'
             
-            sqrt_cov_ell = sqrt_cov_ell[..., :lmax//post_filt_downgrade+1]
+            # also need to downgrade the measured power spectra!
+            sqrt_cov_ell = sqrt_cov_ell[..., :lmax//int(post_filt_rel_downgrade)+1]
 
         kmap = utils.rfft(imap, nthread=nthread)
     else:
@@ -1019,10 +1045,9 @@ def get_fdw_noise_sim(fdw_kernels, sqrt_cov_wavs, preshape=None,
         Reshape preceding dimensions of the sim to preshape, by default None.
         Preceding dimensions are those before the last two (the pixel axes).
     sqrt_cov_ell : np.ndarray, optional
-        An array of the same shape as the real Fourier transform of imap 
-        giving the square root signal power spectrum in Fourier space,
+        An array of the square root power spectrum in harmonic space,
         by default None. If provided, will be used to filter the sim in
-        Fourier space before returning. 
+        harmonic space before returning. 
     seed : iterable of ints, optional
         Seed for random draw, by default None.
     nthread : int, optional
