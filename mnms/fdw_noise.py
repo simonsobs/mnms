@@ -942,13 +942,15 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
             )
 
         if post_filt_downgrade > pre_filt_downgrade:
-            # this check probably not necessary but ok for now
             post_filt_rel_downgrade = post_filt_downgrade / pre_filt_downgrade
+
+            # this check probably not necessary but ok for now
             assert post_filt_rel_downgrade.is_integer(), \
                 f'post_filt_downgrade / pre_filt_downgrade must be an int; got ' + \
                 f'{post_filt_rel_downgrade}'
+            post_filt_rel_downgrade = int(post_filt_rel_downgrade)
 
-            imap = utils.fourier_downgrade_cc_quad(imap, int(post_filt_rel_downgrade))
+            imap = utils.fourier_downgrade_cc_quad(imap, post_filt_rel_downgrade)
                 
             # if imap is already downgraded, second downgrade may introduce
             # 360-deg offset in RA, so we give option to overwrite wcs with
@@ -963,7 +965,7 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, mask_obs=1, mask_est=1,
                 f' fdw_kernels shape; got {imap.shape[-2:]} and expected {fdw_kernels.shape}'
             
             # also need to downgrade the measured power spectra!
-            sqrt_cov_ell = sqrt_cov_ell[..., :lmax//int(post_filt_rel_downgrade)+1]
+            sqrt_cov_ell = sqrt_cov_ell[..., :lmax//post_filt_rel_downgrade+1]
 
         kmap = utils.rfft(imap, nthread=nthread)
     else:
