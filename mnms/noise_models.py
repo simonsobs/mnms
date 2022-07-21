@@ -1331,7 +1331,7 @@ class FDWNoiseModel(NoiseModel):
         sim = sim.reshape(sim.shape[0], 1, *sim.shape[1:])
 
         if mask is not None:
-            sim *= mask[0]
+            sim *= mask
         return sim
 
     def _get_sim_alm(self, nm_dict, seed, mask=None, verbose=False, **kwargs):
