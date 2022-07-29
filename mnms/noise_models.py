@@ -1257,7 +1257,7 @@ class FDWNoiseModel(NoiseModel):
         return fdw_noise.FDWKernels(
             self._lamb, 10_800, 10, 5300, self._n, self._p, self._shape,
             self._wcs, nforw=[0, 6, 6, 6, 6, 12, 12, 12, 12, 24, 24],
-            nback=[18], pforw=[0, 6, 4, 2, 2, 12, 8, 4, 2, 12, 8],
+            nback=[0], pforw=[0, 6, 4, 2, 2, 12, 8, 4, 2, 12, 8], pback=[0],
             dtype=self._dtype
         )
 
