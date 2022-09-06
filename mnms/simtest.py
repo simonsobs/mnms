@@ -205,8 +205,9 @@ def _plot_stats_hist_by_tile(clmap, mask=None, f_sky=0.5, mapidx=0, polidx=0, le
 
 def get_cl_diffs(data_maps, sim_maps, mask_est_data=1, mask_est_sim=1, 
                  lmax=None, mean_ledges=None, data_mean_axis=None, 
-                 sim_mean_axis=None, axis_labels=None,  binwidth=None, 
-                 ylim_auto=None, ylim_cross=None, show=False, save_path=None,
+                 sim_mean_axis=None, return_mean_spectra=False, 
+                 axis_labels=None, binwidth=None, ylim_auto=None,
+                 ylim_cross=None, show=False, save_path=None,
                  tweak=False):
     """Get comparisons of power spectra in data and sims. Other than an axis
     to average over, data and sims must have the same components (but not
@@ -237,6 +238,8 @@ def get_cl_diffs(data_maps, sim_maps, mask_est_data=1, mask_est_sim=1,
         Axis in data_maps to average spectra over, by default None.
     sim_mean_axis : int, optional
         Axis in sim_maps to average spectra over, by default None.
+    return_mean_spectra : bool, optional
+        Also return the mean data and sim spectra, by default False.
     axis_labels : iterable of iterables, optional
         For axes not in mean axes or map axes, labels to assign to each
         component, by default None.
@@ -255,9 +258,10 @@ def get_cl_diffs(data_maps, sim_maps, mask_est_data=1, mask_est_sim=1,
 
     Returns
     -------
-    dict
+    dict, {dict, dict}
         The power spectra ratios and correlation differences, indexed by 
-        component pairs.
+        component pairs. If return_mean_spectra, then also the mean data and 
+        sim auto and cross spectra, indexed by component pairs.
     """
     # make data maps and sim maps at least 3d to take spinny SHT
     data_maps = np.asanyarray(data_maps).squeeze()
@@ -386,7 +390,10 @@ def get_cl_diffs(data_maps, sim_maps, mask_est_data=1, mask_est_sim=1,
         else:
             plt.close()
 
-    return out
+    if return_mean_spectra:
+        return out, data_y, sim_y
+    else:
+        return out
 
 ### OLD ###
 

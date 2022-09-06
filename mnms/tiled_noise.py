@@ -5,7 +5,8 @@ from mnms.tiled_ndmap import tiled_ndmap
 import numpy as np
 
 def get_tiled_noise_covsqrt(imap, ivar=None, mask_obs=None, mask_est=None, width_deg=4.,
-                            height_deg=4., delta_ell_smooth=400, lmax=None, rfft=True, nthread=0, verbose=False):
+                            height_deg=4., delta_ell_smooth=400, lmax=None, rad_filt=True,
+                            rfft=True, nthread=0, verbose=False):
     """Generate a tiled noise model 'sqrt-covariance' matrix that captures spatially-varying
     noise correlation directions across the sky, as well as map-depth anistropies using
     the mapmaker inverse-variance maps.
@@ -107,15 +108,18 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask_obs=None, mask_est=None, width
                 f'{lmax}. Lower lmax or downgrade map less.'
                 )
 
-    # measure correlated pseudo spectra for filtering
-    # imap is also masked, as part of the filtering.
-    alm = utils.map2alm(imap * mask_est, lmax=lmax)
-    sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', 0.5, mask_est=mask_est)
-    inv_sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', -0.5, mask_est=mask_est)
+    if rad_filt:
+        # measure correlated pseudo spectra for filtering
+        # imap is also masked, as part of the filtering.
+        alm = utils.map2alm(imap * mask_est, lmax=lmax)
+        sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', 0.5, mask_est=mask_est)
+        inv_sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', -0.5, mask_est=mask_est)
 
-    imap = utils.ell_filter_correlated(
-        imap * mask_obs, 'map', inv_sqrt_cov_ell, lmax=lmax
-        )
+        imap = utils.ell_filter_correlated(
+            imap * mask_obs, 'map', inv_sqrt_cov_ell, lmax=lmax
+            )
+    else:
+        imap *= mask_obs
 
     # get the tiled data, apod window
     imap = tiled_ndmap(imap, width_deg=width_deg, height_deg=height_deg)
@@ -200,7 +204,10 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask_obs=None, mask_est=None, width
     smap=None
     omap = utils.chunked_eigpow(omap, 0.5, axes=(-4,-3))
 
-    return imap.sametiles(omap), sqrt_cov_ell
+    if rad_filt:
+        return imap.sametiles(omap), sqrt_cov_ell
+    else:
+        return imap.sametiles(omap)
 
 def get_tiled_noise_sim(covsqrt, ivar=None, sqrt_cov_ell=None, rfft=True,
                         num_arrays=None, nthread=0, seed=None, verbose=True):
