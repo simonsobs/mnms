@@ -1501,7 +1501,7 @@ def smooth_gauss(imap, fwhm, mask=None, inplace=True, method='curvedsky',
         If possible (depending on method), smooth imap inplace, 
         by default True.
     method : str, optional
-        The method used to perform the smoothing, by default 'map.'
+        The method used to perform the smoothing, by default 'curvedsky.'
     method_kwargs : dict, optional
         Any additional kwargs to pass to the function performing the
         smoothing, by default {}.
@@ -1553,7 +1553,13 @@ def smooth_gauss(imap, fwhm, mask=None, inplace=True, method='curvedsky',
 
         # NOTE: 'nearest', 'wrap' only works for full sky maps. for 
         # maps much smaller than full sky, should be 'nearest', 'nearest'
+
+        # ensure imap.ndim > 2 because sigma_pix has len 2 and flatten_axes
+        # always has at least len 1.
+        ishape = imap.shape
+        imap = atleast_nd(imap, 3)
         concurrent_gaussian_filter(imap, sigma_pix, **method_kwargs)
+        imap = imap.reshape(ishape)
     
     if mask is not None:
         imap *= mask
@@ -1570,11 +1576,12 @@ def concurrent_gaussian_filter(a, sigma_pix, *args, flatten_axes=[0],
         Array to be filtered.
     sigma_pix : scalar or iterable of scalar
         Number of elements per standard deviation along each axis to filter.
+        See flatten_axes for more information.
     flatten_axes : iterable of int
         Axes in a to flatten and concurrently apply filtering over in chunks.
         Note that these axes will internally be moved to the 0 position for
         concurrent operations. Therefore, sigma_pix must be written to respect
-        the shape of a excluding the flatten_axes.
+        the shape of a after the axis flattening and moving step.
     nthread : int, optional
         The number of threads, by default 0.
         If 0, use output of get_cpu_count().
@@ -1584,6 +1591,15 @@ def concurrent_gaussian_filter(a, sigma_pix, *args, flatten_axes=[0],
     array-like
         Filtered input array, inplace.
     """
+    try:
+        assert a.ndim - len(flatten_axes) == len(sigma_pix), \
+            'If sigma_pix is sequence, then a.ndim - len(flatten_axes) ' + \
+            'must equal len(sigma_pix)'
+    except TypeError:
+        assert a.ndim > len(flatten_axes), \
+            'If sigma_pix is scalar, then a.ndim must be greater than ' + \
+            'len(flatten_axes)'
+
     # get the shape of the subspace to flatten
     oshape_axes = [a.shape[i] for i in flatten_axes]
 
