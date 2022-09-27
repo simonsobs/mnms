@@ -152,7 +152,8 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask_obs=None, mask_est=None,
             # also need to downgrade mask_obs
             mask_obs = utils.interpol_downgrade_cc_quad(
                 mask_obs, post_filt_rel_downgrade, dtype=imap.dtype)
-            mask_obs = utils.get_mask_bool(mask_obs, threshold=1)
+            mask_obs[mask_obs < 0] = 0
+            mask_obs[mask_obs > 1] = 1
 
             # if imap is already downgraded, second downgrade may introduce
             # 360-deg offset in RA, so we give option to overwrite wcs with
