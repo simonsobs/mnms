@@ -42,6 +42,8 @@ class NoiseModel(ABC):
         self._shape = self._sim_inm.shape
         self._wcs = self._sim_inm.wcs
         self._dtype = self._sim_inm.dtype
+        self._lmax = self._sim_inm.lmax
+        self._num_splits = self._sim_inm.num_splits
 
         # initialize unloaded noise model dictionary, holds model vars for each split
         self._nm_dict = {}
@@ -527,7 +529,7 @@ class NoiseModel(ABC):
             )
 
     @abstractmethod
-    def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
+    def _get_sim_fn(self, split_num, sim_num, alm=True, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
         pass
 
@@ -562,6 +564,14 @@ class NoiseModel(ABC):
     @property
     def dtype(self):
         return self._dtype
+
+    @property
+    def lmax(self):
+        return self._lmax
+
+    @property
+    def num_splits(self):
+        return self._num_splits
 
     def mask_est(self, kind='sim'):
         inm = self._get_inm(kind)
@@ -610,15 +620,11 @@ class NoiseModel(ABC):
         inm = self._get_inm(kind)
         inm.delete_dmap(split_num)
 
-    @property
-    def num_splits(self):
-        return self._num_splits
-
 
 @register()
 class TiledNoiseModel(NoiseModel):
 
-    def __init__(self, *qids, data_model=None, calibrated=True, downgrade=1,
+    def __init__(self, *qids, data_model=None, calibrated=False, downgrade=1,
                  lmax=None, mask_version=None, mask_est=None, mask_est_name=None,
                  mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
@@ -636,7 +642,7 @@ class TiledNoiseModel(NoiseModel):
             DataModel instance to help load raw products, by default None.
             If None, will load the 'default_data_model' from the 'mnms' config.
         calibrated : bool, optional
-            Whether to load calibrated raw data, by default True.
+            Whether to load calibrated raw data, by default False.
         downgrade : int, optional
             The factor to downgrade map pixels by, by default 1.
         lmax : int, optional
@@ -715,11 +721,22 @@ class TiledNoiseModel(NoiseModel):
         >>> print(imap.shape)
         >>> (2, 1, 3, 5600, 21600)
         """
-        self._inm = Interface(
+        # assume any passed full data at sim Interface lmax/resolution
+        self._inm_nominal = Interface(
             *qids, data_model=data_model, calibrated=calibrated, downgrade=downgrade,
             lmax=lmax, mask_est=mask_est, mask_version=mask_version, mask_est_name=mask_est_name,
             mask_obs=mask_obs, mask_obs_name=mask_obs_name, ivar_dict=ivar_dict, cfact_dict=cfact_dict,
             dmap_dict=dmap_dict, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
+            fwhm_ivar=fwhm_ivar, dtype=dtype, **kwargs   
+        )
+
+        # prohibit any passed full data from entering model Interface.
+        # grab downgrade and lmax from inm_nominal to ensure they are not None.
+        self._inm_dg_half = Interface(
+            *qids, data_model=data_model, calibrated=calibrated, downgrade=self._inm_nominal._downgrade//2,
+            lmax=2*self._inm_nominal._lmax, mask_est=None, mask_version=mask_version, mask_est_name=mask_est_name,
+            mask_obs=None, mask_obs_name=mask_obs_name, ivar_dict=None, cfact_dict=None,
+            dmap_dict=None, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
             fwhm_ivar=fwhm_ivar, dtype=dtype, **kwargs   
         )
 
@@ -733,23 +750,25 @@ class TiledNoiseModel(NoiseModel):
 
     @property
     def _model_inm(self):
-        return self._inm
+        return self._inm_dg_half
 
     @property
     def _sim_inm(self):
-        return self._inm
+        return self._inm_nominal
 
     def _get_model_fn(self, split_num):
         """Get a noise model filename for split split_num; return as <str>"""
         inm = self._model_inm
 
+        # want half the model lmax, twice the downgrade
+
         return simio.get_tiled_model_fn(
             inm._qids, split_num, self._width_deg, self._height_deg, 
-            self._delta_ell_smooth, inm._lmax, notes=self._notes,
+            self._delta_ell_smooth, inm._lmax//2, notes=self._notes,
             data_model=inm._data_model, mask_version=inm._mask_version,
             bin_apod=inm._use_default_mask, mask_est_name=inm._mask_est_name,
             mask_obs_name=inm._mask_obs_name, calibrated=inm._calibrated, 
-            downgrade=inm._downgrade, union_sources=inm._union_sources,
+            downgrade=2*inm._downgrade, union_sources=inm._union_sources,
             kfilt_lbounds=inm._kfilt_lbounds, fwhm_ivar=inm._fwhm_ivar, 
             **inm._kwargs
         )
@@ -775,7 +794,8 @@ class TiledNoiseModel(NoiseModel):
             dmap, ivar=ivar, mask_obs=inm._mask_obs,
             mask_est=inm._mask_est, width_deg=self._width_deg,
             height_deg=self._height_deg, delta_ell_smooth=self._delta_ell_smooth,
-            lmax=inm._lmax, rfft=True, nthread=0, verbose=verbose
+            pre_filt_downgrade=inm._downgrade, post_filt_downgrade=self._sim_inm._downgrade, 
+            post_filt_downgrade_wcs=self._wcs, nthread=0, verbose=verbose
         )
 
         return {
@@ -789,7 +809,7 @@ class TiledNoiseModel(NoiseModel):
             fn, sqrt_cov_mat, extra_hdu={'SQRT_COV_ELL': sqrt_cov_ell}
         )
 
-    def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
+    def _get_sim_fn(self, split_num, sim_num, alm=True, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num; return as <str>"""
         inm = self._sim_inm
 
@@ -832,7 +852,7 @@ class TiledNoiseModel(NoiseModel):
 @register()
 class WaveletNoiseModel(NoiseModel):
 
-    def __init__(self, *qids, data_model=None, calibrated=True, downgrade=1,
+    def __init__(self, *qids, data_model=None, calibrated=False, downgrade=1,
                  lmax=None, mask_version=None, mask_est=None, mask_est_name=None,
                  mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
@@ -851,7 +871,7 @@ class WaveletNoiseModel(NoiseModel):
             DataModel instance to help load raw products, by default None.
             If None, will load the 'default_data_model' from the 'mnms' config.
         calibrated : bool, optional
-            Whether to load calibrated raw data, by default True.
+            Whether to load calibrated raw data, by default False.
         downgrade : int, optional
             The factor to downgrade map pixels by, by default 1.
         lmax : int, optional
@@ -1014,7 +1034,7 @@ class WaveletNoiseModel(NoiseModel):
             extra={'sqrt_cov_ell': sqrt_cov_ell, 'w_ell': w_ell}
         )
 
-    def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
+    def _get_sim_fn(self, split_num, sim_num, alm=True, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num; return as <str>"""
         inm = self._sim_inm
 
@@ -1068,7 +1088,7 @@ class WaveletNoiseModel(NoiseModel):
 @register()
 class FDWNoiseModel(NoiseModel):
 
-    def __init__(self, *qids, data_model=None, calibrated=True, downgrade=1,
+    def __init__(self, *qids, data_model=None, calibrated=False, downgrade=1,
                  lmax=None, mask_version=None, mask_est=None, mask_est_name=None,
                  mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
@@ -1088,7 +1108,7 @@ class FDWNoiseModel(NoiseModel):
             DataModel instance to help load raw products, by default None.
             If None, will load the 'default_data_model' from the 'mnms' config.
         calibrated : bool, optional
-            Whether to load calibrated raw data, by default True.
+            Whether to load calibrated raw data, by default False.
         downgrade : int, optional
             The factor to downgrade map pixels by, by default 1.
         lmax : int, optional
@@ -1296,7 +1316,7 @@ class FDWNoiseModel(NoiseModel):
             fn, sqrt_cov_mat, extra_datasets={'sqrt_cov_ell': sqrt_cov_ell}
         )
 
-    def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
+    def _get_sim_fn(self, split_num, sim_num, alm=True, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
         inm = self._sim_inm
 
@@ -1583,7 +1603,7 @@ class HarmonicMixture:
                 print(f'Sim for split {split_num}, map {sim_num} not found on-disk, please generate it first')
                 raise FileNotFoundError(fn)
 
-    def _get_sim_fn(self, split_num, sim_num, alm=False, mask_obs=True):
+    def _get_sim_fn(self, split_num, sim_num, alm=True, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
         basefn = self._noise_models[0]._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=mask_obs)
         fn = os.path.splitext(basefn)[0]
@@ -1644,7 +1664,7 @@ class HarmonicMixture:
 
 class Interface:
 
-    def __init__(self, *qids, data_model=None, calibrated=True, downgrade=1,
+    def __init__(self, *qids, data_model=None, calibrated=False, downgrade=1,
                  lmax=None, mask_version=None, mask_est=None, mask_est_name=None,
                  mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
@@ -1661,7 +1681,7 @@ class Interface:
             DataModel instance to help load raw products, by default None.
             If None, will load the 'default_data_model' from the 'mnms' config.
         calibrated : bool, optional
-            Whether to load calibrated raw data, by default True.
+            Whether to load calibrated raw data, by default False.
         downgrade : int, optional
             The factor to downgrade map pixels by, by default 1.
         lmax : int, optional
@@ -2343,6 +2363,14 @@ class Interface:
         return self._dtype
 
     @property
+    def lmax(self):
+        return self._lmax
+
+    @property
+    def num_splits(self):
+        return self._num_splits
+
+    @property
     def mask_est(self):
         return self._mask_est
 
@@ -2391,10 +2419,6 @@ class Interface:
             del self._dmap_dict[split_num] 
         except KeyError:
             print(f'Nothing to delete, no data in memory for split {split_num}')
-
-    @property
-    def num_splits(self):
-        return self._num_splits
         
 
 class WavFiltTile(NoiseModel):
