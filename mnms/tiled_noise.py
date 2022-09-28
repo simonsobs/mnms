@@ -34,6 +34,9 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask_obs=None, mask_est=None,
     lmax : int, optional
         The bandlimit of the maps, by default None.
         If None, will be set to twice the theoretical CAR limit, ie 180/wcs.wcs.cdelt[1].
+    rad_filt : bool, optional
+        Whether to measure and apply a radial (harmonic) filter to map prior
+        to wavelet transform, by default True.
     rfft : bool, optional
         Whether to generate tile shapes prepared for rfft's as opposed to fft's. For real 
         imaps this reduces computation time and memory usage, by default True.

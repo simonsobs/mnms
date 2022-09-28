@@ -153,6 +153,9 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_obs, lmax, mask_est, rad_filt=Tr
         Bandlimit for output noise covariance.
     mask_est : (ny, nx) enmap
         Mask used to estimate the filter which whitens the data.
+    rad_filt : bool, optional
+        Whether to measure and apply a radial (harmonic) filter to map prior
+        to wavelet transform, by default True.
     lamb : float, optional
         Lambda parameter specifying width of wavelet kernels in
         log(ell). Should be larger than 1.
