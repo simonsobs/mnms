@@ -490,3 +490,91 @@ def get_fdw_sim_fn(qid, split_num, lamb, n, p, fwhm_fact_pt1, fwhm_fact_pt2, lma
     mapalm = 'alm' if alm else 'map'
     fn += f'{mapalm}{str(sim_num).zfill(4)}.fits'
     return fn
+
+def get_isoivar_model_fn(qid, split_num, lmax, kind, notes=None, **kwargs):
+    """
+    Determine filename for square-root covariance file.
+
+    Arguments
+    ---------
+    qid : str
+        Array identifier.
+    split_num : int
+        Split index.
+    kind : str
+        Specify type of isoivar model, either 'ivarisoivar', 'isoivariso',
+        'iso', or 'ivar'.
+    lmax : int
+        Max multipole.
+
+    Returns
+    -------
+    fn : str
+        Absolute path for file.
+    """
+    # get root fn
+    fn = config['covmat_path']
+    fn += _get_sim_fn_root(qid, **kwargs)
+
+    # allow for possibility of no notes
+    if notes is None:
+        notes = ''
+    else:
+        notes = f'_{notes}'
+
+    assert kind in ['ivarisoivar', 'isoivariso', 'iso', 'ivar']
+        
+    fn += f'{kind}_lmax{lmax}{notes}_set{split_num}.hdf5'
+    return fn
+
+def get_isoivar_sim_fn(qid, split_num, sim_num, lmax, kind, alm=False,
+                   mask_obs=True, notes=None, **kwargs):
+    """
+    Determine filename for simulated noise map.
+
+    Arguments
+    ---------
+    qid : str
+        Array identifier.
+    split_num : int
+        Split index.
+    sim_num : int
+        Simulation number.
+    lmax : int
+        Max multipole.
+    kind : str
+        Specify type of isoivar model, either 'ivarisoivar', 'isoivariso',
+        'iso', or 'ivar'.
+    alm : bool
+        Whether filename ends in "map" (False) or "alm" (True)
+    mask_obs : bool
+        Is the sim masked by the mask_observed.
+
+    Returns
+    -------
+    fn : str
+        Absolute path for file.
+    """
+    # get root fn
+    fn = config['maps_path']
+    fn += _get_sim_fn_root(qid, **kwargs)
+
+    if mask_obs:
+        mask_obs_str = ''
+    else:
+        mask_obs_str = 'unmasked_'
+
+    # allow for possibility of no notes
+    if notes is None:
+        notes = ''
+    else:
+        notes = f'_{notes}'
+
+    assert kind in ['ivarisoivar', 'isoivariso', 'iso', 'ivar']
+    
+    fn += f'{kind}_{mask_obs_str}lmax{lmax}{notes}_set{split_num}_'
+
+    # prepare map num tags
+    mapalm = 'alm' if alm else 'map'
+    fn += f'{mapalm}{str(sim_num).zfill(4)}.fits'
+    return fn
