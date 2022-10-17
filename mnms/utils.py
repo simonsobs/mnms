@@ -20,6 +20,17 @@ import hashlib
 
 # Utility functions to support tiling classes and functions. Just keeping code organized so I don't get whelmed.
 
+def qid2arrfreq(qid):
+    """Transform dr6-style qid to array_frequency, e.g. pa5a to pa5_f090.
+    """
+    arrs2freqs = {
+        4: ['150', '220'],
+        5: ['090', '150'],
+        6: ['090', '150'],
+        7: ['030', '040']
+    }
+    return f"{qid[:3]}_f{arrs2freqs[int(qid[2])]['ab'.index(qid[3])]}"
+
 # copied from soapack.interfaces
 def config_from_yaml_file(filename):
     """Returns a dictionary from a yaml file given by absolute filename.
@@ -29,7 +40,7 @@ def config_from_yaml_file(filename):
     return config
 
 def config_from_yaml_resource(resource):
-    """Returns a dictionary from a yaml file given by the resource name (relative to tacos package).
+    """Returns a dictionary from a yaml file given by the resource name (relative to mnms package).
     """
     f = pkgutil.get_data('mnms', resource).decode()
     config = yaml.safe_load(f)
@@ -45,14 +56,33 @@ def get_default_data_model():
     soapack.interfaces.DataModel instance
         An object used for loading raw data from disk.
     """
-    config = sints.dconfig['mnms']
-    dm_name = config['default_data_model']
+    return get_data_model()
 
-    # capitalize all chars except v3
-    dm_name = ''.join(
-        [dm_name[i].upper() if dm_name[i] != 'v' else 'v' for i in range(len(dm_name))]
+def get_data_model(name=None):
+    """Returns a soapack.interfaces.DataModel instance depending on the
+    name of the data model.
+    
+    Parameters
+    ----------
+    name : str
+        Name string of DataModel class to load. If None, grab the name
+        specified in the users's soapack config 'mnms' block, under key
+        'default_data_model'. By default None.
+
+    Returns
+    -------
+    soapack.interfaces.DataModel instance
+        An object used for loading raw data from disk.
+    """
+    if name is None:
+        config = sints.dconfig['mnms']
+        name = config['default_data_model']
+    
+    # capitalize all chars except v
+    name = ''.join(
+        [name[i].upper() if name[i] != 'v' else 'v' for i in range(len(name))]
             )
-    return getattr(sints, dm_name)()
+    return getattr(sints, name)()
 
 def trim_shared_fn_tags(basefn, ifn):
     """Return joined tags in input that are not shared with those in a 
