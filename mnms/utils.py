@@ -619,11 +619,6 @@ def interp1d_bins(bins, y, return_vals=False, **interp1d_kwargs):
     else:
         return interp1d(x, y, fill_value=fill_value, **interp1d_kwargs)
 
-# this is twice the theoretical CAR bandlimit!
-def lmax_from_wcs(wcs):
-    """Returns 180/wcs.cdelt[1]; this is twice the theoretical CAR bandlimit"""
-    return int(180/np.abs(wcs.wcs.cdelt[1]))
-
 def get_ps_mat(inp, outbasis, e, inbasis='harmonic', mask_est=None, 
                shape=None, wcs=None):
     """Get a power spectrum matrix from input alm's, raised to a given
@@ -1233,6 +1228,16 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, **kwar
             alm[preidx], omap[preidx], ainfo=ainfo, **kwargs
             )
     return omap
+
+# this is twice the theoretical CAR bandlimit!
+def lmax_from_wcs(wcs):
+    """Returns 180/wcs.cdelt[1]; this is twice the theoretical CAR bandlimit"""
+    return int(180/np.abs(wcs.wcs.cdelt[1]))
+
+def downgrade_from_lmaxs(lmax_in, lmax_out):
+    """Maximum integer downgrade factor for pixels to support new, lower lmax"""
+    assert lmax_out <= lmax_in, 'lmax_out must be <= lmax_in'
+    return lmax_in // lmax_out
 
 def downgrade_geometry_cc_quad(shape, wcs, dg):
     """Get downgraded geometry that adheres to Clenshaw-Curtis quadrature.

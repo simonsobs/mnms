@@ -4,10 +4,9 @@ from mnms.tiled_ndmap import tiled_ndmap
 
 import numpy as np
 
-def get_tiled_noise_covsqrt(imap, ivar=None, mask_obs=None, mask_est=None,
+def get_tiled_noise_covsqrt(imap, lmax, mask_obs=None, mask_est=None, ivar=None,
                             width_deg=4., height_deg=4., delta_ell_smooth=400,
-                            lmax=None, rad_filt=True, rfft=True,
-                            pre_filt_downgrade=1, post_filt_downgrade=1,
+                            rad_filt=True, rfft=True, post_filt_rel_downgrade=1,
                             post_filt_downgrade_wcs=None, nthread=0,
                             verbose=False):
     """Generate a tiled noise model 'sqrt-covariance' matrix that captures spatially-varying
@@ -18,12 +17,14 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask_obs=None, mask_est=None,
     ----------
     imap : ndmap, optional
         Data maps, by default None.
-    ivar : array-like, optional
-        Data inverse-variance maps, by default None.
+    lmax : int
+        If rad_filt, the bandlimit for output noise covariance.
     mask_obs : array-like, optional
         Data mask, by default None.
     mask_est : array-like, optional
         Mask used to estimate the filter which whitens the data, by default None.
+    ivar : array-like, optional
+        Data inverse-variance maps, by default None.
     width_deg : scalar, optional
         The characteristic tile width in degrees, by default 4.
     height_deg : scalar, optional
@@ -40,18 +41,10 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask_obs=None, mask_est=None,
     rfft : bool, optional
         Whether to generate tile shapes prepared for rfft's as opposed to fft's. For real 
         imaps this reduces computation time and memory usage, by default True.
-    pre_filt_downgrade : int, optional
-        If rad_filt, downgrade the input data after filtering if
-        pre_filt_downgrade < post_filt_downgrade (pre_filt_downgrade and 
-        post_filt_downgrade refer to the absolute downgrade factor of data
-        before and after downgrading). Therefore, data will be downgraded by
-        the factor post_filt_downgrade/pre_filt_downgrade after filtering.
-        Also, if pre_filt_downgrade < post_filt_downgrade, then mask_obs and
-        mask_est must also broadcast with imap before filtering (e.g. be
-        compatible with absolute downgrade factor pre_filt_downgrade). By 
-        default 1.
-    post_filt_downgrade : int, optional
-        See pre_filt_downgrade. By default 1.
+    post_filt_rel_downgrade : int, optional
+        If rad_filt, downgrade the input data after filtering by this factor.
+        Also, mask_obs and mask_est must broadcast with imap before filtering
+        By default 1.
     post_filt_downgrade_wcs : astropy.wcs.WCS, optional
         If downgrading post-filtering, force the data to have this wcs. This
         kwarg exists because if imap is already downgraded, downgrading a 
@@ -121,15 +114,6 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask_obs=None, mask_est=None,
 
     if mask_est is None:
         mask_est = mask_obs
-    if lmax is None:
-        lmax = utils.lmax_from_wcs(imap.wcs)
-    else:
-        if utils.lmax_from_wcs(imap.wcs) < lmax:
-            raise ValueError(
-                f'Pixelization input map (cdelt : {imap.wcs.wcs.cdelt} '
-                f'cannot support SH transforms of requested lmax : '
-                f'{lmax}. Lower lmax or downgrade map less.'
-                )
 
     if rad_filt:
         # measure correlated pseudo spectra for filtering
@@ -141,35 +125,32 @@ def get_tiled_noise_covsqrt(imap, ivar=None, mask_obs=None, mask_est=None,
             imap * mask_obs, 'map', inv_sqrt_cov_ell, lmax=lmax
             )
 
-        if post_filt_downgrade > pre_filt_downgrade:
-            post_filt_rel_downgrade = post_filt_downgrade / pre_filt_downgrade
+        # this check probably not necessary but ok for now
+        assert post_filt_rel_downgrade.is_integer(), \
+            f'post_filt_downgrade / pre_filt_downgrade must be an int; got ' + \
+            f'{post_filt_rel_downgrade}'
+        post_filt_rel_downgrade = int(post_filt_rel_downgrade)
 
-            # this check probably not necessary but ok for now
-            assert post_filt_rel_downgrade.is_integer(), \
-                f'post_filt_downgrade / pre_filt_downgrade must be an int; got ' + \
-                f'{post_filt_rel_downgrade}'
-            post_filt_rel_downgrade = int(post_filt_rel_downgrade)
+        imap = utils.fourier_downgrade_cc_quad(imap, post_filt_rel_downgrade)
 
-            imap = utils.fourier_downgrade_cc_quad(imap, post_filt_rel_downgrade)
+        # also need to downgrade mask_obs
+        mask_obs = utils.interpol_downgrade_cc_quad(
+            mask_obs, post_filt_rel_downgrade, dtype=imap.dtype)
+        mask_obs[mask_obs < 0] = 0
+        mask_obs[mask_obs > 1] = 1
 
-            # also need to downgrade mask_obs
-            mask_obs = utils.interpol_downgrade_cc_quad(
-                mask_obs, post_filt_rel_downgrade, dtype=imap.dtype)
-            mask_obs[mask_obs < 0] = 0
-            mask_obs[mask_obs > 1] = 1
-
-            # if imap is already downgraded, second downgrade may introduce
-            # 360-deg offset in RA, so we give option to overwrite wcs with
-            # right answer
-            if post_filt_downgrade_wcs is not None:
-                imap = enmap.ndmap(np.asarray(imap), post_filt_downgrade_wcs)
-                mask_obs = enmap.ndmap(np.asarray(mask_obs), post_filt_downgrade_wcs)
-            
-            # also need to downgrade the measured power spectra!
-            # because the spectra are of *whitened* maps, need to also correct
-            # the level of the spectra to be correct for the downgraded map
-            sqrt_cov_ell = sqrt_cov_ell[..., :lmax//post_filt_rel_downgrade+1]
-            sqrt_cov_ell *= post_filt_rel_downgrade
+        # if imap is already downgraded, second downgrade may introduce
+        # 360-deg offset in RA, so we give option to overwrite wcs with
+        # right answer
+        if post_filt_downgrade_wcs is not None:
+            imap = enmap.ndmap(np.asarray(imap), post_filt_downgrade_wcs)
+            mask_obs = enmap.ndmap(np.asarray(mask_obs), post_filt_downgrade_wcs)
+        
+        # also need to downgrade the measured power spectra!
+        # because the spectra are of *whitened* maps, need to also correct
+        # the level of the spectra to be correct for the downgraded map
+        sqrt_cov_ell = sqrt_cov_ell[..., :lmax//post_filt_rel_downgrade+1]
+        sqrt_cov_ell *= post_filt_rel_downgrade
     else:
         imap *= mask_obs
 

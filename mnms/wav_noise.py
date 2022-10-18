@@ -138,7 +138,7 @@ def rand_enmap_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, mask, lmax, w_ell,
                         w_ell, dtype=type_utils.to_complex(dtype), seed=seed)
     return utils.alm2map(alm, shape=mask.shape, wcs=mask.wcs, dtype=dtype, ainfo=ainfo)
 
-def estimate_sqrt_cov_wav_from_enmap(imap, mask_obs, lmax, mask_est, rad_filt=True,
+def estimate_sqrt_cov_wav_from_enmap(imap, lmax, mask_obs, mask_est, rad_filt=True,
                                      lamb=1.3, w_lmin=10, w_lmax_j=5300, smooth_loc=False,
                                      fwhm_fact=2):
     """
@@ -148,10 +148,10 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_obs, lmax, mask_est, rad_filt=Tr
     ----------
     imap : (ncomp, npol, ny, nx) enmap
         Input noise maps.
-    mask_obs : (ny, nx) enmap
-        Sky mask.
     lmax : int
         Bandlimit for output noise covariance.
+    mask_obs : (ny, nx) enmap
+        Sky mask.
     mask_est : (ny, nx) enmap
         Mask used to estimate the filter which whitens the data.
     rad_filt : bool, optional

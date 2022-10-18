@@ -1,11 +1,9 @@
 BaseNoiseModel:
   calibrated: false
   data_model_name: dr6v3
-  downgrade: 4
-  dtype: f8
+  dtype: f4
   fwhm_ivar: null
   kfilt_lbounds: null
-  lmax: 5400
   mask_est_name: dr6v3_20220316_baseline_union_mask
   mask_obs_name: dr6v3_xlink_union_mask_0.001
   mask_version: v3
