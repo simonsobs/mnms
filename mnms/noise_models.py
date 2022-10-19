@@ -1,4 +1,4 @@
-from mnms import simio, tiled_ndmap, utils, soapack_utils as s_utils, tiled_noise, wav_noise, fdw_noise, isoivar_noise, inpaint
+from mnms import simio, utils, soapack_utils as s_utils, tiled_noise, wav_noise, fdw_noise, isoivar_noise, inpaint
 from pixell import enmap, wcsutils, sharp
 from enlib import bench
 from optweight import wavtrans, alm_c_utils
@@ -975,14 +975,19 @@ class BaseNoiseModel(DataManager, ABC):
         if not os.path.exists(self._config_fn):
             with open(self._config_fn, 'w') as f:
                 yaml.safe_dump({'BaseNoiseModel': self._base_config_dict}, f)
-                f.write('\n')
                 
         existing_config_dict = utils.config_from_yaml_file(self._config_fn)
         if self.__class__.__name__ not in existing_config_dict:
             with open(self._config_fn, 'a') as f:
+                f.write('\n')
                 if self._notes is not None:
                     f.write(f'# {self._notes}\n')
-                yaml.safe_dump({self.__class__.__name__: self._model_config_dict}, f)   
+                model_config_dict = self._model_config_dict.copy()
+                model_config_dict.update(
+                    model_str_template = self._model_str_template, 
+                    sim_str_template = self._sim_str_template
+                )
+                yaml.safe_dump({self.__class__.__name__: model_config_dict}, f)   
         else:
             pass # nothing new to save  
 
@@ -1125,7 +1130,7 @@ class BaseNoiseModel(DataManager, ABC):
             self._save_to_config()
 
         if check_in_memory:
-            if split_num in self._model_dict:
+            if (split_num, lmax) in self._model_dict:
                 return self.model(split_num, lmax)
             else:
                 pass
@@ -1292,12 +1297,12 @@ class BaseNoiseModel(DataManager, ABC):
         mask_obs = self._mask_obs
 
         # get the model and ivar
-        if split_num not in self._model_dict:
+        if (split_num, lmax) not in self._model_dict:
             model_dict = self._check_model_on_disk(split_num, lmax, generate=False)
         else:
             model_dict = self.model(split_num, lmax)
 
-        if split_num not in self._ivar_dict:
+        if (split_num, lmax) not in self._ivar_dict:
             ivar = self.get_ivar(split_num, downgrade=downgrade, mask=mask_obs)
         else:
             ivar = self.ivar(split_num, lmax)
@@ -1422,12 +1427,8 @@ class TiledNoiseModel(BaseNoiseModel):
     def _reprname(cls):
         return 'tile'
 
-    def __init__(self, *qids, data_model_name=None, calibrated=False, downgrade=1,
-                 lmax=None, mask_version=None, mask_est=None, mask_est_name=None,
-                 mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
-                 dmap_dict=None, union_sources=None, kfilt_lbounds=None,
-                 fwhm_ivar=None, notes=None, dtype=None,
-                 width_deg=4., height_deg=4., delta_ell_smooth=400, **kwargs):
+    def __init__(self, *qids, width_deg=4., height_deg=4.,
+                 delta_ell_smooth=400, **kwargs):
         """A TiledNoiseModel object supports drawing simulations which capture spatially-varying
         noise correlation directions in map-domain data. They also capture the total noise power
         spectrum, spatially-varying map depth, and array-array correlations.
@@ -1520,62 +1521,36 @@ class TiledNoiseModel(BaseNoiseModel):
         >>> print(imap.shape)
         >>> (2, 1, 3, 5600, 21600)
         """
-        # assume any passed full data at sim Interface lmax/resolution
-        self._inm_nominal = Interface(
-            *qids, data_model_name=data_model_name, calibrated=calibrated, downgrade=downgrade,
-            lmax=lmax, mask_est=mask_est, mask_version=mask_version, mask_est_name=mask_est_name,
-            mask_obs=mask_obs, mask_obs_name=mask_obs_name, ivar_dict=ivar_dict, cfact_dict=cfact_dict,
-            dmap_dict=dmap_dict, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
-            fwhm_ivar=fwhm_ivar, dtype=dtype, **kwargs   
-        )
-
-        # prohibit any passed full data from entering model Interface.
-        # grab downgrade and lmax from inm_nominal to ensure they are not None.
-        self._inm_dg_half = Interface(
-            *qids, data_model_name=data_model_name, calibrated=calibrated, downgrade=self._inm_nominal._downgrade//2,
-            lmax=2*self._inm_nominal._lmax, mask_est=None, mask_version=mask_version, mask_est_name=mask_est_name,
-            mask_obs=None, mask_obs_name=mask_obs_name, ivar_dict=None, cfact_dict=None,
-            dmap_dict=None, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
-            fwhm_ivar=fwhm_ivar, dtype=dtype, **kwargs   
-        )
-
         # save model-specific info
         self._width_deg = width_deg
         self._height_deg = height_deg
         self._delta_ell_smooth = delta_ell_smooth
 
         # need to init NoiseModel last
-        super().__init__(notes=notes)
+        super().__init__(*qids, **kwargs)
 
     @property
-    def _model_inm(self):
-        return self._inm_dg_half
+    def _model_ext(self):
+        return '.fits'
 
     @property
-    def _sim_inm(self):
-        return self._inm_nominal
+    def _pre_filt_rel_upgrade(self):
+        """Relative pixelization upgrade factor for model-building step"""
+        return 2
 
-    def _get_model_fn(self, split_num):
-        """Get a noise model filename for split split_num; return as <str>"""
-        inm = self._model_inm
-
-        # want half the model lmax, twice the downgrade
-
-        return simio.get_tiled_model_fn(
-            inm._qids, split_num, self._width_deg, self._height_deg, 
-            self._delta_ell_smooth, inm._lmax//2, notes=self._notes,
-            data_model=inm._data_model, mask_version=inm._mask_version,
-            bin_apod=inm._use_default_mask, mask_est_name=inm._mask_est_name,
-            mask_obs_name=inm._mask_obs_name, calibrated=inm._calibrated, 
-            downgrade=2*inm._downgrade, union_sources=inm._union_sources,
-            kfilt_lbounds=inm._kfilt_lbounds, fwhm_ivar=inm._fwhm_ivar, 
-            **inm._kwargs
+    def _get_model_config_dict(self):
+        """Return a dictionary of model parameters particular to this subclass"""
+        model_config = dict(
+            width_deg=self._width_deg,
+            height_deg=self._height_deg,
+            delta_ell_smooth=self._delta_ell_smooth
         )
+        return model_config
 
     def _read_model(self, fn):
         """Read a noise model with filename fn; return a dictionary of noise model variables"""
         # read from disk
-        sqrt_cov_mat, extra_hdu = tiled_ndmap.read_tiled_ndmap(
+        sqrt_cov_mat, extra_hdu = tiled_noise.read_tiled_ndmap(
             fn, extra_hdu=['SQRT_COV_ELL']
         )
         sqrt_cov_ell = extra_hdu['SQRT_COV_ELL']
@@ -1585,16 +1560,19 @@ class TiledNoiseModel(BaseNoiseModel):
             'sqrt_cov_ell': sqrt_cov_ell
             }
 
-    def _get_model(self, dmap, ivar=None, verbose=False, **kwargs):
+    def _get_model(self, dmap, lmax, mask_obs, mask_est, ivar, verbose):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
-        inm = self._model_inm
-
+        downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
+        _, wcs = utils.downgrade_geometry_cc_quad(
+            self._full_shape, self._full_wcs, downgrade
+            )
+        
         sqrt_cov_mat, sqrt_cov_ell = tiled_noise.get_tiled_noise_covsqrt(
-            dmap, lmax, mask_obs=inm._mask_obs, mask_est=inm._mask_est, ivar=ivar,
-            width_deg=self._width_deg, height_deg=self._height_deg,
-            delta_ell_smooth=self._delta_ell_smooth,
+            dmap, lmax*self._pre_filt_rel_upgrade, mask_obs=mask_obs,
+            mask_est=mask_est, ivar=ivar, width_deg=self._width_deg,
+            height_deg=self._height_deg, delta_ell_smooth=self._delta_ell_smooth,
             post_filt_rel_downgrade=self._pre_filt_rel_upgrade,
-            post_filt_downgrade_wcs=self._wcs, nthread=0, verbose=verbose
+            post_filt_downgrade_wcs=wcs, nthread=0, verbose=verbose
         )
 
         return {
@@ -1604,26 +1582,11 @@ class TiledNoiseModel(BaseNoiseModel):
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
         """Write a dictionary of noise model variables to filename fn"""
-        tiled_ndmap.write_tiled_ndmap(
+        tiled_noise.write_tiled_ndmap(
             fn, sqrt_cov_mat, extra_hdu={'SQRT_COV_ELL': sqrt_cov_ell}
         )
 
-    def _get_sim_fn(self, split_num, sim_num, alm=True, mask_obs=True):
-        """Get a sim filename for split split_num, sim sim_num; return as <str>"""
-        inm = self._sim_inm
-
-        return simio.get_tiled_sim_fn(
-            inm._qids, self._width_deg, self._height_deg, self._delta_ell_smooth, 
-            inm._lmax, split_num, sim_num, notes=self._notes, alm=alm, mask_obs=mask_obs, 
-            data_model=inm._data_model, mask_version=inm._mask_version,
-            bin_apod=inm._use_default_mask, mask_est_name=inm._mask_est_name,
-            mask_obs_name=inm._mask_obs_name, calibrated=inm._calibrated, 
-            downgrade=inm._downgrade, union_sources=inm._union_sources,
-            kfilt_lbounds=inm._kfilt_lbounds, fwhm_ivar=inm._fwhm_ivar, 
-            **inm._kwargs
-        )
-
-    def _get_sim(self, model_dict, seed, ivar=None, mask=None, verbose=False, **kwargs):
+    def _get_sim(self, model_dict, seed, lmax, mask, ivar, verbose):
         """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
         # Get noise model variables 
         sqrt_cov_mat = model_dict['sqrt_cov_mat']
@@ -1642,10 +1605,10 @@ class TiledNoiseModel(BaseNoiseModel):
             sim *= mask
         return sim
 
-    def _get_sim_alm(self, model_dict, seed, ivar=None, mask=None, verbose=False, **kwargs):    
+    def _get_sim_alm(self, model_dict, seed, lmax, mask, ivar, verbose):
         """Return a masked alm sim from model_dict, with seed <sequence of ints>"""
-        sim = self._get_sim(model_dict, seed, ivar=ivar, mask=mask, verbose=verbose, **kwargs)
-        return utils.map2alm(sim, lmax=self._sim_inm._lmax)
+        sim = self._get_sim(model_dict, seed, lmax, mask, ivar, verbose)
+        return utils.map2alm(sim, lmax=lmax)
 
 
 @register()
@@ -2124,15 +2087,14 @@ class FDWNoiseModel(BaseNoiseModel):
             self._fk_dict[lmax] = self._get_kernels(lmax)
         fk = self._fk_dict[lmax]
 
-        lmax = lmax * self._pre_filt_rel_upgrade
         downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
         _, wcs = utils.downgrade_geometry_cc_quad(
             self._full_shape, self._full_wcs, downgrade
             )
-
+        
         sqrt_cov_mat, sqrt_cov_ell = fdw_noise.get_fdw_noise_covsqrt(
-            fk, dmap, lmax, mask_obs=mask_obs, mask_est=mask_est,
-            fwhm_fact=self._fwhm_fact_func, 
+            fk, dmap, lmax*self._pre_filt_rel_upgrade, mask_obs=mask_obs,
+            mask_est=mask_est, fwhm_fact=self._fwhm_fact_func, 
             post_filt_rel_downgrade=self._pre_filt_rel_upgrade,
             post_filt_downgrade_wcs=wcs, nthread=0, verbose=verbose
         )
@@ -2178,7 +2140,6 @@ class FDWNoiseModel(BaseNoiseModel):
         return utils.map2alm(sim, lmax=lmax)
 
 
-@register()
 class IvarIsoIvarNoiseModel(BaseNoiseModel):
 
     def __init__(self, *qids, data_model_name=None, calibrated=False, downgrade=1,
@@ -2365,7 +2326,6 @@ class IvarIsoIvarNoiseModel(BaseNoiseModel):
         return utils.map2alm(sim, lmax=self._sim_inm._lmax)
 
 
-@register()
 class IsoIvarIsoNoiseModel(BaseNoiseModel):
 
     def __init__(self, *qids, data_model_name=None, calibrated=False, downgrade=1,
