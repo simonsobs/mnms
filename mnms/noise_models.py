@@ -1618,14 +1618,9 @@ class WaveletNoiseModel(BaseNoiseModel):
     def _reprname(cls):
         return 'wav'
 
-    def __init__(self, *qids, data_model_name=None, calibrated=False, downgrade=1,
-                 lmax=None, mask_version=None, mask_est=None, mask_est_name=None,
-                 mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
-                 dmap_dict=None, union_sources=None, kfilt_lbounds=None,
-                 fwhm_ivar=None, notes=None, dtype=None,
-                 lamb=1.3, w_lmin=10, w_lmax_j=5300, smooth_loc=False,
-                 fwhm_fact_pt1=[1350, 10.], fwhm_fact_pt2=[5400, 16.],
-                 **kwargs):
+    def __init__(self, *qids, lamb=1.3, w_lmin=10, w_lmax_j=5300,
+                 smooth_loc=False, fwhm_fact_pt1=[1350, 10.],
+                 fwhm_fact_pt2=[5400, 16.], **kwargs):
         """A WaveletNoiseModel object supports drawing simulations which capture scale-dependent, 
         spatially-varying map depth. They also capture the total noise power spectrum, and 
         array-array correlations.
@@ -1730,14 +1725,6 @@ class WaveletNoiseModel(BaseNoiseModel):
         >>> print(imap.shape)
         >>> (2, 1, 3, 5600, 21600)
         """
-        self._inm = Interface(
-            *qids, data_model_name=data_model_name, calibrated=calibrated, downgrade=downgrade,
-            lmax=lmax, mask_est=mask_est, mask_version=mask_version, mask_est_name=mask_est_name,
-            mask_obs=mask_obs, mask_obs_name=mask_obs_name, ivar_dict=ivar_dict, cfact_dict=cfact_dict,
-            dmap_dict=dmap_dict, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
-            fwhm_ivar=fwhm_ivar, dtype=dtype, **kwargs   
-        )
-
         # save model-specific info
         self._lamb = lamb
         self._w_lmin = w_lmin
@@ -1749,31 +1736,28 @@ class WaveletNoiseModel(BaseNoiseModel):
             fwhm_fact_pt1, fwhm_fact_pt2
             )
 
-        # need to init NoiseModel last
-        super().__init__(notes=notes)
+        super().__init__(*qids, **kwargs)
 
     @property
-    def _model_inm(self):
-        return self._inm
+    def _model_ext(self):
+        return '.hdf5'
 
     @property
-    def _sim_inm(self):
-        return self._inm
+    def _pre_filt_rel_upgrade(self):
+        """Relative pixelization upgrade factor for model-building step"""
+        return 1
 
-    def _get_model_fn(self, split_num):
-        """Get a noise model filename for split split_num; return as <str>"""
-        inm = self._model_inm
-
-        return simio.get_wav_model_fn(
-            inm._qids, split_num, self._lamb, inm._lmax, self._smooth_loc,
-            self._fwhm_fact_pt1, self._fwhm_fact_pt2, notes=self._notes, 
-            data_model=inm._data_model, mask_version=inm._mask_version,
-            bin_apod=inm._use_default_mask, mask_est_name=inm._mask_est_name,
-            mask_obs_name=inm._mask_obs_name, calibrated=inm._calibrated, 
-            downgrade=inm._downgrade, union_sources=inm._union_sources,
-            kfilt_lbounds=inm._kfilt_lbounds, fwhm_ivar=inm._fwhm_ivar, 
-            **inm._kwargs
+    def _get_model_config_dict(self):
+        """Return a dictionary of model parameters particular to this subclass"""
+        model_config = dict(
+            lamb=self._lamb,
+            w_lmin=self._w_lmin,
+            w_lmax_j=self._w_lmax_j,
+            smooth_loc=self._smooth_loc,
+            fwhm_fact_pt1=self._fwhm_fact_pt1,
+            fwhm_fact_pt2=self._fwhm_fact_pt2
         )
+        return model_config
 
     def _read_model(self, fn):
         """Read a noise model with filename fn; return a dictionary of noise model variables"""
@@ -1785,15 +1769,13 @@ class WaveletNoiseModel(BaseNoiseModel):
         
         return model_dict
 
-    def _get_model(self, dmap, **kwargs):
+    def _get_model(self, dmap, lmax, mask_obs, mask_est, ivar, verbose):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
-        inm = self._model_inm
-
         # method assumes 4d dmap
         sqrt_cov_mat, sqrt_cov_ell, w_ell = wav_noise.estimate_sqrt_cov_wav_from_enmap(
-            dmap[:, 0], inm._lmax, inm._mask_obs, inm._mask_est, lamb=self._lamb,
-            w_lmin=self._w_lmin, w_lmax_j=self._w_lmax_j, smooth_loc=self._smooth_loc,
-            fwhm_fact=self._fwhm_fact_func
+            dmap[:, 0], lmax, mask_obs, mask_est, lamb=self._lamb, 
+            w_lmin=self._w_lmin, w_lmax_j=self._w_lmax_j,
+            smooth_loc=self._smooth_loc, fwhm_fact=self._fwhm_fact_func
         )
 
         return {
@@ -1809,32 +1791,21 @@ class WaveletNoiseModel(BaseNoiseModel):
             extra={'sqrt_cov_ell': sqrt_cov_ell, 'w_ell': w_ell}
         )
 
-    def _get_sim_fn(self, split_num, sim_num, alm=True, mask_obs=True):
-        """Get a sim filename for split split_num, sim sim_num; return as <str>"""
-        inm = self._sim_inm
-
-        return simio.get_wav_sim_fn(
-            inm._qids, split_num, self._lamb, inm._lmax, self._smooth_loc,
-            self._fwhm_fact_pt1, self._fwhm_fact_pt2, sim_num, notes=self._notes, alm=alm, mask_obs=mask_obs, 
-            data_model=inm._data_model, mask_version=inm._mask_version,
-            bin_apod=inm._use_default_mask, mask_est_name=inm._mask_est_name,
-            mask_obs_name=inm._mask_obs_name, calibrated=inm._calibrated, 
-            downgrade=inm._downgrade, union_sources=inm._union_sources,
-            kfilt_lbounds=inm._kfilt_lbounds, fwhm_ivar=inm._fwhm_ivar, 
-            **inm._kwargs
-        )
-
-    def _get_sim(self, model_dict, seed, mask=None, verbose=False, **kwargs):
+    def _get_sim(self, model_dict, seed, lmax, mask, ivar, verbose):
         """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
+        downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
+        shape, wcs = utils.downgrade_geometry_cc_quad(
+            self._full_shape, self._full_wcs, downgrade
+            )
+        
         # pass mask = None first to strictly generate alm, only mask if necessary
-        alm, ainfo = self._get_sim_alm(model_dict, seed, mask=None, return_ainfo=True, verbose=verbose, **kwargs)
-        sim = utils.alm2map(alm, shape=self._shape, wcs=self._wcs,
-                            dtype=self._dtype, ainfo=ainfo)
+        alm = self._get_sim_alm(model_dict, seed, lmax, None, ivar, verbose)
+        sim = utils.alm2map(alm, shape=shape, wcs=wcs, dtype=self._dtype)
         if mask is not None:
             sim *= mask
         return sim
 
-    def _get_sim_alm(self, model_dict, seed, mask=None, return_ainfo=False, verbose=False, **kwargs):
+    def _get_sim_alm(self, model_dict, seed, lmax, mask, ivar, verbose):
         """Return a masked alm sim from model_dict, with seed <sequence of ints>"""
         # Get noise model variables. 
         sqrt_cov_mat = model_dict['sqrt_cov_mat']
@@ -1842,22 +1813,25 @@ class WaveletNoiseModel(BaseNoiseModel):
         w_ell = model_dict['w_ell']
 
         alm, ainfo = wav_noise.rand_alm_from_sqrt_cov_wav(
-            sqrt_cov_mat, sqrt_cov_ell, self._sim_inm._lmax,
-            w_ell, dtype=np.result_type(1j, self._dtype), seed=seed, nthread=0)
+            sqrt_cov_mat, sqrt_cov_ell, lmax, w_ell,
+            dtype=np.result_type(1j, self._dtype), seed=seed,
+            nthread=0
+            )
 
         # We always want shape (num_arrays, num_splits=1, num_pol, nelem).
         assert alm.ndim == 3, 'Alm must have shape (num_arrays, num_pol, nelem)'
         alm = alm.reshape(alm.shape[0], 1, *alm.shape[1:])
 
         if mask is not None:
-            sim = utils.alm2map(alm, shape=self._shape, wcs=self._wcs,
-                                dtype=self._dtype, ainfo=ainfo)
+            downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
+            shape, wcs = utils.downgrade_geometry_cc_quad(
+                self._full_shape, self._full_wcs, downgrade
+                )
+            sim = utils.alm2map(alm, shape=shape, wcs=wcs, dtype=self._dtype)
             sim *= mask
             utils.map2alm(sim, alm=alm, ainfo=ainfo)
-        if return_ainfo:
-            return alm, ainfo
-        else:
-            return alm      
+        
+        return alm      
 
 
 @register()

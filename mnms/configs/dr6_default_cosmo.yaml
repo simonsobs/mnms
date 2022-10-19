@@ -16,6 +16,20 @@ TiledNoiseModel:
   model_str_template: 'cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_model'
   sim_str_template: 'cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_sim_{alm_str}{sim_num}'
 
+WaveletNoiseModel:
+  fwhm_fact_pt1:
+  - 1350
+  - 10.0
+  fwhm_fact_pt2:
+  - 5400
+  - 16.0
+  lamb: 1.3
+  smooth_loc: false
+  w_lmax_j: 5300
+  w_lmin: 10
+  model_str_template: 'cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_model'
+  sim_str_template: 'cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+
 FDWNoiseModel:
   fwhm_fact_pt1:
   - 1350
@@ -59,3 +73,4 @@ FDWNoiseModel:
   w_lmin: 10
   model_str_template: 'cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_model'
   sim_str_template: 'cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+  
