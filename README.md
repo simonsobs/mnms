@@ -41,6 +41,17 @@ To support storing `mnms` products, users must also include a `mnms` block in th
 
 An example of a sufficient `soapack.yml` file (which would work on any `tigress` cluster) is here:
 ```
+act_mr3:
+    maps_path: "/projects/ACT/zequnl/sync/synced_maps/mr3f_20190502/"
+    mask_path: "/projects/ACT/zequnl/sync/spartial_window_functions/"
+    src_mask_path: "/projects/ACT/zequnl/sync/masks/"
+    beams_path: "/projects/ACT/zequnl/sync/synced_beams/"
+    transfers: "/projects/ACT/zequnl/sync/transfer_functions/mr3c_20181012_3pass_tfunc/"
+    default_mask_version: "mr3c_20181012_190203"
+    default_src_mask_version: "20190416"
+    default_beam_version: "190220"
+    default_transfer_version: "181012"
+  
 dr5:
     coadd_input_path: "/projects/ACT/zatkins/sync/20201207/synced_maps/imaps_2019/"
     coadd_output_path: "/projects/ACT/zatkins/sync/20201207/synced_maps/imaps_2019/"
