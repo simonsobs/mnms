@@ -290,7 +290,7 @@ class DataManager:
                                 ivar[idx], downgrade
                                 )
                             mask_obs_dg *= ivar_dg > 0
-                    print(qid, s)
+
             mask_obs = utils.interpol_downgrade_cc_quad(
                 mask_obs, downgrade, dtype=self._dtype
                 )
@@ -1033,7 +1033,8 @@ class BaseNoiseModel(DataManager, ABC):
             qids=qids,
             arrsfreqs=arrsfreqs,
             split_num=split_num,
-            lmax=lmax
+            lmax=lmax,
+            downgrade=utils.downgrade_from_lmaxs(self._full_lmax, lmax)
             )
         kwargs.update(self._base_config_dict)
         kwargs.update(self._model_config_dict)
@@ -1060,6 +1061,7 @@ class BaseNoiseModel(DataManager, ABC):
             split_num=split_num,
             sim_num=str(sim_num).zfill(4),
             lmax=lmax,
+            downgrade=utils.downgrade_from_lmaxs(self._full_lmax, lmax),
             alm_str='alm' if alm else 'map',
             mask_obs_str='masked' if mask_obs else 'unmasked'
             )
@@ -1147,7 +1149,7 @@ class BaseNoiseModel(DataManager, ABC):
             # in order to have load/keep operations in abstract get_model, need
             # to pass ivar and mask_obs here, rather than e.g. split_num
             model_dict = self._get_model(
-                dmap*cfact, lmax*self._pre_filt_rel_upgrade, mask_obs, mask_est, ivar, verbose
+                dmap*cfact, lmax, mask_obs, mask_est, ivar, verbose
                 )
 
         if keep_model:
@@ -1286,8 +1288,8 @@ class BaseNoiseModel(DataManager, ABC):
 
         # get the observed-pixels mask
         if self._mask_obs is None:
-            mask_obs = self.get_mask_obs(downgrade=downgrade)
-        self._mask_obs = mask_obs
+            self._mask_obs = self.get_mask_obs(downgrade=downgrade)
+        mask_obs = self._mask_obs
 
         # get the model and ivar
         if split_num not in self._model_dict:
@@ -1385,7 +1387,7 @@ class BaseNoiseModel(DataManager, ABC):
     def _get_seed(self, split_num, sim_num):
         """Return seed for sim with split_num, sim_num."""
         return utils.get_seed(
-            *(split_num, sim_num, self._sim_inm._data_model, *self._sim_inm._qids)
+            *(split_num, sim_num, self._data_model, *self._qids)
             )
 
     @abstractmethod
@@ -2064,7 +2066,7 @@ class FDWNoiseModel(BaseNoiseModel):
 
     @property
     def _model_ext(self):
-        return '.fits'
+        return '.hdf5'
 
     @property
     def _pre_filt_rel_upgrade(self):
@@ -2120,14 +2122,16 @@ class FDWNoiseModel(BaseNoiseModel):
         if lmax not in self._fk_dict:
             print('Building and storing FDWKernels')
             self._fk_dict[lmax] = self._get_kernels(lmax)
+        fk = self._fk_dict[lmax]
 
+        lmax = lmax * self._pre_filt_rel_upgrade
         downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
         _, wcs = utils.downgrade_geometry_cc_quad(
             self._full_shape, self._full_wcs, downgrade
             )
 
         sqrt_cov_mat, sqrt_cov_ell = fdw_noise.get_fdw_noise_covsqrt(
-            self._fk_dict[lmax], dmap, lmax, mask_obs=mask_obs, mask_est=mask_est,
+            fk, dmap, lmax, mask_obs=mask_obs, mask_est=mask_est,
             fwhm_fact=self._fwhm_fact_func, 
             post_filt_rel_downgrade=self._pre_filt_rel_upgrade,
             post_filt_downgrade_wcs=wcs, nthread=0, verbose=verbose
@@ -2149,13 +2153,14 @@ class FDWNoiseModel(BaseNoiseModel):
         if lmax not in self._fk_dict:
             print('Building and storing FDWKernels')
             self._fk_dict[lmax] = self._get_kernels(lmax)
+        fk = self._fk_dict[lmax]
 
         # Get noise model variables 
         sqrt_cov_mat = model_dict['sqrt_cov_mat']
         sqrt_cov_ell = model_dict['sqrt_cov_ell']
 
         sim = fdw_noise.get_fdw_noise_sim(
-            self._fk_dict[lmax], sqrt_cov_mat, preshape=(self._sim_inm._num_arrays, -1),
+            fk, sqrt_cov_mat, preshape=(self._num_arrays, -1),
             sqrt_cov_ell=sqrt_cov_ell, seed=seed, nthread=0, verbose=verbose
         )
 

@@ -934,7 +934,7 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, lmax, mask_obs=1, mask_est=1,
             )
 
         # this check probably not necessary but ok for now
-        assert post_filt_rel_downgrade.is_integer(), \
+        assert float(post_filt_rel_downgrade).is_integer(), \
             f'post_filt_rel_downgrade must be an int; got ' + \
             f'{post_filt_rel_downgrade}'
         post_filt_rel_downgrade = int(post_filt_rel_downgrade)
