@@ -713,19 +713,19 @@ class DataManager:
         ostr += f' {mstr} for {qid}, split {split_num}'
         return ostr
 
-    def _keep_ivar(self, split_num, lmax, ivar):
+    def keep_ivar(self, split_num, lmax, ivar):
         """Store a dictionary of ivars in instance attributes under key split_num, lmax"""
         if (split_num, lmax) not in self._ivar_dict:
             print(f'Storing ivar for split {split_num}, lmax {lmax} into memory')
             self._ivar_dict[split_num, lmax] = ivar
 
-    def _keep_cfact(self, split_num, lmax, cfact):
+    def keep_cfact(self, split_num, lmax, cfact):
         """Store a dictionary of correction factors in instance attributes under key split_num, lmax"""
         if (split_num, lmax) not in self._cfact_dict:
             print(f'Storing correction factor for split {split_num}, lmax {lmax} into memory')
             self._cfact_dict[split_num, lmax] = cfact
 
-    def _keep_dmap(self, split_num, lmax, dmap):
+    def keep_dmap(self, split_num, lmax, dmap):
         """Store a dictionary of data split differences in instance attributes under key split_num, lmax"""
         if (split_num, lmax) not in self._dmap_dict:
             print(f'Storing data split difference for split {split_num}, lmax {lmax} into memory')
@@ -1139,7 +1139,7 @@ class BaseNoiseModel(DataManager, ABC):
             res = self._check_model_on_disk(split_num, lmax, generate=generate)
             if res is not False:
                 if keep_model:
-                    self._keep_model(split_num, lmax, res)
+                    self.keep_model(split_num, lmax, res)
                 return res
             else: # generate == True
                 pass
@@ -1158,7 +1158,7 @@ class BaseNoiseModel(DataManager, ABC):
                 )
 
         if keep_model:
-            self._keep_model(split_num, lmax, model_dict)
+            self.keep_model(split_num, lmax, model_dict)
 
         if write:
             fn = self._get_model_fn(split_num, lmax)
@@ -1205,7 +1205,7 @@ class BaseNoiseModel(DataManager, ABC):
                 print(f'Model for split {split_num}, lmax {lmax} not found on-disk, please generate it first')
                 raise FileNotFoundError(fn) from e
 
-    def _keep_model(self, split_num, lmax, model_dict):
+    def keep_model(self, split_num, lmax, model_dict):
         """Store a dictionary of noise model objects in instance attributes under key split_num, lmax"""
         if (split_num, lmax) not in self._model_dict:
             print(f'Storing model for split {split_num}, lmax {lmax} in memory')
@@ -1320,10 +1320,10 @@ class BaseNoiseModel(DataManager, ABC):
                     )
 
         if keep_model:
-            self._keep_model(split_num, lmax, model_dict)
+            self.keep_model(split_num, lmax, model_dict)
 
         if keep_ivar:
-            self._keep_ivar(split_num, lmax, ivar)
+            self.keep_ivar(split_num, lmax, ivar)
         
         if write:
             fn = self._get_sim_fn(split_num, sim_num, lmax, alm=alm, mask_obs=do_mask_obs)
