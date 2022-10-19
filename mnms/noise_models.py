@@ -2512,7 +2512,8 @@ class IsoIvarIsoNoiseModel(BaseNoiseModel):
 # @register()
 class HarmonicMixture:
 
-    def __init__(self, noise_models, ell_centers, ell_widths, profile='cosine'):
+    def __init__(self, noise_models, lmaxs, ell_lows, ell_highs,
+                 profile='cosine'):
         """A wrapper around instantiated NoiseModel instances that supports
         mixing simulations from multiple instances as a function of ell.
 
@@ -2526,53 +2527,56 @@ class HarmonicMixture:
             The last NoiseModel is therefore used to also define the lmax of the 
             entire HarmonicMixture, as well as related metadata like the map-space
             shape, wcs, and dtype.
-        ell_centers : iterable of int
-            Centers (in ell) of transition regions. Must be in strictly increasing 
+        lmaxs : iterable of int
+            Bandlimits to pass to each NoiseModel, in same order.
+        ell_lows : iterable of int
+            Low bounds (in ell) of transition regions. Must be in strictly increasing 
             order. Iterable must be one less in length than noise_models.
-        ell_widths : iterable of int
-            The widths of the transition regions. Must be greater than or
-            equal to 0, even; the iterable must be the same length as
-            ell_centers. Together with ell_centers, ell_widths must be
-            defined such that no transitions overlap. For all but the last
-            region, the top edge of the transition (ell_center + ell_width/2)
-            must be less than or equal to the lmax of each model in the
-            transition, to ensure the transition is fully covered by each model.
-            For the last region, this is true of the top edge or the lmax of the 
-            last NoiseModel, whichever is lesser.
+        ell_highs : iterable of int
+            High bounds (in ell) of transition regions. Must be in strictly increasing 
+            order. Must be the same length as ell_lows. Together with ell_lows,
+            ell_highs must be defined such that no transitions overlap. For all
+            but the last region, the top edge of the transition must be less than
+            or equal to the lmax of each model in the transition, to ensure the
+            transition is fully covered by each model. For the last region, this
+            is true of the top edge or the lmax of the last NoiseModel, whichever is
+            lesser.
         profile : str, optional
             The profile used to stitch simulations of each model in a transition
             region, by default 'cosine'. Can also be 'linear'.
         """
         self._noise_models = noise_models
-        self._ell_centers = ell_centers
-        self._ell_widths = ell_widths
+        self._lmaxs = lmaxs
+        self._ell_lows = ell_lows
+        self._ell_highs = ell_highs
         self._profile = profile
 
-        self._lmax = noise_models[-1]._sim_inm._lmax
-        self._shape = noise_models[-1]._sim_inm._shape
-        self._wcs = noise_models[-1]._sim_inm._wcs
-        self._dtype = noise_models[-1]._sim_inm._dtype
+        self._full_shape = noise_models[-1]._full_shape
+        self._full_wcs = noise_models[-1]._full_wcs
+        self._full_lmax = noise_models[-1]._full_lmax
+        self._dtype = noise_models[-1]._dtype
 
         self._lprofs = utils.get_ell_trans_profiles(
-            ell_centers, ell_widths, self._lmax, profile=profile, e=0.5)
+            ell_lows, ell_highs, lmaxs[-1], profile=profile, e=0.5
+            )
 
         # need to perform some introspection of passed noise models to
         # e.g. check lmaxs against stitching regions. assume order noise_models
         # by increasing ell placement
-        assert len(noise_models) == len(ell_centers) + 1, \
-            f'Must be one more noise_models than ell_centers, got {len(noise_models)} and {len(ell_centers)}'
-        assert len(noise_models) == len(ell_widths) + 1, \
-            f'Must be one more noise_models than ell_widths, got {len(noise_models)} and {len(ell_widths)}'
+        assert len(noise_models) == len(ell_lows) + 1, \
+            f'Must be one more noise_models than ell_lows, got {len(noise_models)} and {len(ell_lows)}'
+        assert len(noise_models) == len(ell_highs) + 1, \
+            f'Must be one more noise_models than ell_highs, got {len(noise_models)} and {len(ell_highs)}'
         for i, noise_model in enumerate(noise_models):
-            if i < len(ell_centers)-1:
-                top = ell_centers[i] + ell_widths[i]/2
+            if i < len(ell_lows)-1:
+                top = ell_highs[i]
             else:
-                # the last region could be bandlimited by self._lmax
-                top = min(self._lmax, ell_centers[-1] + ell_widths[-1]/2)
+                # the last region could be bandlimited by lmaxs[-1]
+                top = min(lmaxs[-1], ell_highs[-1])
             
-            assert noise_model._sim_inm._lmax >= top, \
+            assert lmaxs[i] >= top, \
                     f'Transition regions must bandlimit noise_models, got bandlimit of {top} ' + \
-                    f'in region {i}; noise_model {noise_model} with lmax {noise_model._sim_inm._lmax}'
+                    f'in region {i}; noise_model {noise_model} with lmax {lmaxs[i]}'
     
     def get_model(self, *args, **kwargs):
         """A wrapper around the HarmonicMixture's noise_model.get_model(...)
@@ -2588,7 +2592,7 @@ class HarmonicMixture:
     def get_sim(self, split_num, sim_num, alm=True, do_mask_obs=True,
                 check_on_disk=True, check_mix_on_disk=True, generate=True,
                 generate_mix=True, keep_model=True, keep_ivar=True,
-                write=False, verbose=False):
+                write=False, write_mix=False, verbose=False):
         """A wrapper around the HarmonicMixture's noise_model.get_sim(...) 
         methods, such that simulations from each noise_model are stitched
         together with the specified profiles in harmonic space.
@@ -2629,6 +2633,8 @@ class HarmonicMixture:
             If a noise_model has generated a sim on-the-fly as a step in constructing
             the HarmonicMixture sim, whether to save that noise_model sim to disk,
             by default False.
+        write_mix : bool, optional
+            Whether to save the stitched sim to disk, by default False.
         verbose : bool, optional
             Possibly print possibly helpful messages, by default False.
 
@@ -2644,7 +2650,6 @@ class HarmonicMixture:
         Writing the mixed sim to disk cannot yet be implemented due to filename 
         too long errors.
         """
-
         assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
 
         if check_mix_on_disk:
@@ -2671,8 +2676,6 @@ class HarmonicMixture:
                     keep_ivar=keep_ivar, write=write, verbose=verbose
                     )
 
-        # TODO: resolve File name too long error!
-        write_mix = False
         if write_mix:
             fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_obs)
             if alm:
@@ -2740,10 +2743,11 @@ class HarmonicMixture:
         else:
             if generate_mix:
                 print(f'Sim for split {split_num}, map {sim_num} not found on-disk, generating instead')
-                for noise_model in self._noise_models:
+                for i, noise_model in enumerate(self._noise_models):
                     _ = noise_model._check_sim_on_disk(
-                        split_num, sim_num, alm=True, do_mask_obs=do_mask_obs,
-                        return_if_exists=False, generate=generate,
+                        split_num, sim_num, self._lmaxs[i], alm=True,
+                        do_mask_obs=do_mask_obs, return_if_exists=False,
+                        generate=generate
                     )
                 
                 # if we've gotten here, then either generate is True or all base sims exist on disk
@@ -2754,14 +2758,14 @@ class HarmonicMixture:
 
     def _get_sim_fn(self, split_num, sim_num, alm=True, mask_obs=True):
         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
-        basefn = self._noise_models[0]._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=mask_obs)
+        basefn = self._noise_models[0]._get_sim_fn(split_num, sim_num, 1, alm=alm, mask_obs=mask_obs)
         fn = os.path.splitext(basefn)[0]
 
         for i, noise_model in enumerate(self._noise_models[1:]):
             if i < len(self._noise_models)-1:
-                fn += f'_lc{self._ell_centers[i]}_lw{self._ell_widths[i]}_{self._profile}_'
+                fn += f'_{self._ell_lows[i]}_{self._ell_highs[i]}_{self._profile}_'
             fn += utils.trim_shared_fn_tags(
-                basefn, noise_model._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=mask_obs)
+                basefn, noise_model._get_sim_fn(split_num, sim_num, self._lmaxs[i], alm=alm, mask_obs=mask_obs)
                 )
 
         return fn + '.fits'
@@ -2770,23 +2774,28 @@ class HarmonicMixture:
                  check_on_disk=True, generate=True, keep_model=True,
                  keep_ivar=True, write=False, verbose=False, **kwargs):
         """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
+        downgrade = utils.downgrade_from_lmaxs(self._full_lmax, self._lmaxs[-1])
+        shape, wcs = utils.downgrade_geometry_cc_quad(
+            self._full_shape, self._full_wcs, downgrade
+            )
+
         alm = self._get_sim_alm(
             split_num, sim_num, do_mask_obs=do_mask_obs,
             check_on_disk=check_on_disk, generate=generate, keep_model=keep_model,
             keep_ivar=keep_ivar, write=write, verbose=verbose, **kwargs
             )
-        sim = utils.alm2map(alm, shape=self._shape, wcs=self._wcs, dtype=self._dtype)
+        sim = utils.alm2map(alm, shape=shape, wcs=wcs, dtype=self._dtype)
         return sim
 
     def _get_sim_alm(self, split_num, sim_num, do_mask_obs=True,
                      check_on_disk=True, generate=True, keep_model=True,
                      keep_ivar=True, write=False, verbose=False, **kwargs):
         """Return a masked alm sim from model_dict, with seed <sequence of ints>"""
-        oainfo = sharp.alm_info(lmax=self._lmax)
+        oainfo = sharp.alm_info(lmax=self._lmaxs[-1])
         mix_alm = 0
         for i, noise_model in enumerate(self._noise_models):
             alm = noise_model.get_sim(
-                split_num, sim_num, alm=True, do_mask_obs=do_mask_obs,
+                split_num, sim_num, self._lmaxs[i], alm=True, do_mask_obs=do_mask_obs,
                 check_on_disk=check_on_disk, generate=generate, keep_model=keep_model,
                 keep_ivar=keep_ivar, write=write, verbose=verbose, **kwargs
                 )
@@ -2797,14 +2806,6 @@ class HarmonicMixture:
             mix_alm += alm 
 
         return mix_alm       
-
-    @property
-    def shape(self):
-        return self._shape
-    
-    @property
-    def wcs(self):
-        return self._wcs
 
     @property
     def dtype(self):
