@@ -20,6 +20,17 @@ import hashlib
 
 # Utility functions to support tiling classes and functions. Just keeping code organized so I don't get whelmed.
 
+def qid2arrfreq(qid):
+    """Transform dr6-style qid to array_frequency, e.g. pa5a to pa5_f090.
+    """
+    arrs2freqs = {
+        4: ['150', '220'],
+        5: ['090', '150'],
+        6: ['090', '150'],
+        7: ['030', '040']
+    }
+    return f"{qid[:3]}_f{arrs2freqs[int(qid[2])]['ab'.index(qid[3])]}"
+
 # copied from soapack.interfaces
 def config_from_yaml_file(filename):
     """Returns a dictionary from a yaml file given by absolute filename.
@@ -29,7 +40,7 @@ def config_from_yaml_file(filename):
     return config
 
 def config_from_yaml_resource(resource):
-    """Returns a dictionary from a yaml file given by the resource name (relative to tacos package).
+    """Returns a dictionary from a yaml file given by the resource name (relative to mnms package).
     """
     f = pkgutil.get_data('mnms', resource).decode()
     config = yaml.safe_load(f)
@@ -45,14 +56,33 @@ def get_default_data_model():
     soapack.interfaces.DataModel instance
         An object used for loading raw data from disk.
     """
-    config = sints.dconfig['mnms']
-    dm_name = config['default_data_model']
+    return get_data_model()
 
-    # capitalize all chars except v3
-    dm_name = ''.join(
-        [dm_name[i].upper() if dm_name[i] != 'v' else 'v' for i in range(len(dm_name))]
+def get_data_model(name=None):
+    """Returns a soapack.interfaces.DataModel instance depending on the
+    name of the data model.
+    
+    Parameters
+    ----------
+    name : str
+        Name string of DataModel class to load. If None, grab the name
+        specified in the users's soapack config 'mnms' block, under key
+        'default_data_model'. By default None.
+
+    Returns
+    -------
+    soapack.interfaces.DataModel instance
+        An object used for loading raw data from disk.
+    """
+    if name is None:
+        config = sints.dconfig['mnms']
+        name = config['default_data_model']
+    
+    # capitalize all chars except v
+    name = ''.join(
+        [name[i].upper() if name[i] != 'v' else 'v' for i in range(len(name))]
             )
-    return getattr(sints, dm_name)()
+    return getattr(sints, name)()
 
 def trim_shared_fn_tags(basefn, ifn):
     """Return joined tags in input that are not shared with those in a 
@@ -588,11 +618,6 @@ def interp1d_bins(bins, y, return_vals=False, **interp1d_kwargs):
         return interp1d(x, y, fill_value=fill_value, **interp1d_kwargs), y
     else:
         return interp1d(x, y, fill_value=fill_value, **interp1d_kwargs)
-
-# this is twice the theoretical CAR bandlimit!
-def lmax_from_wcs(wcs):
-    """Returns 180/wcs.cdelt[1]; this is twice the theoretical CAR bandlimit"""
-    return int(180/np.abs(wcs.wcs.cdelt[1]))
 
 def get_ps_mat(inp, outbasis, e, inbasis='harmonic', mask_est=None, 
                shape=None, wcs=None):
@@ -1204,6 +1229,16 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, **kwar
             )
     return omap
 
+# this is twice the theoretical CAR bandlimit!
+def lmax_from_wcs(wcs):
+    """Returns 180/wcs.cdelt[1]; this is twice the theoretical CAR bandlimit"""
+    return int(180/np.abs(wcs.wcs.cdelt[1]))
+
+def downgrade_from_lmaxs(lmax_in, lmax_out):
+    """Maximum integer downgrade factor for pixels to support new, lower lmax"""
+    assert lmax_out <= lmax_in, 'lmax_out must be <= lmax_in'
+    return lmax_in // lmax_out
+
 def downgrade_geometry_cc_quad(shape, wcs, dg):
     """Get downgraded geometry that adheres to Clenshaw-Curtis quadrature.
 
@@ -1641,20 +1676,20 @@ def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
         return np.piecewise(ell, condlist, funclist)
     return lfunc1, lfunc2
 
-def get_ell_trans_profiles(ell_centers, ell_widths, lmax, profile='cosine',
+def get_ell_trans_profiles(ell_lows, ell_highs, lmax, profile='cosine',
                            e=1, dtype=np.float32):
     """Generate profiles over ell that smoothly transition from 1 to 0 (and
     vice-versa) in defined regions. 
 
     Parameters
     ----------
-    ell_centers : iterable of int
-        The center locations of the transition regions. Must be in
+    ell_lows : iterable of int
+        The lower bounds of the transition regions. Must be in
         strictly increasing order.
-    ell_widths : iterable of int
-        The widths of the transition regions. Must be greater than or
-        equal to 0, even; the iterable must be the same length as
-        ell_centers. Together with ell_centers, ell_widths must be
+    ell_highs : iterable of int
+        The upper bounds of the transition regions. Must be in
+        strictly increasing order. Must be the same length as
+        ell_lows. Together with ell_centers, ell_widths must be
         defined such that no regions overlap.
     lmax : int
         The maximum scale of the returned profiles.
@@ -1669,13 +1704,13 @@ def get_ell_trans_profiles(ell_centers, ell_widths, lmax, profile='cosine',
 
     Returns
     -------
-    (len(ell_centers)+1, lmax+1) ndarray
+    (len(ell_lows)+1, lmax+1) ndarray
         The profiles over all ells.
 
     Raises
     ------
     ValueError
-        If ell_centers are not strictly increasing.
+        If ell_lows, ell_highs are not strictly increasing.
     ValueError
         If 'profile' is not 'cosine' or 'linear'.
 
@@ -1685,38 +1720,37 @@ def get_ell_trans_profiles(ell_centers, ell_widths, lmax, profile='cosine',
     np.sum(out**(1/e), axis=0) is 1. For example, for e=0.5, this is
     the Gaussian admissibility criterion.
     """
-    ell_infos = np.asarray([ell_centers, ell_widths], dtype=int).T
-    assert ell_infos.ndim == 2, 'ell_centers, ell_widths must be 1d'
+    ell_infos = np.asarray([ell_lows, ell_highs], dtype=int).T
+    assert ell_infos.ndim == 2, 'ell_lows, ell_highs must be 1d'
 
     ell = np.arange(lmax+1)
     out = np.ones((ell_infos.shape[0]+1, lmax+1), dtype=dtype)
     for i, ell_info in enumerate(ell_infos):
-        ell_center, ell_width = ell_info
-        assert ell_width%2 == 0, f'ell_widths must be even, got {ell_width}'
-        assert ell_width >= 0, f'ell_widths must be positive semi-definite, got {ell_width}'
+        bottom, top = ell_info
 
-        top = ell_center + ell_width/2
-        bottom = ell_center - ell_width/2
+        assert top >= bottom, \
+            f'ell_lows must be <= ell_highs, conflict in region {i}'
 
-        # first check increasing ell_centers and no overlapping transfer regions
+        # first check increasing bounds and no overlapping transfer regions
         for j, other_ell_info in enumerate(ell_infos):
             if i == j:
                 continue
 
-            other_ell_center, other_ell_width = other_ell_info
-            if other_ell_center > ell_center:
+            other_ell_low, other_ell_high = other_ell_info
+            if other_ell_low > bottom:
                 assert j > i, \
-                    f'ell_centers must be strictly increasing, conflict betweein {i} and {j}'
-                assert top <= other_ell_center - other_ell_width/2, \
+                    f'ell_lows must be strictly increasing, conflict between {i} and {j}'
+                assert top <= other_ell_low, \
                     f'transfer regions cannot overlap, conflict between regions {i} and {j}'
-            elif other_ell_center < ell_center:
+            elif other_ell_low < bottom:
                 assert j < i, \
-                    f'ell_centers must be strictly increasing, conflict betweein {i} and {j}'
-                assert bottom >= other_ell_center + other_ell_width/2, \
+                    f'ell_lows must be strictly increasing, conflict betweein {i} and {j}'
+                assert bottom >= other_ell_high, \
                     f'transfer regions cannot overlap, conflict between regions {i} and {j}'
             else:
                 raise ValueError('ell_centers must be unique')
 
+        ell_width = top - bottom
         if ell_width == 0:
             trans_prof = np.empty_like(ell)
         elif profile == 'cosine':

@@ -1,61 +1,16 @@
 from mnms import noise_models as nm
-from soapack import interfaces as sints
 import argparse
 import numpy as np
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+parser.add_argument('--config-name', dest='config_name', type=str, required=True,
+                    help='Name of model config file from which to load parameters')
+
 parser.add_argument('--qid', dest='qid', nargs='+', type=str, required=True,
                     help='list of soapack array "qids"')
 
-parser.add_argument('--mask-version', dest='mask_version', type=str, 
-                    default=None, help='Look in mnms:mask_path/mask_version/ for mask')
-
-parser.add_argument('--mask-est-name', dest='mask_est_name', type=str, default=None,
-                    help='Load mnms:mask_path/mask_version/mask_est_name.fits')
-
-parser.add_argument('--mask-obs-name', dest='mask_obs_name', type=str, default=None,
-                    help='Load mnms:mask_path/mask_version/mask_obs_name.fits')
-
-parser.add_argument('--downgrade', dest='downgrade', type=int, default=1,
-                    help='downgrade all data in pixel space by square of this many pixels per side')
-
-parser.add_argument('--lmax', dest='lmax', type=int, default=None,
+parser.add_argument('--lmax', dest='lmax', type=int, required=True,
                     help='Bandlimit of covariance matrix.')
-
-parser.add_argument('--lambda', dest='lamb', type=float, required=False, default=1.6,
-                    help='Parameter specifying width of wavelets kernels in log(ell).')
-
-parser.add_argument('--n', dest='n', type=int, default=36,
-                    help='Approx. bandlimit (in radians per azimuthal radian) of the directional kernels.')
-
-parser.add_argument('--p', dest='p', type=int, default=2,
-                    help='The locality parameter of each azimuthal kernel.')
-
-parser.add_argument('--fwhm-fact-pt1', dest='fwhm_fact_pt1', nargs='+', type=float, default=[1350, 10.], 
-                    help='First point in determining smoothing scale at each wavelet scale: '
-                    'FWHM = fwhm_fact * pi / lmax, where lmax is the max wavelet ell. See '
-                    'utils.get_fwhm_fact_func_from_pts for functional form. Format of '
-                    'argument is --fwhm-fact-pt1 lmax fwhm_fact')
-
-parser.add_argument('--fwhm-fact-pt2', dest='fwhm_fact_pt2', nargs='+', type=float, default=[5400, 16.], 
-                    help='First point in determining smoothing scale at each wavelet scale: '
-                    'FWHM = fwhm_fact * pi / lmax, where lmax is the max wavelet ell. See '
-                    'utils.get_fwhm_fact_func_from_pts for functional form. Format of '
-                    'argument is --fwhm-fact-pt2 lmax fwhm_fact')
-
-parser.add_argument('--union-sources', dest='union_sources', type=str, default=None,
-                    help="Version string for soapack's union sources. E.g. " 
-                    "'20210209_sncut_10_aggressive'. Will be used for inpainting.")
-
-parser.add_argument('--kfilt-lbounds', dest='kfilt_lbounds', nargs='+', type=float, default=None,
-                    help="The ly, lx scale for an ivar-weighted Gaussian kspace filter. E.g. " 
-                    "'4000 5'. Will be used for kspace filtering.")
-
-parser.add_argument('--notes', dest='notes', type=str, default=None, 
-                    help='a simple notes string to manually distinguish this set of sims ')
-
-parser.add_argument('--data-model', dest='data_model', type=str, default=None, 
-                    help='soapack DataModel class to use')
 
 parser.add_argument('--split', nargs='+', dest='split', type=int, 
                     help='if --no-auto-split, simulate this list of splits '
@@ -66,16 +21,7 @@ parser.add_argument('--no-auto-split', dest='auto_split', default=True,
                     'split for this array')
 args = parser.parse_args()
 
-if args.data_model:
-    data_model = getattr(sints,args.data_model)()
-else:
-    data_model = None
-    
-model = nm.FDWNoiseModel(
-    *args.qid, data_model=data_model, downgrade=args.downgrade, lmax=args.lmax, mask_version=args.mask_version,
-    mask_est_name=args.mask_est_name, mask_obs_name=args.mask_obs_name, union_sources=args.union_sources,
-    kfilt_lbounds=args.kfilt_lbounds, notes=args.notes,
-    lamb=args.lamb, n=args.n, p=args.p, fwhm_fact_pt1=args.fwhm_fact_pt1, fwhm_fact_pt2=args.fwhm_fact_pt2)
+model = nm.FDWNoiseModel.from_config(args.config_name, *args.qid)
 
 # get split nums
 if args.auto_split:
@@ -86,4 +32,4 @@ assert np.all(splits >= 0)
 
 # Iterate over models
 for s in splits:
-    model.get_model(s, verbose=True)
+    model.get_model(s, args.lmax, verbose=True)

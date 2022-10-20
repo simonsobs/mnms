@@ -138,8 +138,9 @@ def rand_enmap_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, mask, lmax, w_ell,
                         w_ell, dtype=type_utils.to_complex(dtype), seed=seed)
     return utils.alm2map(alm, shape=mask.shape, wcs=mask.wcs, dtype=dtype, ainfo=ainfo)
 
-def estimate_sqrt_cov_wav_from_enmap(imap, mask_obs, lmax, mask_est, rad_filt=True,
-                                     lamb=1.3, smooth_loc=False, fwhm_fact=2):
+def estimate_sqrt_cov_wav_from_enmap(imap, lmax, mask_obs, mask_est, rad_filt=True,
+                                     lamb=1.3, w_lmin=10, w_lmax_j=5300, smooth_loc=False,
+                                     fwhm_fact=2):
     """
     Estimate wavelet-based covariance matrix given noise enmap.
 
@@ -147,10 +148,10 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_obs, lmax, mask_est, rad_filt=Tr
     ----------
     imap : (ncomp, npol, ny, nx) enmap
         Input noise maps.
-    mask_obs : (ny, nx) enmap
-        Sky mask.
     lmax : int
         Bandlimit for output noise covariance.
+    mask_obs : (ny, nx) enmap
+        Sky mask.
     mask_est : (ny, nx) enmap
         Mask used to estimate the filter which whitens the data.
     rad_filt : bool, optional
@@ -159,6 +160,10 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_obs, lmax, mask_est, rad_filt=Tr
     lamb : float, optional
         Lambda parameter specifying width of wavelet kernels in
         log(ell). Should be larger than 1.
+    w_lmin: int, optional
+        Scale at which Phi (scaling) wavelet terminates.
+    w_lmax_j: int, optional
+        Scale at which Omega (high-ell) wavelet begins.
     smooth_loc : bool, optional
         If set, use smoothing kernel that varies over the map,
         smaller along edge of mask.
@@ -226,12 +231,10 @@ def estimate_sqrt_cov_wav_from_enmap(imap, mask_obs, lmax, mask_est, rad_filt=Tr
         alm_obs = utils.map2alm(imap * mask_obs, ainfo=ainfo)
 
     # Get wavelet kernels and estimate wavelet covariance.
-    lmin = 10
-    lmax_w = lmax
     # If lmax <= 5400, lmax_j will usually be lmax-100; else, capped at 5300
     # so that white noise floor is described by a single (omega) wavelet
-    lmax_j = min(max(lmax - 100, lmin), 5300)
-    w_ell, _ = wlm_utils.get_sd_kernels(lamb, lmax_w, lmin=lmin, lmax_j=lmax_j)
+    w_lmax_j = min(max(lmax - 100, w_lmin), w_lmax_j)
+    w_ell, _ = wlm_utils.get_sd_kernels(lamb, lmax, lmin=w_lmin, lmax_j=w_lmax_j)
 
     wav_template = wavtrans.Wav.from_enmap(imap.shape, imap.wcs, w_ell, 1,
                                            preshape=imap.shape[:-2],
