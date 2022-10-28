@@ -4,7 +4,7 @@ from mnms import utils
 
 config = sints.dconfig['mnms']
 
-def get_sim_mask_fn(qid, data_model, use_default_mask=False, mask_version=None, mask_name=None, galcut=None, apod_deg=None):
+def get_sim_mask_fn(qid, data_model, use_default_mask=False, mask_version=None, mask_name=None, galcut=None, apod_deg=None, **kwargs):
     """Get filename of a mask.
 
     Parameters

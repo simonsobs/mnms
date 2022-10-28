@@ -13,8 +13,8 @@ TiledNoiseModel:
   delta_ell_smooth: 400
   height_deg: 4.0
   width_deg: 4.0
-  model_str_template: 'cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_model'
-  sim_str_template: 'cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+  model_str_template: cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_model
+  sim_str_template: cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_sim_{alm_str}{sim_num}
 
 WaveletNoiseModel:
   fwhm_fact_pt1:
@@ -27,8 +27,8 @@ WaveletNoiseModel:
   smooth_loc: false
   w_lmax_j: 5300
   w_lmin: 10
-  model_str_template: 'cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_model'
-  sim_str_template: 'cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+  model_str_template: cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_model
+  sim_str_template: cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_sim_{alm_str}{sim_num}
 
 FDWNoiseModel:
   fwhm_fact_pt1:
@@ -71,6 +71,19 @@ FDWNoiseModel:
   w_lmax: 10800
   w_lmax_j: 5300
   w_lmin: 10
-  model_str_template: 'cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_model'
-  sim_str_template: 'cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+  model_str_template: cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_model
+  sim_str_template: cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_sim_{alm_str}{sim_num}
   
+HarmonicMixture:
+  ell_highs:
+  - 5000
+  ell_lows:
+  - 4000
+  lmaxs:
+  - 5400
+  - 10800
+  noise_models:
+  - FDWNoiseModel
+  - TiledNoiseModel
+  profile: cosine
+  sim_str_template: cmb_night_{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_8way_set{split_num}_noise_sim_{alm_str}{sim_num}
