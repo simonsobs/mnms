@@ -1,0 +1,52 @@
+split_maps_file_template: 'cmb_night_{array}_{freq}_{num_splits}way_set{split_num}_{maptag}'
+coadd_maps_file_template: 'cmb_night_{array}_{freq}_{num_splits}way_coadd_{maptag}'
+dtype: 'f4'
+noise_seed: 3
+
+pa4a:
+  array: pa4
+  freq: f150
+  num_splits: 8
+  qid_name_template: '{array}_{freq}'
+
+pa4b: 
+  array: pa4
+  freq: f220
+  num_splits: 8
+  qid_name_template: '{array}_{freq}'
+
+pa5a:
+  array: pa5
+  freq: f090
+  num_splits: 8
+  qid_name_template: '{array}_{freq}'
+
+pa5b: 
+  array: pa5
+  freq: f150
+  num_splits: 8
+  qid_name_template: '{array}_{freq}'
+
+pa6a:
+  array: pa6
+  freq: f090
+  num_splits: 8
+  qid_name_template: '{array}_{freq}'
+
+pa6b: 
+  array: pa6
+  freq: f150
+  num_splits: 8
+  qid_name_template: '{array}_{freq}'
+
+pa7a:
+  array: pa7
+  freq: f030
+  num_splits: 4
+  qid_name_template: '{array}_{freq}'
+
+pa7b: 
+  array: pa7
+  freq: f040
+  num_splits: 4
+  qid_name_template: '{array}_{freq}'
