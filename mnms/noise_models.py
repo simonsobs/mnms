@@ -1,8 +1,7 @@
-from mnms import simio, utils, soapack_utils as s_utils, tiled_noise, wav_noise, fdw_noise, isoivar_noise, inpaint
+from mnms import utils, soapack_utils as s_utils, tiled_noise, wav_noise, fdw_noise, isoivar_noise, inpaint
 from pixell import enmap, wcsutils, sharp
 from enlib import bench
 from optweight import wavtrans, alm_c_utils
-from soapack import interfaces as sints
 
 import numpy as np
 import yaml
@@ -29,10 +28,10 @@ def register(registry=REGISTERED_NOISE_MODELS):
 class DataManager:
 
     def __init__(self, *qids, data_model_name=None, calibrated=False,
-                 mask_version=None, mask_est=None, mask_est_name=None,
-                 mask_obs=None, mask_obs_name=None, ivar_dict=None,
-                 cfact_dict=None, dmap_dict=None, union_sources=None,
-                 kfilt_lbounds=None, fwhm_ivar=None, dtype=None, **kwargs):
+                 mask_est=None, mask_est_name=None, mask_obs=None,
+                 mask_obs_name=None, ivar_dict=None, cfact_dict=None,
+                 dmap_dict=None, union_sources=None, kfilt_lbounds=None,
+                 fwhm_ivar=None, dtype=None, **kwargs):
         """Helper class for all BaseNoiseModel subclasses. Supports loading raw
         data necessary for all subclasses, such as masks and ivars. Also
         defines some class methods usable in subclasses.
@@ -47,9 +46,6 @@ class DataManager:
             For example, 'dr6v3'.
         calibrated : bool, optional
             Whether to load calibrated raw data, by default False.
-        mask_version : str, optional
-            The mask version folder name, by default None. If None, will first look in
-            config 'mnms' block, then block of default data model.
         mask_est : enmap.ndmap, optional
             Mask denoting data that will be used to determine the harmonic filter used
             in calls to NoiseModel.get_model(...), by default None. Whitens the data
@@ -98,19 +94,13 @@ class DataManager:
         """
         # store basic set of instance properties
         self._qids = qids
-        
-        if data_model_name is None:
-            data_model = utils.get_default_data_model()
-            data_model_name = data_model.__class__.__name__.lower()
-        else:
-            data_model = utils.get_data_model(name=data_model_name)
-        self._data_model = data_model
-        self._data_model_name = data_model_name
+        self._data_model = s_utils.get_data_model(name=data_model_name)
+        self._data_model_name = self._data_model.name
+        self._qid_names = '_'.join(
+            self._data_model[qid]['qid_name'] for qid in self._qids
+            )
         
         self._calibrated = calibrated
-        if mask_version is None:
-            mask_version = utils.get_default_mask_version()
-        self._mask_version = mask_version
         self._mask_est_name = mask_est_name
         self._mask_obs_name = mask_obs_name
         self._union_sources = union_sources
@@ -118,13 +108,17 @@ class DataManager:
             kfilt_lbounds = np.array(kfilt_lbounds).reshape(2)
         self._kfilt_lbounds = kfilt_lbounds
         self._fwhm_ivar = fwhm_ivar
-        self._kwargs = kwargs
         self._dtype = dtype if dtype is not None else self._data_model.dtype
 
         # get derived instance properties
         self._num_arrays = len(self._qids)
-        self._num_splits = utils.get_nsplits_by_qid(self._qids[0], self._data_model)
-        self._use_default_mask = mask_est_name is None
+        for i, qid in enumerate(self._qids):
+            if i == 0:
+                num_splits = self._data_model[qid]['num_splits']
+            else:
+                assert num_splits == self._data_model[qid]['num_splits'], \
+                    'num_splits does not match for all qids'
+        self._num_splits = num_splits
 
         # Possibly store input data
         self._mask_est = mask_est
@@ -146,23 +140,24 @@ class DataManager:
         self._full_shape, self._full_wcs = self._check_geometry()
         self._full_lmax = utils.lmax_from_wcs(self._full_wcs)
 
+        super().__init__(**kwargs)
+
     def _check_geometry(self, return_geometry=True):
         """Check that each qid in this instance's qids has compatible shape and wcs."""
         for i, qid in enumerate(self._qids):
-            # Load up first geometry of first split's ivar. Only need map shape.
-            shape, wcs = s_utils.read_map_geometry(self._data_model, qid, 0, ivar=True)
-            shape = shape[-2:]
-            assert len(shape) == 2, 'shape must have only 2 dimensions'
+            for s in range(self._num_splits):
+                shape, wcs = s_utils.read_map_geometry(self._data_model, qid, split_num=s, ivar=True)
+                shape = shape[-2:]
+                assert len(shape) == 2, 'shape must have only 2 dimensions'
 
-            # Check that we are using the geometry for each qid -- this is required!
-            if i == 0:
-                main_shape, main_wcs = shape, wcs
-            else:
-                with bench.show(f'Checking geometry compatibility between {qid} and {self._qids[0]}'):
-                    assert(
-                        shape == main_shape), 'qids do not share map shape -- this is required!'
-                    assert wcsutils.is_compatible(
-                        wcs, main_wcs), 'qids do not share a common wcs -- this is required!'
+                # Check that we are using the geometry for each qid -- this is required!
+                if i == 0 and s == 0:
+                    main_shape, main_wcs = shape, wcs
+                else:
+                    assert(shape == main_shape), \
+                        'qids do not share map shape for all splits -- this is required!'
+                    assert wcsutils.is_compatible(wcs, main_wcs), \
+                        'qids do not share a common wcs for all splits -- this is required!'
         
         if return_geometry:
             return main_shape, main_wcs
@@ -189,26 +184,7 @@ class DataManager:
             Sky mask. Dowgraded if requested.
         """
         with bench.show('Generating harmonic-filter-estimate mask'):
-            for i, qid in enumerate(self._qids):
-                fn = simio.get_sim_mask_fn(
-                    qid, self._data_model, use_default_mask=self._use_default_mask,
-                    mask_version=self._mask_version, mask_name=self._mask_est_name,
-                    **self._kwargs
-                )
-                mask = enmap.read_map(fn).astype(self._dtype, copy=False)
-
-                # check that we are using the same mask for each qid -- this is required!
-                if i == 0:
-                    mask_est = mask
-                else:
-                    with bench.show(f'Checking mask compatibility between {qid} and {self._qids[0]}'):
-                        assert np.allclose(
-                            mask, mask_est), 'qids do not share a common mask -- this is required!'
-                        assert wcsutils.is_compatible(
-                            mask.wcs, mask_est.wcs), 'qids do not share a common mask wcs -- this is required!'
-
-            # Extract mask onto geometry specified by the ivar map.
-            mask_est = enmap.extract(mask, self._full_shape, self._full_wcs)                                    
+            mask_est = self._get_mask_from_disk('mask_est', mask_name=self._mask_est_name)                                 
             
             if downgrade != 1:
                 mask_est = utils.interpol_downgrade_cc_quad(mask_est, downgrade)
@@ -235,10 +211,8 @@ class DataManager:
         mask_obs : (ny, nx) enmap
             Observed-pixel map map, possibly downgraded.
         """
-        # get the full-resolution mask_obs, whether from disk or
-        # all True. Numpy understands in-place multiplication operation
-        # even if mask_obs is python True to start
-        mask_obs = self._get_mask_obs_from_disk(downgrade=1)
+        # get the full-resolution mask_obs, whether from disk or all True
+        mask_obs = self._get_mask_from_disk('mask_obs', mask_name=self._mask_obs_name)
         mask_obs_dg = True
 
         with bench.show('Generating observed-pixels mask'):
@@ -277,56 +251,48 @@ class DataManager:
         
         return mask_obs
 
-    def _get_mask_obs_from_disk(self, downgrade=1, shaped=False):
-        """Gets a mask_obs from disk if self._mask_obs_name is not None,
-        otherwise gets True.
+    def _get_mask_from_disk(self, mask_type, mask_name=None):
+        """Gets a mask from disk if mask_name is not None, otherwise gets True.
 
         Parameters
         ----------
-        downgrade : int, optional
-            Downgrade factor, by default 1 (no downgrading).
-        shaped : bool, optional
-            If mask is not read from disk, return an array of True, possibly
-            downgraded.
+        mask_type: str
+            Either 'mask_est' or 'mask_obs'. Controls whether to cast to a 
+            boolean mask (mask_bool is boolean).
+        mask_name : str, optional
+            The name of a mask file to load, in the user's mask_path directory,
+            by default None. If None, then a mask of True's will be returned.
 
         Returns
         -------
         enmap.ndmap or bool
-            Mask observed, either read from disk, or array of True, or
-            singleton True.
+            Mask, either read from disk, or array of True.
+
+        Notes
+        -----
+        File must be a .fits file.
         """
-        # allocate a buffer to accumulate all ivar maps in.
-        # this has shape (nmaps, nsplits, 1, ny, nx).
-        if self._mask_obs_name:
-            shaped=True
+        assert mask_type in ['mask_est', 'mask_obs'], \
+            'Only allowed mask_types are mask_est or mask_obs'
 
-            # we are loading straight from the filename with use_default_mask=False
-            # so we don't need to check each qid
-            fn = simio.get_sim_mask_fn(
-                None, self._data_model, use_default_mask=False,
-                mask_version=self._mask_version, mask_name=self._mask_obs_name,
-                **self._kwargs
-            )
-            mask_obs = enmap.read_map(fn).astype(bool, copy=False)
-                        
-            # Extract mask onto geometry specified by the ivar map.
-            mask_obs = enmap.extract(mask_obs, self._full_shape, self._full_wcs) 
-        elif shaped:
-            mask_obs = enmap.ones(self._full_shape, self._full_wcs, dtype=bool)
+        if mask_type == 'mask_est':
+            _dtype = self._dtype
         else:
-            mask_obs = True
+            _dtype = bool
 
-        if downgrade != 1 and shaped:
-            mask_obs = utils.interpol_downgrade_cc_quad(
-                mask_obs, downgrade, dtype=self._dtype
-                )
+        if mask_name is not None:            
+            fn = utils.get_from_mnms_config('mnms', 'masks_path')
+            fn = os.path.join(fn, mask_name)
+            if not fn.endswith('.fits'): 
+                fn += '.fits'
 
-            # define downgraded mask_obs to be True only where the interpolated 
-            # downgrade is all 1 -- this is the most conservative route in terms of 
-            # excluding pixels that may not actually have nonzero ivar or data
-            mask_obs = utils.get_mask_bool(mask_obs, threshold=1.)
+            # Extract mask onto geometry specified by the ivar map.
+            mask = enmap.read_map(fn).astype(_dtype, copy=False)
+            mask = enmap.extract(mask, self._full_shape, self._full_wcs) 
+        else:
+            mask = enmap.ones(self._full_shape, self._full_wcs, dtype=_dtype)
 
-        return mask_obs
+        return mask
 
     def get_ivar(self, split_num, downgrade=1, mask=True):
         """Load the inverse-variance maps according to instance attributes.
@@ -765,16 +731,16 @@ class ConfigManager(ABC):
 
     @classmethod
     @abstractmethod
-    def _reprname(cls):
+    def noise_model_name(cls):
         """A shorthand name for this model, e.g. for filenames"""
         return ''
 
-    def __init__(self, save_to_config=None, dumpable=True, 
-                 model_str_template=None, sim_str_template=None,
+    def __init__(self, *args, save_to_config=None, dumpable=True, 
+                 model_file_template=None, sim_file_template=None,
                  notes=None, **kwargs):
-        """Base class for all BaseNoiseModel subclasses. Supports loading raw data
-        necessary for all subclasses, such as masks and ivars. Also defines
-        some class methods usable in subclasses.
+        """Helper class for any object seeking to utilize a noise_model config
+        to track parameters, filenames, etc. Also define some class methods
+        usable in subclasses.
 
         Parameters
         ----------
@@ -787,12 +753,12 @@ class ConfigManager(ABC):
         dumpable: bool, optional
             Whether this instance will dump its parameters to a config. If False,
             user is responsible for covariance and sim filename management.
-        model_str_template : str, optional
+        model_file_template : str, optional
             A filename template for covariance files, by default None. Must be
             provided (not None) if dumpable is False. Otherwise, set to a
             reasonable default based on the NoiseModel subclass and config
             name.
-        sim_str_template : str, optional
+        sim_file_template : str, optional
             A filename template for sim files, by default None. Must be
             provided (not None) if dumpable is False. Otherwise, set to a
             reasonable default based on the NoiseModel subclass and config
@@ -813,29 +779,32 @@ class ConfigManager(ABC):
                     )
 
         if not self._dumpable:
-            assert model_str_template is not None and sim_str_template is not None, \
+            assert model_file_template is not None and sim_file_template is not None, \
                 'If cannot dump params to config, user responsible for tracking all ' + \
-                'filenames: must supply model_str_template and sim_str_template'
+                'filenames: must supply model_file_template and sim_file_template'
         
         # format strings and params for saving models and sims to disk
         if save_to_config is None:
             save_to_config = self._get_default_config_name()
         
-        if model_str_template is None:
-            model_str_template = '{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_set{split_num}_noise_model'
+        if model_file_template is None:
+            model_file_template = '{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
 
-        if sim_str_template is None:
-            sim_str_template = '{arrsfreqs}_{model_name}_{config_name}_lmax{lmax}_set{split_num}_noise_sim_{mask_obs_str}_{alm_str}{sim_num}'
+        if sim_file_template is None:
+            sim_file_template = '{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{mask_obs_str}_{alm_str}{sim_num}'
 
         self._config_name = save_to_config
-        self._model_str_template = model_str_template
-        self._sim_str_template = sim_str_template
+        self._model_file_template = model_file_template
+        self._sim_file_template = sim_file_template
 
         # check availability, compatibility of config name
         if self._dumpable:
             self._config_fn = self._check_config(save_to_config, return_config_fn=True)
 
         self._notes = notes
+
+        # don't pass args up MRO, we have eaten them here
+        super().__init__(**kwargs)
 
     @property
     @abstractmethod
@@ -908,12 +877,11 @@ class ConfigManager(ABC):
 
         # dont want to allow user to write to a packaged config
         try:
-            utils.config_from_yaml_resource(f'configs/{config_name}.yaml')
+            utils.config_from_yaml_resource(f'configs/noise_models/{config_name}.yaml')
             raise FileExistsError(f'{config_name}.yaml reserved by mnms package, cannot write to it')
         except FileNotFoundError:
              # this config_name is not a packaged config
-            config_fn = os.path.join(sints.dconfig['mnms']['configs_path'], config_name)
-            config_fn += '.yaml'
+            config_fn = utils.get_user_config_fn_by_name('noise_models', config_name)
 
         # if config name already exists on disk in user config directory, we
         # want to check if our parameters are equivalent to what's there
@@ -990,8 +958,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             model_dict = {}
         self._model_dict = model_dict
 
-        DataManager.__init__(self, *qids, **kwargs)
-        ConfigManager.__init__(self, **kwargs)
+        super().__init__(*qids, **kwargs)
 
     @property
     def _runtime_params(self):
@@ -1009,9 +976,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     def _base_param_dict(self):
         """Return a dictionary of model parameters for this BaseNoiseModel"""
         return dict(
-            data_model_name=self._data_model_name, 
+            data_model_name=self._data_model_name,
+            num_splits=self._num_splits, 
             calibrated=self._calibrated,
-            mask_version=self._mask_version,
             mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name,
             union_sources=self._union_sources,
@@ -1022,8 +989,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
     def _model_param_dict_updater(self, model_param_dict):
         model_param_dict.update(
-            model_str_template=self._model_str_template, 
-            sim_str_template=self._sim_str_template
+            model_file_template=self._model_file_template, 
+            sim_file_template=self._sim_file_template
         )
 
     @classmethod
@@ -1045,14 +1012,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             An instance of a BaseNoiseModel subclass.
         """
         config_name = os.path.splitext(config_name)[0] 
-
-        # we check user configs before shipped configs
-        config_fn = os.path.join(sints.dconfig['mnms']['configs_path'], config_name)
-        config_fn += '.yaml'
-        try:
-            config_dict = utils.config_from_yaml_file(config_fn)
-        except FileNotFoundError:
-            config_dict = utils.config_from_yaml_resource(f'configs/{config_name}.yaml')
+        config_dict = utils.get_config_dict_protected('noise_models', config_name)
 
         kwargs = config_dict['BaseNoiseModel']
         kwargs.update(config_dict[cls.__name__])
@@ -1067,9 +1027,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         """Get a noise model filename for split split_num; return as <str>"""
         kwargs = dict(
             config_name=self._config_name,
-            model_name=self.__class__._reprname(),
+            noise_model_name=self.__class__.noise_model_name(),
             qids='_'.join(self._qids),
-            arrsfreqs='_'.join(utils.qid2arrfreq(q) for q in self._qids),
+            qid_names=self._qid_names,
             split_num=split_num,
             lmax=lmax,
             downgrade=utils.downgrade_from_lmaxs(self._full_lmax, lmax)
@@ -1077,8 +1037,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         kwargs.update(self._base_param_dict)
         kwargs.update(self._model_param_dict)
 
-        fn = sints.dconfig['mnms']['covmat_path']
-        fn = os.path.join(fn, self._model_str_template.format(**kwargs))
+        fn = utils.get_from_mnms_config('mnms', 'models_path')
+        fn = os.path.join(fn, self._model_file_template.format(**kwargs))
         fn += self._model_ext
         return fn
 
@@ -1091,9 +1051,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
         kwargs = dict(
             config_name=self._config_name,
-            model_name=self.__class__._reprname(),
+            noise_model_name=self.__class__.noise_model_name(),
             qids='_'.join(self._qids),
-            arrsfreqs='_'.join(utils.qid2arrfreq(q) for q in self._qids),
+            qid_names=self._qid_names,
             split_num=split_num,
             sim_num=str(sim_num).zfill(4),
             lmax=lmax,
@@ -1104,9 +1064,10 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         kwargs.update(self._base_param_dict)
         kwargs.update(self._model_param_dict)
 
-        fn = sints.dconfig['mnms']['maps_path']
-        fn = os.path.join(fn, self._sim_str_template.format(**kwargs))
-        fn += '.fits'
+        fn = utils.get_from_mnms_config('mnms', 'sims_path')
+        fn = os.path.join(fn, self._sim_file_template.format(**kwargs))
+        if not fn.endswith('.fits'): 
+            fn += '.fits'
         return fn
 
     @property
@@ -1175,7 +1136,10 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                 pass
 
         mask_obs = self.get_mask_obs(downgrade=downgrade)
-        mask_est = self.get_mask_est(downgrade=downgrade)
+        # get the estimate mask
+        if self._mask_est is None:
+            self._mask_est = self.get_mask_est(downgrade=downgrade) * mask_obs
+        mask_est = self._mask_est
         ivar = self.get_ivar(split_num, downgrade=downgrade, mask=mask_obs)
         cfact = self.get_cfact(split_num, downgrade=downgrade, mask=mask_obs)
         dmap = self.get_dmap(split_num, downgrade=downgrade, mask=mask_obs)
@@ -1456,7 +1420,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 class TiledNoiseModel(BaseNoiseModel):
 
     @classmethod
-    def _reprname(cls):
+    def noise_model_name(cls):
         return 'tile'
 
     def __init__(self, *qids, width_deg=4., height_deg=4.,
@@ -1501,7 +1465,7 @@ class TiledNoiseModel(BaseNoiseModel):
         # need to init BaseNoiseModel last because BaseNoiseModel's __init__
         # accesses this subclass's _model_param_dict which requires those
         # attributes to exist
-        BaseNoiseModel.__init__(self, *qids, **kwargs)
+        super().__init__(*qids, **kwargs)
 
     @property
     def _model_ext(self):
@@ -1589,7 +1553,7 @@ class TiledNoiseModel(BaseNoiseModel):
 class WaveletNoiseModel(BaseNoiseModel):
 
     @classmethod
-    def _reprname(cls):
+    def noise_model_name(cls):
         return 'wav'
 
     def __init__(self, *qids, lamb=1.3, w_lmin=10, w_lmax_j=5300,
@@ -1653,7 +1617,7 @@ class WaveletNoiseModel(BaseNoiseModel):
         # need to init BaseNoiseModel last because BaseNoiseModel's __init__
         # accesses this subclass's _model_param_dict which requires those
         # attributes to exist
-        BaseNoiseModel.__init__(self, *qids, **kwargs)
+        super().__init__(*qids, **kwargs)
 
     @property
     def _model_ext(self):
@@ -1755,7 +1719,7 @@ class WaveletNoiseModel(BaseNoiseModel):
 class FDWNoiseModel(BaseNoiseModel):
 
     @classmethod
-    def _reprname(cls):
+    def noise_model_name(cls):
         return 'fdw'
 
     def __init__(self, *qids, lamb=1.6, w_lmax=10_800, w_lmin=10, 
@@ -1858,7 +1822,7 @@ class FDWNoiseModel(BaseNoiseModel):
         # need to init BaseNoiseModel last because BaseNoiseModel's __init__
         # accesses this subclass's _model_param_dict which requires those
         # attributes to exist
-        BaseNoiseModel.__init__(self, *qids, **kwargs)
+        super().__init__(*qids, **kwargs)
 
         self._fk_dict = {}
 
@@ -1975,410 +1939,410 @@ class FDWNoiseModel(BaseNoiseModel):
         return utils.map2alm(sim, lmax=lmax)
 
 
-class IvarIsoIvarNoiseModel(BaseNoiseModel):
+# class IvarIsoIvarNoiseModel(BaseNoiseModel):
 
-    def __init__(self, *qids, data_model_name=None, calibrated=False, downgrade=1,
-                 lmax=None, mask_version=None, mask_est=None, mask_est_name=None,
-                 mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
-                 dmap_dict=None, union_sources=None, kfilt_lbounds=None,
-                 fwhm_ivar=None, notes=None, dtype=None, **kwargs):
-        """An IvarIsoIvarNoiseModel captures the overall noise power spectrum and the 
-        map-depth through the mapmaker inverse-variance only. The noise covariance
-        places the noise power spectrum between two square-root inverse-variance maps.
+#     def __init__(self, *qids, data_model_name=None, calibrated=False, downgrade=1,
+#                  lmax=None, mask_version=None, mask_est=None, mask_est_name=None,
+#                  mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
+#                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
+#                  fwhm_ivar=None, notes=None, dtype=None, **kwargs):
+#         """An IvarIsoIvarNoiseModel captures the overall noise power spectrum and the 
+#         map-depth through the mapmaker inverse-variance only. The noise covariance
+#         places the noise power spectrum between two square-root inverse-variance maps.
 
-        Parameters
-        ----------
-        qids : str
-            One or more qids to incorporate in model.
-        data_model_name : str, optional
-            Name of DataModel instance to help load raw products, by default None.
-            If None, will load the 'default_data_model' from the 'mnms' config.
-            For example, 'dr6v3'.
-        calibrated : bool, optional
-            Whether to load calibrated raw data, by default False.
-        downgrade : int, optional
-            The factor to downgrade map pixels by, by default 1.
-        lmax : int, optional
-            The bandlimit of the maps, by default None. If None, will be set to the 
-            Nyquist limit of the pixelization. Note, this is twice the theoretical CAR
-            bandlimit, ie 180/wcs.wcs.cdelt[1].mask_version : str, optional
-            The mask version folder name, by default None. If None, will first look in
-            config 'mnms' block, then block of default data model.
-        mask_est : enmap.ndmap, optional
-            Mask denoting data that will be used to determine the harmonic filter used
-            in calls to NoiseModel.get_model(...), by default None. Whitens the data
-            before estimating its variance. If provided, assumed properly downgraded
-            into compatible wcs with internal NoiseModel operations. If None, will
-            load a mask according to the 'mask_version' and 'mask_est_name' kwargs.
-        mask_est_name : str, optional
-            Name of harmonic filter estimate mask file, by default None. This mask will
-            be used as the mask_est (see above) if mask_est is None. If mask_est is
-            None and mask_est_name is None, a default mask_est will be loaded from disk.
-        mask_obs : str, optional
-            Mask denoting data to include in building noise model step. If mask_obs=0
-            in any pixel, that pixel will not be modeled. Optionally used when drawing
-            a sim from a model to mask unmodeled pixels. If provided, assumed properly
-            downgraded into compatible wcs with internal NoiseModel operations.
-        mask_obs_name : str, optional
-            Name of observed mask file, by default None. This mask will be used as the
-            mask_obs (see above) if mask_obs is None. 
-        ivar_dict : dict, optional
-            A dictionary of inverse-variance maps, indexed by split_num keys. If
-            provided, assumed properly downgraded into compatible wcs with internal 
-            NoiseModel operations. 
-        cfact_dict : dict, optional
-            A dictionary of split correction factor maps, indexed by split_num keys. If
-            provided, assumed properly downgraded into compatible wcs with internal 
-            NoiseModel operations.
-        dmap_dict : dict, optional
-            A dictionary of data split difference maps, indexed by split_num keys. If
-            provided, assumed properly downgraded into compatible wcs with internal 
-            NoiseModel operations, and with any additional preprocessing specified by
-            the model. 
-        union_sources : str, optional
-            A soapack source catalog, by default None. If given, inpaint data and ivar maps.
-        kfilt_lbounds : size-2 iterable, optional
-            The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
-            If given, filter data before (possibly) downgrading it. 
-        fwhm_ivar : float, optional
-            FWHM in degrees of Gaussian smoothing applied to ivar maps. Not applied if ivar
-            maps are provided manually.
-        notes : str, optional
-            A descriptor string to differentiate this instance from
-            otherwise identical instances, by default None.
-        dtype : np.dtype, optional
-            The data type used in intermediate calculations and return types, by default None.
-            If None, inferred from data_model.dtype.
-        kwargs : dict, optional
-            Optional keyword arguments to pass to simio.get_sim_mask_fn (currently just
-            'galcut' and 'apod_deg'), by default None.
-
-
-        Examples
-        --------
-        >>> from mnms import noise_models as nm
-        >>> fdwnm = nm.IvarIsoIvarNoiseModel('s18_03', 's18_04', downgrade=2, notes='my_model')
-        >>> fdwnm.get_model() # will take several minutes and require a lot of memory
-                            # if running this exact model for the first time, otherwise
-                            # will return None if model exists on-disk already
-        >>> fdwnm = wnm.get_sim(0, 123) # will get a sim of split 1 from the correlated arrays;
-                                       # the map will have "index" 123, which is used in making
-                                       # the random seed whether or not the sim is saved to disk,
-                                       # and will be recorded in the filename if saved to disk.
-        >>> print(imap.shape)
-        >>> (2, 1, 3, 5600, 21600)
-        """
-        self._inm = Interface(
-            *qids, data_model_name=data_model_name, calibrated=calibrated, downgrade=downgrade,
-            lmax=lmax, mask_est=mask_est, mask_version=mask_version, mask_est_name=mask_est_name,
-            mask_obs=mask_obs, mask_obs_name=mask_obs_name, ivar_dict=ivar_dict, cfact_dict=cfact_dict,
-            dmap_dict=dmap_dict, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
-            fwhm_ivar=fwhm_ivar, dtype=dtype, **kwargs   
-        )
-
-        # save model-specific info
-        self._kind = 'ivarisoivar'
-
-        # need to init NoiseModel last
-        super().__init__(notes=notes)
-
-    @property
-    def _model_inm(self):
-        return self._inm
-
-    @property
-    def _sim_inm(self):
-        return self._inm
-
-    def _get_model_fn(self, split_num):
-        """Get a noise model filename for split split_num; return as <str>"""
-        inm = self._model_inm
-
-        return simio.get_isoivar_model_fn(
-            inm._qids, split_num, inm._lmax, self._kind, notes=self._notes,
-            data_model=inm._data_model, mask_version=inm._mask_version,
-            bin_apod=inm._use_default_mask, mask_est_name=inm._mask_est_name,
-            mask_obs_name=inm._mask_obs_name, calibrated=inm._calibrated, 
-            downgrade=inm._downgrade, union_sources=inm._union_sources,
-            kfilt_lbounds=inm._kfilt_lbounds, fwhm_ivar=inm._fwhm_ivar, 
-            **inm._kwargs
-        )
-
-    def _read_model(self, fn):
-        """Read a noise model with filename fn; return a dictionary of noise model variables"""
-        sqrt_cov_ell = isoivar_noise.read_isoivar(fn)
-        return {'sqrt_cov_ell': sqrt_cov_ell}
-
-    def _get_model(self, dmap, ivar=None, verbose=False, **kwargs):
-        """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
-        inm = self._model_inm
-
-        sqrt_cov_ell = isoivar_noise.get_ivarisoivar_noise_covsqrt(
-            dmap, ivar, mask_est=inm._mask_est, verbose=verbose
-        )
-
-        return {'sqrt_cov_ell': sqrt_cov_ell}
-
-    def _write_model(self, fn, sqrt_cov_ell=None, **kwargs):
-        """Write a dictionary of noise model variables to filename fn"""
-        isoivar_noise.write_isoivar(fn, sqrt_cov_ell)
-
-    def _get_sim_fn(self, split_num, sim_num, alm=True, mask_obs=True):
-        """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
-        inm = self._sim_inm
-
-        return simio.get_isoivar_sim_fn(
-            inm._qids, split_num, sim_num, inm._lmax, self._kind,
-            notes=self._notes, alm=alm, mask_obs=mask_obs, 
-            data_model=inm._data_model, mask_version=inm._mask_version,
-            bin_apod=inm._use_default_mask, mask_est_name=inm._mask_est_name,
-            mask_obs_name=inm._mask_obs_name, calibrated=inm._calibrated, 
-            downgrade=inm._downgrade, union_sources=inm._union_sources,
-            kfilt_lbounds=inm._kfilt_lbounds, fwhm_ivar=inm._fwhm_ivar, 
-            **inm._kwargs
-        )
-
-    def _get_sim(self, model_dict, seed, ivar=None, mask=None, verbose=False, **kwargs):
-        """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
-        # Get noise model variables 
-        sqrt_cov_ell = model_dict['sqrt_cov_ell']
-
-        sim = isoivar_noise.get_ivarisoivar_noise_sim(
-            sqrt_cov_ell, ivar, nthread=0, seed=seed
-        )
-
-        # We always want shape (num_arrays, num_splits=1, num_pol, ny, nx).
-        assert sim.ndim == 5, \
-            'Sim must have shape (num_arrays, num_splits=1, num_pol, ny, nx)'
-
-        if mask is not None:
-            sim *= mask
-        return sim
-
-    def _get_sim_alm(self, model_dict, seed, ivar=None, mask=None, verbose=False, **kwargs):    
-        """Return a masked alm sim from model_dict, with seed <sequence of ints>"""
-        sim = self._get_sim(model_dict, seed, ivar=ivar, mask=mask, verbose=verbose, **kwargs)
-        return utils.map2alm(sim, lmax=self._sim_inm._lmax)
+#         Parameters
+#         ----------
+#         qids : str
+#             One or more qids to incorporate in model.
+#         data_model_name : str, optional
+#             Name of DataModel instance to help load raw products, by default None.
+#             If None, will load the 'default_data_model' from the 'mnms' config.
+#             For example, 'dr6v3'.
+#         calibrated : bool, optional
+#             Whether to load calibrated raw data, by default False.
+#         downgrade : int, optional
+#             The factor to downgrade map pixels by, by default 1.
+#         lmax : int, optional
+#             The bandlimit of the maps, by default None. If None, will be set to the 
+#             Nyquist limit of the pixelization. Note, this is twice the theoretical CAR
+#             bandlimit, ie 180/wcs.wcs.cdelt[1].mask_version : str, optional
+#             The mask version folder name, by default None. If None, will first look in
+#             config 'mnms' block, then block of default data model.
+#         mask_est : enmap.ndmap, optional
+#             Mask denoting data that will be used to determine the harmonic filter used
+#             in calls to NoiseModel.get_model(...), by default None. Whitens the data
+#             before estimating its variance. If provided, assumed properly downgraded
+#             into compatible wcs with internal NoiseModel operations. If None, will
+#             load a mask according to the 'mask_version' and 'mask_est_name' kwargs.
+#         mask_est_name : str, optional
+#             Name of harmonic filter estimate mask file, by default None. This mask will
+#             be used as the mask_est (see above) if mask_est is None. If mask_est is
+#             None and mask_est_name is None, a default mask_est will be loaded from disk.
+#         mask_obs : str, optional
+#             Mask denoting data to include in building noise model step. If mask_obs=0
+#             in any pixel, that pixel will not be modeled. Optionally used when drawing
+#             a sim from a model to mask unmodeled pixels. If provided, assumed properly
+#             downgraded into compatible wcs with internal NoiseModel operations.
+#         mask_obs_name : str, optional
+#             Name of observed mask file, by default None. This mask will be used as the
+#             mask_obs (see above) if mask_obs is None. 
+#         ivar_dict : dict, optional
+#             A dictionary of inverse-variance maps, indexed by split_num keys. If
+#             provided, assumed properly downgraded into compatible wcs with internal 
+#             NoiseModel operations. 
+#         cfact_dict : dict, optional
+#             A dictionary of split correction factor maps, indexed by split_num keys. If
+#             provided, assumed properly downgraded into compatible wcs with internal 
+#             NoiseModel operations.
+#         dmap_dict : dict, optional
+#             A dictionary of data split difference maps, indexed by split_num keys. If
+#             provided, assumed properly downgraded into compatible wcs with internal 
+#             NoiseModel operations, and with any additional preprocessing specified by
+#             the model. 
+#         union_sources : str, optional
+#             A soapack source catalog, by default None. If given, inpaint data and ivar maps.
+#         kfilt_lbounds : size-2 iterable, optional
+#             The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
+#             If given, filter data before (possibly) downgrading it. 
+#         fwhm_ivar : float, optional
+#             FWHM in degrees of Gaussian smoothing applied to ivar maps. Not applied if ivar
+#             maps are provided manually.
+#         notes : str, optional
+#             A descriptor string to differentiate this instance from
+#             otherwise identical instances, by default None.
+#         dtype : np.dtype, optional
+#             The data type used in intermediate calculations and return types, by default None.
+#             If None, inferred from data_model.dtype.
+#         kwargs : dict, optional
+#             Optional keyword arguments to pass to simio.get_sim_mask_fn (currently just
+#             'galcut' and 'apod_deg'), by default None.
 
 
-class IsoIvarIsoNoiseModel(BaseNoiseModel):
+#         Examples
+#         --------
+#         >>> from mnms import noise_models as nm
+#         >>> fdwnm = nm.IvarIsoIvarNoiseModel('s18_03', 's18_04', downgrade=2, notes='my_model')
+#         >>> fdwnm.get_model() # will take several minutes and require a lot of memory
+#                             # if running this exact model for the first time, otherwise
+#                             # will return None if model exists on-disk already
+#         >>> fdwnm = wnm.get_sim(0, 123) # will get a sim of split 1 from the correlated arrays;
+#                                        # the map will have "index" 123, which is used in making
+#                                        # the random seed whether or not the sim is saved to disk,
+#                                        # and will be recorded in the filename if saved to disk.
+#         >>> print(imap.shape)
+#         >>> (2, 1, 3, 5600, 21600)
+#         """
+#         self._inm = Interface(
+#             *qids, data_model_name=data_model_name, calibrated=calibrated, downgrade=downgrade,
+#             lmax=lmax, mask_est=mask_est, mask_version=mask_version, mask_est_name=mask_est_name,
+#             mask_obs=mask_obs, mask_obs_name=mask_obs_name, ivar_dict=ivar_dict, cfact_dict=cfact_dict,
+#             dmap_dict=dmap_dict, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
+#             fwhm_ivar=fwhm_ivar, dtype=dtype, **kwargs   
+#         )
 
-    def __init__(self, *qids, data_model_name=None, calibrated=False, downgrade=1,
-                 lmax=None, mask_version=None, mask_est=None, mask_est_name=None,
-                 mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
-                 dmap_dict=None, union_sources=None, kfilt_lbounds=None,
-                 fwhm_ivar=None, notes=None, dtype=None, **kwargs):
-        """An IsoIvarIsoNoiseModel captures the overall noise power spectrum and the 
-        map-depth through the mapmaker inverse-variance only. The noise covariance
-        places the inverse-variance map between two square-root noise power spectra.
+#         # save model-specific info
+#         self._kind = 'ivarisoivar'
 
-        Parameters
-        ----------
-        qids : str
-            One or more qids to incorporate in model.
-        data_model_name : str, optional
-            Name of DataModel instance to help load raw products, by default None.
-            If None, will load the 'default_data_model' from the 'mnms' config.
-            For example, 'dr6v3'.
-        calibrated : bool, optional
-            Whether to load calibrated raw data, by default False.
-        downgrade : int, optional
-            The factor to downgrade map pixels by, by default 1.
-        lmax : int, optional
-            The bandlimit of the maps, by default None. If None, will be set to the 
-            Nyquist limit of the pixelization. Note, this is twice the theoretical CAR
-            bandlimit, ie 180/wcs.wcs.cdelt[1].mask_version : str, optional
-            The mask version folder name, by default None. If None, will first look in
-            config 'mnms' block, then block of default data model.
-        mask_est : enmap.ndmap, optional
-            Mask denoting data that will be used to determine the harmonic filter used
-            in calls to NoiseModel.get_model(...), by default None. Whitens the data
-            before estimating its variance. If provided, assumed properly downgraded
-            into compatible wcs with internal NoiseModel operations. If None, will
-            load a mask according to the 'mask_version' and 'mask_est_name' kwargs.
-        mask_est_name : str, optional
-            Name of harmonic filter estimate mask file, by default None. This mask will
-            be used as the mask_est (see above) if mask_est is None. If mask_est is
-            None and mask_est_name is None, a default mask_est will be loaded from disk.
-        mask_obs : str, optional
-            Mask denoting data to include in building noise model step. If mask_obs=0
-            in any pixel, that pixel will not be modeled. Optionally used when drawing
-            a sim from a model to mask unmodeled pixels. If provided, assumed properly
-            downgraded into compatible wcs with internal NoiseModel operations.
-        mask_obs_name : str, optional
-            Name of observed mask file, by default None. This mask will be used as the
-            mask_obs (see above) if mask_obs is None. 
-        ivar_dict : dict, optional
-            A dictionary of inverse-variance maps, indexed by split_num keys. If
-            provided, assumed properly downgraded into compatible wcs with internal 
-            NoiseModel operations. 
-        cfact_dict : dict, optional
-            A dictionary of split correction factor maps, indexed by split_num keys. If
-            provided, assumed properly downgraded into compatible wcs with internal 
-            NoiseModel operations.
-        dmap_dict : dict, optional
-            A dictionary of data split difference maps, indexed by split_num keys. If
-            provided, assumed properly downgraded into compatible wcs with internal 
-            NoiseModel operations, and with any additional preprocessing specified by
-            the model. 
-        union_sources : str, optional
-            A soapack source catalog, by default None. If given, inpaint data and ivar maps.
-        kfilt_lbounds : size-2 iterable, optional
-            The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
-            If given, filter data before (possibly) downgrading it. 
-        fwhm_ivar : float, optional
-            FWHM in degrees of Gaussian smoothing applied to ivar maps. Not applied if ivar
-            maps are provided manually.
-        notes : str, optional
-            A descriptor string to differentiate this instance from
-            otherwise identical instances, by default None.
-        dtype : np.dtype, optional
-            The data type used in intermediate calculations and return types, by default None.
-            If None, inferred from data_model.dtype.
-        kwargs : dict, optional
-            Optional keyword arguments to pass to simio.get_sim_mask_fn (currently just
-            'galcut' and 'apod_deg'), by default None.
+#         # need to init NoiseModel last
+#         super().__init__(notes=notes)
+
+#     @property
+#     def _model_inm(self):
+#         return self._inm
+
+#     @property
+#     def _sim_inm(self):
+#         return self._inm
+
+#     def _get_model_fn(self, split_num):
+#         """Get a noise model filename for split split_num; return as <str>"""
+#         inm = self._model_inm
+
+#         return simio.get_isoivar_model_fn(
+#             inm._qids, split_num, inm._lmax, self._kind, notes=self._notes,
+#             data_model=inm._data_model, mask_version=inm._mask_version,
+#             bin_apod=inm._use_default_mask, mask_est_name=inm._mask_est_name,
+#             mask_obs_name=inm._mask_obs_name, calibrated=inm._calibrated, 
+#             downgrade=inm._downgrade, union_sources=inm._union_sources,
+#             kfilt_lbounds=inm._kfilt_lbounds, fwhm_ivar=inm._fwhm_ivar, 
+#             **inm._kwargs
+#         )
+
+#     def _read_model(self, fn):
+#         """Read a noise model with filename fn; return a dictionary of noise model variables"""
+#         sqrt_cov_ell = isoivar_noise.read_isoivar(fn)
+#         return {'sqrt_cov_ell': sqrt_cov_ell}
+
+#     def _get_model(self, dmap, ivar=None, verbose=False, **kwargs):
+#         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
+#         inm = self._model_inm
+
+#         sqrt_cov_ell = isoivar_noise.get_ivarisoivar_noise_covsqrt(
+#             dmap, ivar, mask_est=inm._mask_est, verbose=verbose
+#         )
+
+#         return {'sqrt_cov_ell': sqrt_cov_ell}
+
+#     def _write_model(self, fn, sqrt_cov_ell=None, **kwargs):
+#         """Write a dictionary of noise model variables to filename fn"""
+#         isoivar_noise.write_isoivar(fn, sqrt_cov_ell)
+
+#     def _get_sim_fn(self, split_num, sim_num, alm=True, mask_obs=True):
+#         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
+#         inm = self._sim_inm
+
+#         return simio.get_isoivar_sim_fn(
+#             inm._qids, split_num, sim_num, inm._lmax, self._kind,
+#             notes=self._notes, alm=alm, mask_obs=mask_obs, 
+#             data_model=inm._data_model, mask_version=inm._mask_version,
+#             bin_apod=inm._use_default_mask, mask_est_name=inm._mask_est_name,
+#             mask_obs_name=inm._mask_obs_name, calibrated=inm._calibrated, 
+#             downgrade=inm._downgrade, union_sources=inm._union_sources,
+#             kfilt_lbounds=inm._kfilt_lbounds, fwhm_ivar=inm._fwhm_ivar, 
+#             **inm._kwargs
+#         )
+
+#     def _get_sim(self, model_dict, seed, ivar=None, mask=None, verbose=False, **kwargs):
+#         """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
+#         # Get noise model variables 
+#         sqrt_cov_ell = model_dict['sqrt_cov_ell']
+
+#         sim = isoivar_noise.get_ivarisoivar_noise_sim(
+#             sqrt_cov_ell, ivar, nthread=0, seed=seed
+#         )
+
+#         # We always want shape (num_arrays, num_splits=1, num_pol, ny, nx).
+#         assert sim.ndim == 5, \
+#             'Sim must have shape (num_arrays, num_splits=1, num_pol, ny, nx)'
+
+#         if mask is not None:
+#             sim *= mask
+#         return sim
+
+#     def _get_sim_alm(self, model_dict, seed, ivar=None, mask=None, verbose=False, **kwargs):    
+#         """Return a masked alm sim from model_dict, with seed <sequence of ints>"""
+#         sim = self._get_sim(model_dict, seed, ivar=ivar, mask=mask, verbose=verbose, **kwargs)
+#         return utils.map2alm(sim, lmax=self._sim_inm._lmax)
 
 
-        Examples
-        --------
-        >>> from mnms import noise_models as nm
-        >>> fdwnm = nm.IvarIsoIvarNoiseModel('s18_03', 's18_04', downgrade=2, notes='my_model')
-        >>> fdwnm.get_model() # will take several minutes and require a lot of memory
-                            # if running this exact model for the first time, otherwise
-                            # will return None if model exists on-disk already
-        >>> fdwnm = wnm.get_sim(0, 123) # will get a sim of split 1 from the correlated arrays;
-                                       # the map will have "index" 123, which is used in making
-                                       # the random seed whether or not the sim is saved to disk,
-                                       # and will be recorded in the filename if saved to disk.
-        >>> print(imap.shape)
-        >>> (2, 1, 3, 5600, 21600)
-        """
-        self._inm = Interface(
-            *qids, data_model_name=data_model_name, calibrated=calibrated, downgrade=downgrade,
-            lmax=lmax, mask_est=mask_est, mask_version=mask_version, mask_est_name=mask_est_name,
-            mask_obs=mask_obs, mask_obs_name=mask_obs_name, ivar_dict=ivar_dict, cfact_dict=cfact_dict,
-            dmap_dict=dmap_dict, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
-            fwhm_ivar=fwhm_ivar, dtype=dtype, **kwargs   
-        )
+# class IsoIvarIsoNoiseModel(BaseNoiseModel):
 
-        # save model-specific info
-        self._kind = 'isoivariso'
+#     def __init__(self, *qids, data_model_name=None, calibrated=False, downgrade=1,
+#                  lmax=None, mask_version=None, mask_est=None, mask_est_name=None,
+#                  mask_obs=None, mask_obs_name=None, ivar_dict=None, cfact_dict=None,
+#                  dmap_dict=None, union_sources=None, kfilt_lbounds=None,
+#                  fwhm_ivar=None, notes=None, dtype=None, **kwargs):
+#         """An IsoIvarIsoNoiseModel captures the overall noise power spectrum and the 
+#         map-depth through the mapmaker inverse-variance only. The noise covariance
+#         places the inverse-variance map between two square-root noise power spectra.
 
-        # need to init NoiseModel last
-        super().__init__(notes=notes)
+#         Parameters
+#         ----------
+#         qids : str
+#             One or more qids to incorporate in model.
+#         data_model_name : str, optional
+#             Name of DataModel instance to help load raw products, by default None.
+#             If None, will load the 'default_data_model' from the 'mnms' config.
+#             For example, 'dr6v3'.
+#         calibrated : bool, optional
+#             Whether to load calibrated raw data, by default False.
+#         downgrade : int, optional
+#             The factor to downgrade map pixels by, by default 1.
+#         lmax : int, optional
+#             The bandlimit of the maps, by default None. If None, will be set to the 
+#             Nyquist limit of the pixelization. Note, this is twice the theoretical CAR
+#             bandlimit, ie 180/wcs.wcs.cdelt[1].mask_version : str, optional
+#             The mask version folder name, by default None. If None, will first look in
+#             config 'mnms' block, then block of default data model.
+#         mask_est : enmap.ndmap, optional
+#             Mask denoting data that will be used to determine the harmonic filter used
+#             in calls to NoiseModel.get_model(...), by default None. Whitens the data
+#             before estimating its variance. If provided, assumed properly downgraded
+#             into compatible wcs with internal NoiseModel operations. If None, will
+#             load a mask according to the 'mask_version' and 'mask_est_name' kwargs.
+#         mask_est_name : str, optional
+#             Name of harmonic filter estimate mask file, by default None. This mask will
+#             be used as the mask_est (see above) if mask_est is None. If mask_est is
+#             None and mask_est_name is None, a default mask_est will be loaded from disk.
+#         mask_obs : str, optional
+#             Mask denoting data to include in building noise model step. If mask_obs=0
+#             in any pixel, that pixel will not be modeled. Optionally used when drawing
+#             a sim from a model to mask unmodeled pixels. If provided, assumed properly
+#             downgraded into compatible wcs with internal NoiseModel operations.
+#         mask_obs_name : str, optional
+#             Name of observed mask file, by default None. This mask will be used as the
+#             mask_obs (see above) if mask_obs is None. 
+#         ivar_dict : dict, optional
+#             A dictionary of inverse-variance maps, indexed by split_num keys. If
+#             provided, assumed properly downgraded into compatible wcs with internal 
+#             NoiseModel operations. 
+#         cfact_dict : dict, optional
+#             A dictionary of split correction factor maps, indexed by split_num keys. If
+#             provided, assumed properly downgraded into compatible wcs with internal 
+#             NoiseModel operations.
+#         dmap_dict : dict, optional
+#             A dictionary of data split difference maps, indexed by split_num keys. If
+#             provided, assumed properly downgraded into compatible wcs with internal 
+#             NoiseModel operations, and with any additional preprocessing specified by
+#             the model. 
+#         union_sources : str, optional
+#             A soapack source catalog, by default None. If given, inpaint data and ivar maps.
+#         kfilt_lbounds : size-2 iterable, optional
+#             The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
+#             If given, filter data before (possibly) downgrading it. 
+#         fwhm_ivar : float, optional
+#             FWHM in degrees of Gaussian smoothing applied to ivar maps. Not applied if ivar
+#             maps are provided manually.
+#         notes : str, optional
+#             A descriptor string to differentiate this instance from
+#             otherwise identical instances, by default None.
+#         dtype : np.dtype, optional
+#             The data type used in intermediate calculations and return types, by default None.
+#             If None, inferred from data_model.dtype.
+#         kwargs : dict, optional
+#             Optional keyword arguments to pass to simio.get_sim_mask_fn (currently just
+#             'galcut' and 'apod_deg'), by default None.
 
-    @property
-    def _model_inm(self):
-        return self._inm
 
-    @property
-    def _sim_inm(self):
-        return self._inm
+#         Examples
+#         --------
+#         >>> from mnms import noise_models as nm
+#         >>> fdwnm = nm.IvarIsoIvarNoiseModel('s18_03', 's18_04', downgrade=2, notes='my_model')
+#         >>> fdwnm.get_model() # will take several minutes and require a lot of memory
+#                             # if running this exact model for the first time, otherwise
+#                             # will return None if model exists on-disk already
+#         >>> fdwnm = wnm.get_sim(0, 123) # will get a sim of split 1 from the correlated arrays;
+#                                        # the map will have "index" 123, which is used in making
+#                                        # the random seed whether or not the sim is saved to disk,
+#                                        # and will be recorded in the filename if saved to disk.
+#         >>> print(imap.shape)
+#         >>> (2, 1, 3, 5600, 21600)
+#         """
+#         self._inm = Interface(
+#             *qids, data_model_name=data_model_name, calibrated=calibrated, downgrade=downgrade,
+#             lmax=lmax, mask_est=mask_est, mask_version=mask_version, mask_est_name=mask_est_name,
+#             mask_obs=mask_obs, mask_obs_name=mask_obs_name, ivar_dict=ivar_dict, cfact_dict=cfact_dict,
+#             dmap_dict=dmap_dict, union_sources=union_sources, kfilt_lbounds=kfilt_lbounds,
+#             fwhm_ivar=fwhm_ivar, dtype=dtype, **kwargs   
+#         )
 
-    def _get_model_fn(self, split_num):
-        """Get a noise model filename for split split_num; return as <str>"""
-        inm = self._model_inm
+#         # save model-specific info
+#         self._kind = 'isoivariso'
 
-        return simio.get_isoivar_model_fn(
-            inm._qids, split_num, inm._lmax, self._kind, notes=self._notes,
-            data_model=inm._data_model, mask_version=inm._mask_version,
-            bin_apod=inm._use_default_mask, mask_est_name=inm._mask_est_name,
-            mask_obs_name=inm._mask_obs_name, calibrated=inm._calibrated, 
-            downgrade=inm._downgrade, union_sources=inm._union_sources,
-            kfilt_lbounds=inm._kfilt_lbounds, fwhm_ivar=inm._fwhm_ivar, 
-            **inm._kwargs
-        )
+#         # need to init NoiseModel last
+#         super().__init__(notes=notes)
 
-    def _read_model(self, fn):
-        """Read a noise model with filename fn; return a dictionary of noise model variables"""
-        sqrt_cov_ell, model_dict = isoivar_noise.read_isoivar(fn, extra_attrs=['sqrt_cov_mat'])
+#     @property
+#     def _model_inm(self):
+#         return self._inm
 
-        model_dict['sqrt_cov_ell'] = sqrt_cov_ell
+#     @property
+#     def _sim_inm(self):
+#         return self._inm
+
+#     def _get_model_fn(self, split_num):
+#         """Get a noise model filename for split split_num; return as <str>"""
+#         inm = self._model_inm
+
+#         return simio.get_isoivar_model_fn(
+#             inm._qids, split_num, inm._lmax, self._kind, notes=self._notes,
+#             data_model=inm._data_model, mask_version=inm._mask_version,
+#             bin_apod=inm._use_default_mask, mask_est_name=inm._mask_est_name,
+#             mask_obs_name=inm._mask_obs_name, calibrated=inm._calibrated, 
+#             downgrade=inm._downgrade, union_sources=inm._union_sources,
+#             kfilt_lbounds=inm._kfilt_lbounds, fwhm_ivar=inm._fwhm_ivar, 
+#             **inm._kwargs
+#         )
+
+#     def _read_model(self, fn):
+#         """Read a noise model with filename fn; return a dictionary of noise model variables"""
+#         sqrt_cov_ell, model_dict = isoivar_noise.read_isoivar(fn, extra_attrs=['sqrt_cov_mat'])
+
+#         model_dict['sqrt_cov_ell'] = sqrt_cov_ell
         
-        return model_dict
+#         return model_dict
 
-    def _get_model(self, dmap, ivar=None, verbose=False, **kwargs):
-        """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
-        inm = self._model_inm
+#     def _get_model(self, dmap, ivar=None, verbose=False, **kwargs):
+#         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
+#         inm = self._model_inm
 
-        sqrt_cov_ell, sqrt_cov_mat = isoivar_noise.get_isoivariso_noise_covsqrt(
-            dmap, ivar, mask_est=inm._mask_est, verbose=verbose
-        )
+#         sqrt_cov_ell, sqrt_cov_mat = isoivar_noise.get_isoivariso_noise_covsqrt(
+#             dmap, ivar, mask_est=inm._mask_est, verbose=verbose
+#         )
 
-        return {
-            'sqrt_cov_ell': sqrt_cov_ell,
-            'sqrt_cov_mat': sqrt_cov_mat
-            }
+#         return {
+#             'sqrt_cov_ell': sqrt_cov_ell,
+#             'sqrt_cov_mat': sqrt_cov_mat
+#             }
 
-    def _write_model(self, fn, sqrt_cov_ell=None, sqrt_cov_mat=None, **kwargs):
-        """Write a dictionary of noise model variables to filename fn"""
-        isoivar_noise.write_isoivar(
-            fn, sqrt_cov_ell, extra_attrs={'sqrt_cov_mat': sqrt_cov_mat}
-            )
+#     def _write_model(self, fn, sqrt_cov_ell=None, sqrt_cov_mat=None, **kwargs):
+#         """Write a dictionary of noise model variables to filename fn"""
+#         isoivar_noise.write_isoivar(
+#             fn, sqrt_cov_ell, extra_attrs={'sqrt_cov_mat': sqrt_cov_mat}
+#             )
 
-    def _get_sim_fn(self, split_num, sim_num, alm=True, mask_obs=True):
-        """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
-        inm = self._sim_inm
+#     def _get_sim_fn(self, split_num, sim_num, alm=True, mask_obs=True):
+#         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
+#         inm = self._sim_inm
 
-        return simio.get_isoivar_sim_fn(
-            inm._qids, split_num, sim_num, inm._lmax, self._kind,
-            notes=self._notes, alm=alm, mask_obs=mask_obs, 
-            data_model=inm._data_model, mask_version=inm._mask_version,
-            bin_apod=inm._use_default_mask, mask_est_name=inm._mask_est_name,
-            mask_obs_name=inm._mask_obs_name, calibrated=inm._calibrated, 
-            downgrade=inm._downgrade, union_sources=inm._union_sources,
-            kfilt_lbounds=inm._kfilt_lbounds, fwhm_ivar=inm._fwhm_ivar, 
-            **inm._kwargs
-        )
+#         return simio.get_isoivar_sim_fn(
+#             inm._qids, split_num, sim_num, inm._lmax, self._kind,
+#             notes=self._notes, alm=alm, mask_obs=mask_obs, 
+#             data_model=inm._data_model, mask_version=inm._mask_version,
+#             bin_apod=inm._use_default_mask, mask_est_name=inm._mask_est_name,
+#             mask_obs_name=inm._mask_obs_name, calibrated=inm._calibrated, 
+#             downgrade=inm._downgrade, union_sources=inm._union_sources,
+#             kfilt_lbounds=inm._kfilt_lbounds, fwhm_ivar=inm._fwhm_ivar, 
+#             **inm._kwargs
+#         )
 
-    def _get_sim(self, model_dict, seed, ivar=None, mask=None, verbose=False, **kwargs):
-        """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
-        # pass mask = None first to strictly generate alm, only mask if necessary
-        alm = self._get_sim_alm(
-            model_dict, seed, ivar=ivar, mask=None, verbose=verbose, **kwargs
-            )
-        sim = utils.alm2map(
-            alm, shape=self._shape, wcs=self._wcs, dtype=self._dtype
-            )
+#     def _get_sim(self, model_dict, seed, ivar=None, mask=None, verbose=False, **kwargs):
+#         """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
+#         # pass mask = None first to strictly generate alm, only mask if necessary
+#         alm = self._get_sim_alm(
+#             model_dict, seed, ivar=ivar, mask=None, verbose=verbose, **kwargs
+#             )
+#         sim = utils.alm2map(
+#             alm, shape=self._shape, wcs=self._wcs, dtype=self._dtype
+#             )
 
-        if mask is not None:
-            sim *= mask
-        return sim
+#         if mask is not None:
+#             sim *= mask
+#         return sim
 
-    def _get_sim_alm(self, model_dict, seed, ivar=None, mask=None, verbose=False, **kwargs):    
-        """Return a masked alm sim from model_dict, with seed <sequence of ints>"""
-        # Get noise model variables. 
-        sqrt_cov_ell = model_dict['sqrt_cov_ell']
-        sqrt_cov_mat = model_dict['sqrt_cov_mat']
+#     def _get_sim_alm(self, model_dict, seed, ivar=None, mask=None, verbose=False, **kwargs):    
+#         """Return a masked alm sim from model_dict, with seed <sequence of ints>"""
+#         # Get noise model variables. 
+#         sqrt_cov_ell = model_dict['sqrt_cov_ell']
+#         sqrt_cov_mat = model_dict['sqrt_cov_mat']
         
-        alm = isoivar_noise.get_isoivariso_noise_sim(
-            sqrt_cov_ell, sqrt_cov_mat, ivar, nthread=0, seed=seed
-        )
+#         alm = isoivar_noise.get_isoivariso_noise_sim(
+#             sqrt_cov_ell, sqrt_cov_mat, ivar, nthread=0, seed=seed
+#         )
 
-        # We always want shape (num_arrays, num_splits=1, num_pol, nalm).
-        assert alm.ndim == 4, \
-            'Sim must have shape (num_arrays, num_splits=1, num_pol, nalm)'
+#         # We always want shape (num_arrays, num_splits=1, num_pol, nalm).
+#         assert alm.ndim == 4, \
+#             'Sim must have shape (num_arrays, num_splits=1, num_pol, nalm)'
 
-        if mask is not None:
-            sim = utils.alm2map(
-                alm, shape=self._shape, wcs=self._wcs, dtype=self._dtype
-                )
-            sim *= mask
-            utils.map2alm(sim, alm=alm)
+#         if mask is not None:
+#             sim = utils.alm2map(
+#                 alm, shape=self._shape, wcs=self._wcs, dtype=self._dtype
+#                 )
+#             sim *= mask
+#             utils.map2alm(sim, alm=alm)
 
-        return alm
+#         return alm
 
 
-# @register()
+@register()
 class HarmonicMixture(ConfigManager):
     
     @classmethod
-    def _reprname(cls):
+    def noise_model_name(cls):
         return 'mix'
 
-    def __init__(self, noise_models, lmaxs, ell_lows, ell_highs,
-                 profile='cosine', **kwargs):
+    def __init__(self, noise_models, lmaxs, ell_lows, ell_highs, profile='cosine',
+                 **kwargs):
         """A wrapper around instantiated NoiseModel instances that supports
         mixing simulations from multiple instances as a function of ell.
 
@@ -2413,7 +2377,7 @@ class HarmonicMixture(ConfigManager):
         Notes
         -----
         kwargs passed to ConfigManager constructor, except save_to_config and
-        model_str_template which is not utilized for a HarmonicMixture.
+        model_file_template which is not utilized for a HarmonicMixture.
         """
         self._noise_models = noise_models
         self._lmaxs = lmaxs
@@ -2452,10 +2416,14 @@ class HarmonicMixture(ConfigManager):
         for i, noise_model in enumerate(self._noise_models):
             if i == 0:
                 qids = noise_model._qids
+                qid_names = noise_model._qid_names
             else:
                 assert qids == noise_model._qids, \
                     'BaseNoiseModel qids does not match for all noise_models'
+                assert qid_names == noise_model._qid_names, \
+                    'BaseNoiseModel qid_names does not match for all noise_models'             
         self._qids = qids
+        self._qid_names = qid_names
         
         # get config_name from base noise models
         for i, noise_model in enumerate(self._noise_models):
@@ -2467,9 +2435,10 @@ class HarmonicMixture(ConfigManager):
         
         kwargs.update(dict(
             save_to_config=config_name,
-            model_str_template='HarmonicMixtures do not track model files')
+            model_file_template='HarmonicMixtures do not track model files')
             )
-        ConfigManager.__init__(self, **kwargs)
+
+        super().__init__(*qids, **kwargs)
 
     @property
     def _runtime_params(self):
@@ -2505,11 +2474,11 @@ class HarmonicMixture(ConfigManager):
         """Save the config to disk."""
         for noise_model in self._noise_models:
             noise_model._save_to_config()
-        ConfigManager._save_to_config(self)
+        super()._save_to_config()
 
     def _model_param_dict_updater(self, model_param_dict):
         model_param_dict.update(
-            sim_str_template=self._sim_str_template
+            sim_file_template=self._sim_file_template
         )
 
     @classmethod
@@ -2531,14 +2500,7 @@ class HarmonicMixture(ConfigManager):
             A HarmonicMixture instance.
         """
         config_name = os.path.splitext(config_name)[0] 
-
-        # we check user configs before shipped configs
-        config_fn = os.path.join(sints.dconfig['mnms']['configs_path'], config_name)
-        config_fn += '.yaml'
-        try:
-            config_dict = utils.config_from_yaml_file(config_fn)
-        except FileNotFoundError:
-            config_dict = utils.config_from_yaml_resource(f'configs/{config_name}.yaml')
+        config_dict = utils.get_config_dict_protected('noise_models', config_name)
 
         kwargs = config_dict['HarmonicMixture']
         noise_models = []
@@ -2735,7 +2697,7 @@ class HarmonicMixture(ConfigManager):
         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
         base_model_info = ''
         for i, noise_model in enumerate(self._noise_models):
-            base_model_info += str(noise_model.__class__._reprname())
+            base_model_info += noise_model.__class__.noise_model_name()
             base_model_info += f'_lmax{self._lmaxs[i]}'
             if i < len(self._ell_lows):
                 base_model_info += f'{self._profile}'
@@ -2744,10 +2706,10 @@ class HarmonicMixture(ConfigManager):
 
         kwargs = dict(
             config_name=self._config_name,
-            model_name=self.__class__._reprname(),
+            noise_model_name=self.__class__.noise_model_name(),
             base_model_info=base_model_info,
             qids='_'.join(self._qids),
-            arrsfreqs='_'.join(utils.qid2arrfreq(q) for q in self._qids),
+            qid_names=self._qid_names,
             split_num=split_num,
             sim_num=str(sim_num).zfill(4),
             lmax=self._lmaxs[-1],
@@ -2758,9 +2720,10 @@ class HarmonicMixture(ConfigManager):
         kwargs.update(self._base_param_dict)
         kwargs.update(self._model_param_dict)
 
-        fn = sints.dconfig['mnms']['maps_path']
-        fn = os.path.join(fn, self._sim_str_template.format(**kwargs))
-        fn += '.fits'
+        fn = utils.get_from_mnms_config('mnms', 'sims_path')
+        fn = os.path.join(fn, self._sim_file_template.format(**kwargs))
+        if not fn.endswith('.fits'): 
+            fn += '.fits'
         return fn
 
     def _get_sim(self, split_num, sim_num, do_mask_obs=True,

@@ -1,7 +1,6 @@
 from pixell import enmap, curvedsky, fft as enfft, sharp
 import healpy as hp
 from enlib import array_ops
-from soapack import interfaces as sints
 from optweight import alm_c_utils
 
 import numpy as np
@@ -17,21 +16,11 @@ from concurrent import futures
 import multiprocessing
 import os
 import hashlib
+import warnings
 
 # Utility functions to support tiling classes and functions. Just keeping code organized so I don't get whelmed.
 
-def qid2arrfreq(qid):
-    """Transform dr6-style qid to array_frequency, e.g. pa5a to pa5_f090.
-    """
-    arrs2freqs = {
-        4: ['150', '220'],
-        5: ['090', '150'],
-        6: ['090', '150'],
-        7: ['030', '040']
-    }
-    return f"{qid[:3]}_f{arrs2freqs[int(qid[2])]['ab'.index(qid[3])]}"
-
-# copied from soapack.interfaces
+# adapted from soapack.interfaces
 def config_from_yaml_file(filename):
     """Returns a dictionary from a yaml file given by absolute filename.
     """
@@ -46,98 +35,99 @@ def config_from_yaml_resource(resource):
     config = yaml.safe_load(f)
     return config
 
-def get_default_data_model():
-    """Returns a soapack.interfaces.DataModel instance depending on the
-    name of the data model specified in the users's soapack config 
-    'mnms' block, under key 'default_data_model'.
-
-    Returns
-    -------
-    soapack.interfaces.DataModel instance
-        An object used for loading raw data from disk.
-    """
-    return get_data_model()
-
-def get_data_model(name=None):
-    """Returns a soapack.interfaces.DataModel instance depending on the
-    name of the data model.
-    
-    Parameters
-    ----------
-    name : str
-        Name string of DataModel class to load. If None, grab the name
-        specified in the users's soapack config 'mnms' block, under key
-        'default_data_model'. By default None.
-
-    Returns
-    -------
-    soapack.interfaces.DataModel instance
-        An object used for loading raw data from disk.
-    """
-    if name is None:
-        config = sints.dconfig['mnms']
-        name = config['default_data_model']
-    
-    # capitalize all chars except v
-    name = ''.join(
-        [name[i].upper() if name[i] != 'v' else 'v' for i in range(len(name))]
-            )
-    return getattr(sints, name)()
-
-def trim_shared_fn_tags(basefn, ifn):
-    """Return joined tags in input that are not shared with those in a 
-    base filename.
+def get_from_mnms_config(block, key):
+    """Get value from user mnms_config file.
 
     Parameters
     ----------
-    basefn : path-like
-        Base filename of form 'tag1_tag2_tag3
-    ifn : path_like 
-        Input filename of form 'tag2_tag1_tag4_tag5'
+    block : any
+        Block within mnms_config to fetch.
+    key : any
+        Key within block to fetch.
+
+    Returns
+    -------
+    any
+        Value at mnms_config[block][key]
+    """
+    home_fn = os.environ['HOME']
+    mnms_config = config_from_yaml_file(os.path.join(home_fn, '.mnms_config.yaml'))
+    return mnms_config[block][key]
+
+def get_user_config_fn_by_name(config_type, config_name):
+    """Get full path to a user configuration file by the type
+    and name of the file.
+
+    Parameters
+    ----------
+    config_type : path-like
+        Either 'data_models' or 'noise_models'
+    config_name : path-like
+        The name of the file. Any extension will be stripped and replaced
+        with '.yaml'
 
     Returns
     -------
     str
-        In this case, 'tag4_tag5'
+        Full path to file.
     """
-    basefn = os.path.splitext(os.path.basename(basefn))[0]
-    ifn = os.path.splitext(os.path.basename(ifn))[0]
+    assert config_type in ['data_models', 'noise_models'], \
+        'Only allowed config types are data_models or noise_models'
 
-    basetags = basefn.split('_')
-    itags = ifn.split('_')
-
-    otags = []
-    for itag in itags:
-        if itag not in basetags:
-            otags.append(itag)
+    config_name = os.path.splitext(config_name)[0]
+    configs_path = get_from_mnms_config('mnms', 'configs_path')
+    config_fn = os.path.join(configs_path, config_type, config_name)
+    config_fn += '.yaml'
     
-    return '_'.join(otags)
+    return config_fn
 
-def get_default_mask_version():
-    """Returns the mask version (string) depending on what is specified
-    in the user's soapack config. If the 'mnms' block has a key
-    'default_mask_version', return the value of that key. If not, return
-    the 'default_mask_version' from the user's default data model block.
+def get_config_dict_protected(config_type, config_name):
+    """Return a configuration file as a dictionary, ensuring that
+    the file does not exist both as a user file and a packaged file.
+
+    Parameters
+    ----------
+    config_type : path-like
+        Either 'data_models' or 'noise_models'
+    config_name : path-like
+        The name of the file. Any extension will be stripped and replaced
+        with '.yaml'
 
     Returns
     -------
-    str
-        A default mask version string to help find an analysis mask. With
-        no arguments, a NoiseModel constructor will use this mask version
-        to seek the analysis mask in directory mask_path/mask_version.
+    dict
+        Contents of configuration file.
+
+    Raises
+    ------
+    FileExistsError
+        If file with name exists both in user directory and package directory.
     """
-    config = sints.dconfig['mnms']
+    assert config_type in ['data_models', 'noise_models'], \
+        'Only allowed config types are data_models or noise_models'
+
+    config_fn = get_user_config_fn_by_name(config_type, config_name)
+    config_name = os.path.splitext(config_name)[0]
+
+    # protect against case that user config exists of same name as packaged config
+    # search user directory first
     try:
-        mask_version = config['default_mask_version']
-    except KeyError:
-        dm_name = config['default_data_model'].lower()
-        config = sints.dconfig[dm_name]
-        mask_version = config['default_mask_version']
-    return mask_version
+        config_dict = config_from_yaml_file(config_fn)
+        try:
+            config_from_yaml_resource(
+            f'configs/{config_type}/{config_name}.yaml'
+            )
+            raise FileExistsError(
+                f'Ambiguous {config_name}.yaml both user-defined and reserved by mnms package'
+                )
+        except FileNotFoundError:
+            pass
+    except FileNotFoundError:
+        config_dict = config_from_yaml_resource(
+            f'configs/{config_type}/{config_name}.yaml'
+            ) 
 
-def get_nsplits_by_qid(qid, data_model):
-    """Get the number of splits in the raw data corresponding to this array 'qid'"""
-    return int(data_model.adf[data_model.adf['#qid']==qid]['nsplits'])
+    return config_dict
 
 def slice_geometry_by_pixbox(ishape, iwcs, pixbox):
     pb = np.asarray(pixbox)
@@ -1230,9 +1220,28 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, **kwar
     return omap
 
 # this is twice the theoretical CAR bandlimit!
-def lmax_from_wcs(wcs):
-    """Returns 180/wcs.cdelt[1]; this is twice the theoretical CAR bandlimit"""
-    return int(180/np.abs(wcs.wcs.cdelt[1]))
+def lmax_from_wcs(wcs, threshold=1e-6):
+    """Return the lmax corresponding to the Nyquist bandlimit
+    of the wcs, rounded to the nearest integer.
+
+    Parameters
+    ----------
+    wcs : astropy.wcs.WCS
+        The wcs of the desired pixels.
+    threshold : scalar, optional
+        If the lmax is not within threshold of an integer, issue
+        a warning, by default 1e-6.
+
+    Returns
+    -------
+    int
+        Nyquist bandlimit of the wcs.
+    """
+    lmax = 180/np.abs(wcs.wcs.cdelt[1])
+    rounded_lmax = np.round(lmax)
+    if abs(lmax - rounded_lmax) >= threshold:
+        warnings.warn(f'lmax from wcs, {lmax}, more than {threshold} from nearest integer') 
+    return int(rounded_lmax)
 
 def downgrade_from_lmaxs(lmax_in, lmax_out):
     """Maximum integer downgrade factor for pixels to support new, lower lmax"""
@@ -2305,7 +2314,7 @@ def get_seed(split_num, sim_num, data_model, *qids, n_max_qids=4, ndigits=9):
         The 0-based index of the split to simulate.
     sim_num : int
         The map index, used in setting the random seed. Must be non-negative.
-    data_model : soapack.DataModel
+    data_model : soapack_utils.DataModel
         DataModel instance to help load raw products,
     n_max_qids : int, optional
         The maximum number of allowed 'qids' to be passed at once, by default
@@ -2328,7 +2337,7 @@ def get_seed(split_num, sim_num, data_model, *qids, n_max_qids=4, ndigits=9):
     seed = [0 for i in range(3 + n_max_qids)]
     seed[0] = split_num
     seed[1] = sim_num
-    seed[2] = sints.noise_seed_indices[data_model.name]
+    seed[2] = data_model.noise_seed
     for i in range(len(qids)):
         seed[i+3] = hash_qid(qids[i], ndigits=ndigits)
     return seed
@@ -2394,7 +2403,8 @@ def get_catalog(union_sources):
     catalog : (2, N) array
         DEC and RA values (in radians) for each point source.
     """
-    ra, dec = sints.get_act_mr3f_union_sources(version=union_sources)
+    from soapack.interfaces import get_act_mr3f_union_sources
+    ra, dec = get_act_mr3f_union_sources(version=union_sources)
     return np.radians(np.vstack([dec, ra]))        
 
 def eplot(x, *args, fname=None, show=False, **kwargs):
