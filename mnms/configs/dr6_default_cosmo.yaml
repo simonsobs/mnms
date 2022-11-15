@@ -1,12 +1,12 @@
 BaseNoiseModel:
   calibrated: false
-  data_model_name: dr6v3
+  data_model_name: dr6_default
   dtype: f4
   fwhm_ivar: null
   kfilt_lbounds: null
-  mask_est_name: dr6v3_20220316_baseline_union_mask
-  mask_obs_name: dr6v3_xlink_union_mask_0.001
-  union_sources: regular_20220316
+  mask_est_name: dr6v3_20220316_baseline_union_mask.fits
+  mask_obs_name: dr6v3_xlink_union_mask_0.001.fits
+  catalog_name: union_catalog_regular_20220316.csv
 
 TiledNoiseModel:
   delta_ell_smooth: 400
