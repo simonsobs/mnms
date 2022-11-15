@@ -1,4 +1,6 @@
-from mnms import utils, soapack_utils as s_utils, tiled_noise, wav_noise, fdw_noise, isoivar_noise, inpaint
+from mnms import utils, tiled_noise, wav_noise, fdw_noise, isoivar_noise, inpaint
+from actapack import utils as a_utils, DataModel
+
 from pixell import enmap, wcsutils, sharp
 from enlib import bench
 from optweight import wavtrans, alm_c_utils
@@ -16,10 +18,12 @@ import time
 # registry trick here: https://numpy.org/doc/stable/user/basics.dispatch.html
 REGISTERED_NOISE_MODELS = {}
 
+
 def register(registry=REGISTERED_NOISE_MODELS):
     """Add a concrete BaseNoiseModel implementation to the specified registry (dictionary)."""
     def decorator(noise_model_class):
         registry[noise_model_class.__name__] = noise_model_class
+        registry[noise_model_class.noise_model_name()] = noise_model_class
         return noise_model_class
     return decorator
 
@@ -30,8 +34,8 @@ class DataManager:
     def __init__(self, *qids, data_model_name=None, calibrated=False,
                  mask_est=None, mask_est_name=None, mask_obs=None,
                  mask_obs_name=None, ivar_dict=None, cfact_dict=None,
-                 dmap_dict=None, union_sources=None, kfilt_lbounds=None,
-                 fwhm_ivar=None, dtype=None, **kwargs):
+                 dmap_dict=None, catalog_name=None, kfilt_lbounds=None,
+                 fwhm_ivar=None, dtype=np.float32, **kwargs):
         """Helper class for all BaseNoiseModel subclasses. Supports loading raw
         data necessary for all subclasses, such as masks and ivars. Also
         defines some class methods usable in subclasses.
@@ -40,10 +44,8 @@ class DataManager:
         ----------
         qids : str
             One or more qids to incorporate in model.
-        data_model_name : str, optional
-            Name of DataModel instance to help load raw products, by default None.
-            If None, will load the 'default_data_model' from the 'mnms' config.
-            For example, 'dr6v3'.
+        data_model_name : str
+            Name of actapack.DataModel config to help load raw products (required).
         calibrated : bool, optional
             Whether to load calibrated raw data, by default False.
         mask_est : enmap.ndmap, optional
@@ -54,8 +56,8 @@ class DataManager:
             load a mask according to the 'mask_version' and 'mask_est_name' kwargs.
         mask_est_name : str, optional
             Name of harmonic filter estimate mask file, by default None. This mask will
-            be used as the mask_est (see above) if mask_est is None. If mask_est is
-            None and mask_est_name is None, a default mask_est will be loaded from disk.
+            be used as the mask_est (see above) if mask_est is None. Only allows fits
+            or hdf5 files. If neither extension detected, assumed to be fits.
         mask_obs : str, optional
             Mask denoting data to include in building noise model step. If mask_obs=0
             in any pixel, that pixel will not be modeled. Optionally used when drawing
@@ -63,7 +65,8 @@ class DataManager:
             downgraded into compatible wcs with internal NoiseModel operations.
         mask_obs_name : str, optional
             Name of observed mask file, by default None. This mask will be used as the
-            mask_obs (see above) if mask_obs is None. 
+            mask_obs (see above) if mask_obs is None. Only allows fits or hdf5 files.
+            If neither extension detected, assumed to be fits.
         ivar_dict : dict, optional
             A dictionary of inverse-variance maps, indexed by split_num keys. If
             provided, assumed properly downgraded into compatible wcs with internal 
@@ -77,8 +80,9 @@ class DataManager:
             provided, assumed properly downgraded into compatible wcs with internal 
             NoiseModel operations, and with any additional preprocessing specified by
             the model. 
-        union_sources : str, optional
-            A soapack source catalog, by default None. If given, inpaint data and ivar maps.
+        catalog_name : str, optional
+            A source catalog, by default None. If given, inpaint data and ivar maps.
+            Only allows csv or txt files. If neither extension detected, assumed to be csv.
         kfilt_lbounds : size-2 iterable, optional
             The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
             If given, filter data before (possibly) downgrading it. 
@@ -86,37 +90,50 @@ class DataManager:
             FWHM in degrees of Gaussian smoothing applied to ivar maps. Not applied if ivar
             maps are provided manually.
         dtype : np.dtype, optional
-            The data type used in intermediate calculations and return types, by default None.
-            If None, inferred from data_model.dtype.
+            The data type used in intermediate calculations and return types, by default 
+            np.float32.
         kwargs : dict, optional
             Optional keyword arguments to pass to simio.get_sim_mask_fn (currently just
             'galcut' and 'apod_deg'), by default None.
         """
         # store basic set of instance properties
         self._qids = qids
-        self._data_model = s_utils.get_data_model(name=data_model_name)
-        self._data_model_name = self._data_model.name
+        self._data_model = DataModel.from_config(data_model_name)
+        self._data_model_name = os.path.splitext(data_model_name)[0]
         self._qid_names = '_'.join(
-            self._data_model[qid]['qid_name'] for qid in self._qids
+            '{array}_{freq}'.format(**self._data_model.qids_dict[qid]) for qid in qids
             )
         
         self._calibrated = calibrated
+
+        if mask_est_name is not None:
+            if not mask_est_name.endswith(('.fits', '.hdf5')):
+                mask_est_name += '.fits'
         self._mask_est_name = mask_est_name
+        
+        if mask_obs_name is not None:
+            if not mask_obs_name.endswith(('.fits', '.hdf5')):
+                mask_obs_name += '.fits'
         self._mask_obs_name = mask_obs_name
-        self._union_sources = union_sources
+        
+        if catalog_name is not None:
+            if not catalog_name.endswith(('.csv', '.txt')):
+                catalog_name += '.csv'
+        self._catalog_name = catalog_name
+
         if kfilt_lbounds is not None:
             kfilt_lbounds = np.array(kfilt_lbounds).reshape(2)
         self._kfilt_lbounds = kfilt_lbounds
         self._fwhm_ivar = fwhm_ivar
-        self._dtype = dtype if dtype is not None else self._data_model.dtype
+        self._dtype = dtype
 
         # get derived instance properties
         self._num_arrays = len(self._qids)
         for i, qid in enumerate(self._qids):
             if i == 0:
-                num_splits = self._data_model[qid]['num_splits']
+                num_splits = self._data_model.qids_dict[qid]['num_splits']
             else:
-                assert num_splits == self._data_model[qid]['num_splits'], \
+                assert num_splits == self._data_model.qids_dict[qid]['num_splits'], \
                     'num_splits does not match for all qids'
         self._num_splits = num_splits
 
@@ -140,13 +157,14 @@ class DataManager:
         self._full_shape, self._full_wcs = self._check_geometry()
         self._full_lmax = utils.lmax_from_wcs(self._full_wcs)
 
+        # don't pass args up MRO, we have eaten them up here
         super().__init__(**kwargs)
 
     def _check_geometry(self, return_geometry=True):
         """Check that each qid in this instance's qids has compatible shape and wcs."""
         for i, qid in enumerate(self._qids):
             for s in range(self._num_splits):
-                shape, wcs = s_utils.read_map_geometry(self._data_model, qid, split_num=s, ivar=True)
+                shape, wcs = utils.read_map_geometry(self._data_model, qid, split_num=s, ivar=True)
                 shape = shape[-2:]
                 assert len(shape) == 2, 'shape must have only 2 dimensions'
 
@@ -220,7 +238,7 @@ class DataManager:
                 for s in range(self._num_splits):
                     # we want to do this split-by-split in case we can save
                     # memory by downgrading one split at a time
-                    ivar = s_utils.read_map(self._data_model, qid, split_num=s, ivar=True)
+                    ivar = utils.read_map(self._data_model, qid, split_num=s, ivar=True)
                     ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
 
                     # iteratively build the mask_obs at full resolution, 
@@ -267,10 +285,6 @@ class DataManager:
         -------
         enmap.ndmap or bool
             Mask, either read from disk, or array of True.
-
-        Notes
-        -----
-        File must be a .fits file.
         """
         assert mask_type in ['mask_est', 'mask_obs'], \
             'Only allowed mask_types are mask_est or mask_obs'
@@ -281,10 +295,7 @@ class DataManager:
             _dtype = bool
 
         if mask_name is not None:            
-            fn = utils.get_from_mnms_config('mnms', 'masks_path')
-            fn = os.path.join(fn, mask_name)
-            if not fn.endswith('.fits'): 
-                fn += '.fits'
+            fn = utils.get_mnms_fn(mask_name, 'masks')
 
             # Extract mask onto geometry specified by the ivar map.
             mask = enmap.read_map(fn).astype(_dtype, copy=False)
@@ -322,13 +333,13 @@ class DataManager:
         for i, qid in enumerate(self._qids):
             with bench.show(self._action_str(qid, split_num=split_num, ivar=True)):
                 if self._calibrated:
-                    mul = s_utils.get_mult_fact(self._data_model, qid, ivar=True)
+                    mul = utils.get_mult_fact(self._data_model, qid, ivar=True)
                 else:
                     mul = 1
 
                 # we want to do this split-by-split in case we can save
                 # memory by downgrading one split at a time
-                ivar = s_utils.read_map(self._data_model, qid, split_num=split_num, ivar=True)
+                ivar = utils.read_map(self._data_model, qid, split_num=split_num, ivar=True)
                 ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
                 ivar *= mul
                 
@@ -398,18 +409,18 @@ class DataManager:
         for i, qid in enumerate(self._qids):
             with bench.show(self._action_str(qid, split_num=split_num, cfact=True)):
                 if self._calibrated:
-                    mul = s_utils.get_mult_fact(self._data_model, qid, ivar=True)
+                    mul = utils.get_mult_fact(self._data_model, qid, ivar=True)
                 else:
                     mul = 1
 
                 # get the coadd from disk, this is the same for all splits
-                cvar = s_utils.read_map(self._data_model, qid, coadd=True, ivar=True)
+                cvar = utils.read_map(self._data_model, qid, coadd=True, ivar=True)
                 cvar = enmap.extract(cvar, self._full_shape, self._full_wcs)
                 cvar *= mul
 
                 # we want to do this split-by-split in case we can save
                 # memory by downgrading one split at a time
-                ivar = s_utils.read_map(self._data_model, qid, split_num=split_num, ivar=True)
+                ivar = utils.read_map(self._data_model, qid, split_num=split_num, ivar=True)
                 ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
                 ivar *= mul
 
@@ -463,33 +474,33 @@ class DataManager:
         for i, qid in enumerate(self._qids):
             with bench.show(self._action_str(qid, split_num=split_num)):
                 if self._calibrated:
-                    mul_imap = s_utils.get_mult_fact(self._data_model, qid, ivar=False)
-                    mul_ivar = s_utils.get_mult_fact(self._data_model, qid, ivar=True)
+                    mul_imap = utils.get_mult_fact(self._data_model, qid, ivar=False)
+                    mul_ivar = utils.get_mult_fact(self._data_model, qid, ivar=True)
                 else:
                     mul_imap = 1
                     mul_ivar = 1
 
                 # get the coadd from disk, this is the same for all splits
-                cmap = s_utils.read_map(self._data_model, qid, coadd=True, ivar=False)
+                cmap = utils.read_map(self._data_model, qid, coadd=True, ivar=False)
                 cmap = enmap.extract(cmap, self._full_shape, self._full_wcs) 
                 cmap *= mul_imap
 
                 # need full-res coadd ivar if inpainting or kspace filtering
-                if self._union_sources or self._kfilt_lbounds:
-                    cvar = s_utils.read_map(self._data_model, qid, coadd=True, ivar=True)
+                if self._catalog_name or self._kfilt_lbounds:
+                    cvar = utils.read_map(self._data_model, qid, coadd=True, ivar=True)
                     cvar = enmap.extract(cvar, self._full_shape, self._full_wcs)
                     cvar *= mul_ivar
 
                 # we want to do this split-by-split in case we can save
                 # memory by downgrading one split at a time
-                imap = s_utils.read_map(self._data_model, qid, split_num=split_num, ivar=False)
+                imap = utils.read_map(self._data_model, qid, split_num=split_num, ivar=False)
                 imap = enmap.extract(imap, self._full_shape, self._full_wcs)
                 imap *= mul_imap
 
                 # need to reload ivar at full res and get ivar_eff
                 # if inpainting or kspace filtering
-                if self._union_sources or self._kfilt_lbounds:
-                    ivar = s_utils.read_map(self._data_model, qid, split_num=split_num, ivar=True)
+                if self._catalog_name or self._kfilt_lbounds:
+                    ivar = utils.read_map(self._data_model, qid, split_num=split_num, ivar=True)
                     ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
                     ivar *= mul_ivar
                     ivar_eff = utils.get_ivar_eff(ivar, sum_ivar=cvar, use_zero=True)
@@ -497,7 +508,7 @@ class DataManager:
                 # take difference before inpainting or kspace_filtering
                 dmap = imap - cmap
 
-                if self._union_sources:
+                if self._catalog_name:
                     # the boolean mask for this array, split, is non-zero ivar.
                     # iteratively build the boolean mask at full resolution, 
                     # loop over leading dims. this really should be a singleton
@@ -539,15 +550,15 @@ class DataManager:
             The 0-based index of the split that is inpainted, used to get unique seeds 
             per split if this function is called per split. Otherwise defaults to 0.
         """
-        assert self._union_sources is not None, f'Inpainting needs union-sources, got {self._union_sources}'
-
-        catalog = utils.get_catalog(self._union_sources)
+        fn = utils.get_mnms_fn(self._catalog_name, 'catalogs')
+        catalog = utils.get_catalog(fn)
+        
         mask_bool = utils.get_mask_bool(mask)
 
         if qid:
             # This makes sure each qid gets a unique seed. The sim index is fixed.
             split_idx = 0 if split_num is None else split_num
-            seed = utils.get_seed(*(split_idx, 999_999_999, self._data_model, qid))
+            seed = utils.get_seed(*(split_idx, 999_999_999, self._data_model_name, qid))
         else:
             seed = None
 
@@ -579,7 +590,7 @@ class DataManager:
         -------
         enmap.ndmap
             An empty ndmap with shape (num_arrays, num_splits, num_pol, ny, nx),
-            with dtype of the instance soapack.DataModel. If ivar is True, num_pol
+            with dtype of the instance DataModel. If ivar is True, num_pol
             likely is 1. If ivar is False, num_pol likely is 3.
         """
         # read geometry from the map to be loaded. we really just need the first component,
@@ -587,7 +598,7 @@ class DataManager:
         footprint_shape = shape[-2:]
         footprint_wcs = wcs
 
-        shape, _ = s_utils.read_map_geometry(self._data_model, self._qids[0], 0, ivar=ivar)
+        shape, _ = utils.read_map_geometry(self._data_model, self._qids[0], 0, ivar=ivar)
         shape = (shape[0], *footprint_shape)
 
         if num_arrays is None:
@@ -640,7 +651,7 @@ class DataManager:
             elif cfact:
                 mstr = 'cfact'
         else:
-            if self._union_sources:
+            if self._catalog_name:
                 ostr += ', inpainting'
             if self._kfilt_lbounds is not None:
                 ostr += ', kspace filtering'
@@ -735,7 +746,7 @@ class ConfigManager(ABC):
         """A shorthand name for this model, e.g. for filenames"""
         return ''
 
-    def __init__(self, *args, save_to_config=None, dumpable=True, 
+    def __init__(self, config_name=None, dumpable=True, 
                  model_file_template=None, sim_file_template=None,
                  notes=None, **kwargs):
         """Helper class for any object seeking to utilize a noise_model config
@@ -744,12 +755,13 @@ class ConfigManager(ABC):
 
         Parameters
         ----------
-        save_to_config : str, optional
-            Name of config file to save this NoiseModel instance's parameters,
-            set to default based on current time if None. Cannot be shared with
-            a config shipped by the mnms package. If dumpable is True and this
-            config already exists, all parameters will be checked for
-            compatibility with existing config parameters.
+        config_name : str, optional
+            Name of configuration file to save this NoiseModel instance's
+            parameters, set to default based on current time if None. Cannot
+            be shared with a file shipped by the mnms package. If dumpable is
+            True and this file already exists, all parameters will be checked
+            for compatibility with existing parameters within file. Must be 
+            a yaml file.
         dumpable: bool, optional
             Whether this instance will dump its parameters to a config. If False,
             user is responsible for covariance and sim filename management.
@@ -768,6 +780,10 @@ class ConfigManager(ABC):
             identical instances, by default None. Will be added as comment to
             config above subclass block when written to config for the first
             time.
+
+        Notes
+        -----
+        Only supports configuration files with a yaml extension.
         """
         # check dumpability of model and whether filenames have been provided
         self._dumpable = dumpable and not self._runtime_params
@@ -784,8 +800,8 @@ class ConfigManager(ABC):
                 'filenames: must supply model_file_template and sim_file_template'
         
         # format strings and params for saving models and sims to disk
-        if save_to_config is None:
-            save_to_config = self._get_default_config_name()
+        if config_name is None:
+            config_name = self._get_default_config_name()
         
         if model_file_template is None:
             model_file_template = '{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
@@ -793,17 +809,16 @@ class ConfigManager(ABC):
         if sim_file_template is None:
             sim_file_template = '{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{mask_obs_str}_{alm_str}{sim_num}'
 
-        self._config_name = save_to_config
+        self._config_name = os.path.splitext(config_name)[0]
         self._model_file_template = model_file_template
         self._sim_file_template = sim_file_template
 
         # check availability, compatibility of config name
         if self._dumpable:
-            self._config_fn = self._check_config(save_to_config, return_config_fn=True)
+            self._config_fn = self._check_config(return_config_fn=True)
 
         self._notes = notes
 
-        # don't pass args up MRO, we have eaten them here
         super().__init__(**kwargs)
 
     @property
@@ -841,14 +856,12 @@ class ConfigManager(ABC):
         default_name += f'{str(t.tm_min).zfill(2)}'
         return default_name
 
-    def _check_config(self, config_name, return_config_fn=False):
+    def _check_config(self, return_config_fn=False):
         """Check for compatibility of supplied config with existing config on
         disk, if there is one.
 
         Parameters
         ----------
-        config_name : str
-            Name of desired config to be saved to disk.
         return_config_fn : bool, optional
             Return full path to supplied config, by default False.
 
@@ -873,23 +886,21 @@ class ConfigManager(ABC):
             3. It exists on-disk and the subclass parameters identically match
                the supplied subclass parameters.
         """
-        config_name = os.path.splitext(config_name)[0]
+        config_name = self._config_name.copy() # don't want to add extension to attribute
 
-        # dont want to allow user to write to a packaged config
-        try:
-            utils.config_from_yaml_resource(f'configs/noise_models/{config_name}.yaml')
-            raise FileExistsError(f'{config_name}.yaml reserved by mnms package, cannot write to it')
-        except FileNotFoundError:
-             # this config_name is not a packaged config
-            config_fn = utils.get_user_config_fn_by_name('noise_models', config_name)
+        if not config_name.endswith('.yaml'):
+            config_name += config_name + '.yaml'
+
+        # dont want to allow user to write to a packaged or distributed config
+        config_fn = utils.get_mnms_fn(config_name, 'configs', to_write=True)
 
         # if config name already exists on disk in user config directory, we
         # want to check if our parameters are equivalent to what's there
-        if os.path.exists(config_fn):
-            existing_config_dict = utils.config_from_yaml_file(config_fn)
+        if os.path.isfile(config_fn):
+            existing_config_dict = a_utils.config_from_yaml_file(config_fn)
             existing_base_param_dict = existing_config_dict['BaseNoiseModel']
             assert self._base_param_dict == existing_base_param_dict, \
-                f'Existing {config_name}.yaml BaseNoiseModel parameters do not match ' + \
+                f'Existing {config_name} BaseNoiseModel parameters do not match ' + \
                 f'supplied BaseNoiseModel parameters'
 
             # if no NoiseModel of this type in the existing config, can return as-is
@@ -898,7 +909,7 @@ class ConfigManager(ABC):
                 model_param_dict = self._model_param_dict.copy()
                 self._model_param_dict_updater(model_param_dict)
                 assert model_param_dict == existing_model_param_dict, \
-                    f'Existing {config_name}.yaml {self.__class__.__name__} parameters ' + \
+                    f'Existing {config_name} {self.__class__.__name__} parameters ' + \
                     f'do not match supplied {self.__class__.__name__} parameters'
 
         if return_config_fn:
@@ -909,12 +920,12 @@ class ConfigManager(ABC):
     def _save_to_config(self):
         """Save the config to disk."""
         if self._dumpable:
-            self._check_config(self._config_name)
-            if not os.path.exists(self._config_fn):
+            self._check_config()
+            if not os.path.isfile(self._config_fn):
                 with open(self._config_fn, 'w') as f:
                     yaml.safe_dump({'BaseNoiseModel': self._base_param_dict}, f)
                     
-            existing_config_dict = utils.config_from_yaml_file(self._config_fn)
+            existing_config_dict = a_utils.config_from_yaml_file(self._config_fn)
             if self.__class__.__name__ not in existing_config_dict:
                 with open(self._config_fn, 'a') as f:
                     f.write('\n')
@@ -979,9 +990,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             data_model_name=self._data_model_name,
             num_splits=self._num_splits, 
             calibrated=self._calibrated,
-            mask_est_name=self._mask_est_name,
-            mask_obs_name=self._mask_obs_name,
-            union_sources=self._union_sources,
+            mask_est_name=os.path.splitext(self._mask_est_name)[0],
+            mask_obs_name=os.path.splitext(self._mask_obs_name)[0],
+            catalog_name=os.path.splitext(self._catalog_name)[0],
             kfilt_lbounds=self._kfilt_lbounds,
             fwhm_ivar=self._fwhm_ivar,
             dtype=np.dtype(self._dtype).str[1:], # remove endianness
@@ -1002,7 +1013,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         ----------
         config_name : str
             Name of config from which to read parameters. First check user
-            config directory, then mnms package.
+            config directory, then mnms package. Only allows yaml files.
         qids : str
             One or more array qids for this model.
 
@@ -1011,19 +1022,23 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         BaseNoiseModel
             An instance of a BaseNoiseModel subclass.
         """
-        config_name = os.path.splitext(config_name)[0] 
-        config_dict = utils.get_config_dict_protected('noise_models', config_name)
+        if not config_name.endswith('.yaml'):
+            config_name += '.yaml'
+
+        # to_write=False since this won't be dumpable
+        config_fn = utils.get_mnms_fn(config_name, 'configs', to_write=False)
+        config_dict = a_utils.config_from_yaml_file(config_fn)
 
         kwargs = config_dict['BaseNoiseModel']
         kwargs.update(config_dict[cls.__name__])
         kwargs.update(dict(
-            save_to_config=config_name,
+            config_name=config_name,
             dumpable=False
             ))
 
         return cls(*qids, **kwargs)
 
-    def _get_model_fn(self, split_num, lmax):
+    def _get_model_fn(self, split_num, lmax, to_write=False):
         """Get a noise model filename for split split_num; return as <str>"""
         kwargs = dict(
             config_name=self._config_name,
@@ -1037,9 +1052,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         kwargs.update(self._base_param_dict)
         kwargs.update(self._model_param_dict)
 
-        fn = utils.get_from_mnms_config('mnms', 'models_path')
-        fn = os.path.join(fn, self._model_file_template.format(**kwargs))
+        fn = self._model_file_template.format(**kwargs)
         fn += self._model_ext
+        fn = utils.get_mnms_fn(fn, 'models', to_write=to_write)
         return fn
 
     @property
@@ -1047,7 +1062,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     def _model_ext(self):
         return ''
 
-    def _get_sim_fn(self, split_num, sim_num, lmax, alm=True, mask_obs=True):
+    def _get_sim_fn(self, split_num, sim_num, lmax, alm=True, mask_obs=True, to_write=False):
         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
         kwargs = dict(
             config_name=self._config_name,
@@ -1064,10 +1079,10 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         kwargs.update(self._base_param_dict)
         kwargs.update(self._model_param_dict)
 
-        fn = utils.get_from_mnms_config('mnms', 'sims_path')
-        fn = os.path.join(fn, self._sim_file_template.format(**kwargs))
+        fn = self._sim_file_template.format(**kwargs)
         if not fn.endswith('.fits'): 
             fn += '.fits'
+        fn = utils.get_mnms_fn(fn, 'sims', to_write=to_write)
         return fn
 
     @property
@@ -1155,7 +1170,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             self.keep_model(split_num, lmax, model_dict)
 
         if write:
-            fn = self._get_model_fn(split_num, lmax)
+            fn = self._get_model_fn(split_num, lmax, to_write=True)
             self._write_model(fn, **model_dict)
 
         return model_dict
@@ -1188,16 +1203,16 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         FileNotFoundError
             If 'generate' is False and the model does not exist on-disk.
         """
-        fn = self._get_model_fn(split_num, lmax)
         try:
+            fn = self._get_model_fn(split_num, lmax, to_write=False)
             return self._read_model(fn)
-        except (FileNotFoundError, OSError) as e:
+        except FileNotFoundError as e:
             if generate:
                 print(f'Model for split {split_num}, lmax {lmax} not found on-disk, generating instead')
                 return False
             else:
                 print(f'Model for split {split_num}, lmax {lmax} not found on-disk, please generate it first')
-                raise FileNotFoundError(fn) from e
+                raise e
 
     def keep_model(self, split_num, lmax, model_dict):
         """Store a dictionary of noise model objects in instance attributes under key split_num, lmax"""
@@ -1322,7 +1337,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             self.keep_ivar(split_num, lmax, ivar)
         
         if write:
-            fn = self._get_sim_fn(split_num, sim_num, lmax, alm=alm, mask_obs=do_mask_obs)
+            fn = self._get_sim_fn(split_num, sim_num, lmax, alm=alm, mask_obs=do_mask_obs, to_write=True)
             if alm:
                 utils.write_alm(fn, sim)
             else:
@@ -1331,7 +1346,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         return sim
 
     def _check_sim_on_disk(self, split_num, sim_num, lmax, alm=True, do_mask_obs=True,
-                           return_if_exists=True, generate=True):
+                           generate=True):
         """Check if this NoiseModel's sim for a given split, sim exists on-disk. 
         If it does, return it. Depending on the 'generate' kwarg, return either 
         False or raise a FileNotFoundError if it does not exist on-disk.
@@ -1349,9 +1364,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         do_mask_obs : bool, optional
             Whether the sim has been masked by this NoiseModel's mask_obs
             in map-space, by default True.
-        return_if_exists: bool, optional
-            If the sim exists on-disk, then return it. Otherwise, return True. By
-            default True.
         generate : bool, optional
             If the sim does not exist on-disk and 'generate' is True, then return
             False. If the sim does not exist on-disk and 'generate' is False, then
@@ -1367,29 +1379,24 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         ------
         FileNotFoundError
             If 'generate' is False and the sim does not exist on-disk.
-        """        
-        fn = self._get_sim_fn(split_num, sim_num, lmax, alm=alm, mask_obs=do_mask_obs)
-        if os.path.isfile(fn):
-            if return_if_exists:
-                if alm:
-                    return utils.read_alm(fn)
-                else:
-                    return enmap.read_map(fn)
+        """
+        try:        
+            fn = self._get_sim_fn(split_num, sim_num, lmax, alm=alm, mask_obs=do_mask_obs, to_write=False)
+            if alm:
+                return utils.read_alm(fn)
             else:
-                return True
-        else:
+                return enmap.read_map(fn)
+        except FileNotFoundError as e:
             if generate:
                 print(f'Sim for split {split_num}, map {sim_num}, lmax {lmax} not found on-disk, generating instead')
                 return False
             else:
                 print(f'Sim for split {split_num}, map {sim_num}, lmax {lmax} not found on-disk, please generate it first')
-                raise FileNotFoundError(fn)
+                raise e
 
     def _get_seed(self, split_num, sim_num):
         """Return seed for sim with split_num, sim_num."""
-        return utils.get_seed(
-            *(split_num, sim_num, self._data_model, *self._qids)
-            )
+        return utils.get_seed(*(split_num, sim_num, self._data_model_name, *self._qids))
 
     @abstractmethod
     def _get_sim(self, model_dict, seed, lmax, mask, ivar, verbose):
@@ -2376,7 +2383,7 @@ class HarmonicMixture(ConfigManager):
 
         Notes
         -----
-        kwargs passed to ConfigManager constructor, except save_to_config and
+        kwargs passed to ConfigManager constructor, except config_name and
         model_file_template which is not utilized for a HarmonicMixture.
         """
         self._noise_models = noise_models
@@ -2434,11 +2441,12 @@ class HarmonicMixture(ConfigManager):
                     'BaseNoiseModel config_name does not match for all noise_models'
         
         kwargs.update(dict(
-            save_to_config=config_name,
+            config_name=config_name,
             model_file_template='HarmonicMixtures do not track model files')
             )
 
-        super().__init__(*qids, **kwargs)
+        # don't pass qids up MRO, we have eaten them up here
+        super().__init__(**kwargs)
 
     @property
     def _runtime_params(self):
@@ -2490,7 +2498,7 @@ class HarmonicMixture(ConfigManager):
         ----------
         config_name : str
             Name of config from which to read parameters. First check user
-            config directory, then mnms package.
+            config directory, then mnms package. Only allows yaml files.
         qids : str
             One or more array qids for this model.
 
@@ -2499,8 +2507,12 @@ class HarmonicMixture(ConfigManager):
         HarmonicMixture
             A HarmonicMixture instance.
         """
-        config_name = os.path.splitext(config_name)[0] 
-        config_dict = utils.get_config_dict_protected('noise_models', config_name)
+        if not config_name.endswith('.yaml'):
+            config_name += '.yaml'
+
+        # to_write=False since this won't be dumpable
+        config_fn = utils.get_mnms_fn(config_name, 'configs', to_write=False)
+        config_dict = a_utils.config_from_yaml_file(config_fn)
 
         kwargs = config_dict['HarmonicMixture']
         noise_models = []
@@ -2581,11 +2593,6 @@ class HarmonicMixture(ConfigManager):
             A sim of this HarmonicMixture with the specified sim num, with shape
             (num_arrays, num_splits=1, num_pol, ny, nx), even if some of these
             axes have size 1. As implemented, num_splits is always 1. 
-
-        Notes
-        -----
-        Writing the mixed sim to disk cannot yet be implemented due to filename 
-        too long errors.
         """
         assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
 
@@ -2614,7 +2621,7 @@ class HarmonicMixture(ConfigManager):
                     )
 
         if write_mix:
-            fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_obs)
+            fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_obs, to_write=True)
             if alm:
                 utils.write_alm(fn, sim)
             else:
@@ -2623,7 +2630,7 @@ class HarmonicMixture(ConfigManager):
         return sim
 
     def _check_sim_on_disk(self, split_num, sim_num, alm=True, do_mask_obs=True,
-                           return_if_exists=True, generate=True, generate_mix=True):
+                           generate=True, generate_mix=True):
         """Check if this HarmonicMixture's sim a given split, sim exists on-disk. 
         If it does, return it. Depending on the 'generate_mix' kwarg, return either 
         False or raise a FileNotFoundError if it does not exist on-disk. Likewise,
@@ -2643,9 +2650,6 @@ class HarmonicMixture(ConfigManager):
         do_mask_obs : bool, optional
             Whether to look for a masked HarmonicMixture and/or component noise_model
             sims, by default True.
-        return_if_exists: bool, optional
-            If the mixture sim exists on-disk, then return it. Otherwise, return True. By
-            default True.
         generate : bool, optional
             Whether to allow component noise_models to generate not-on-disk sims on-the-fly,
             by default True.
@@ -2668,32 +2672,33 @@ class HarmonicMixture(ConfigManager):
             If 'generate' is False and the sim of a given component noise_model does not
             exist on-disk.
         """
-        fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_obs)
-        if os.path.isfile(fn):
-            if return_if_exists:
-                if alm:
-                    return utils.read_alm(fn)
-                else:
-                    return enmap.read_map(fn)
+        try:
+            fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_obs, to_write=False)
+            if alm:
+                return utils.read_alm(fn)
             else:
-                return True
-        else:
+                return enmap.read_map(fn)
+        except FileNotFoundError as e:
             if generate_mix:
                 print(f'Sim for split {split_num}, map {sim_num} not found on-disk, generating instead')
                 for i, noise_model in enumerate(self._noise_models):
-                    _ = noise_model._check_sim_on_disk(
-                        split_num, sim_num, self._lmaxs[i], alm=True,
-                        do_mask_obs=do_mask_obs, return_if_exists=False,
-                        generate=generate
-                    )
+                    lmax = self._lmaxs[i]
+                    try:        
+                        noise_model._get_sim_fn(split_num, sim_num, lmax, alm=True, mask_obs=do_mask_obs, to_write=False)
+                    except FileNotFoundError as e:
+                        if generate:
+                            print(f'Sim for noise_model {i}, split {split_num}, map {sim_num}, lmax {lmax} not found on-disk, generating instead')
+                        else:
+                            print(f'Sim for noise_model {i}, split {split_num}, map {sim_num}, lmax {lmax} not found on-disk, please generate it first')
+                            raise e
                 
-                # if we've gotten here, then either generate is True or all base sims exist on disk
+                # if we've gotten here, then either all base sims exist on disk or generate is True
                 return False
             else:
                 print(f'Sim for split {split_num}, map {sim_num} not found on-disk, please generate it first')
-                raise FileNotFoundError(fn)
+                raise e
 
-    def _get_sim_fn(self, split_num, sim_num, alm=True, mask_obs=True):
+    def _get_sim_fn(self, split_num, sim_num, alm=True, mask_obs=True, to_write=False):
         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
         base_model_info = ''
         for i, noise_model in enumerate(self._noise_models):
@@ -2720,10 +2725,10 @@ class HarmonicMixture(ConfigManager):
         kwargs.update(self._base_param_dict)
         kwargs.update(self._model_param_dict)
 
-        fn = utils.get_from_mnms_config('mnms', 'sims_path')
-        fn = os.path.join(fn, self._sim_file_template.format(**kwargs))
+        fn = self._sim_file_template.format(**kwargs)
         if not fn.endswith('.fits'): 
             fn += '.fits'
+        fn = utils.get_mnms_fn(fn, 'sims', to_write=to_write)
         return fn
 
     def _get_sim(self, split_num, sim_num, do_mask_obs=True,
