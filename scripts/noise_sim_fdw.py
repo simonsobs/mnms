@@ -1,5 +1,4 @@
 from mnms import noise_models as nm
-from soapack import interfaces as sints
 import argparse
 import numpy as np
 
