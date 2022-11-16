@@ -1188,20 +1188,22 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         """
         self._save_to_config()
 
-        downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax) 
+        downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
+        lmax_model = lmax
+        lmax *= self._pre_filt_rel_upgrade
         downgrade //= self._pre_filt_rel_upgrade
 
         if check_in_memory:
-            if (split_num, lmax) in self._model_dict:
-                return self.model(split_num, lmax)
+            if (split_num, lmax_model) in self._model_dict:
+                return self.model(split_num, lmax_model)
             else:
                 pass
 
         if check_on_disk:
-            res = self._check_model_on_disk(split_num, lmax, generate=generate)
+            res = self._check_model_on_disk(split_num, lmax_model, generate=generate)
             if res is not False:
                 if keep_model:
-                    self.keep_model(split_num, lmax, res)
+                    self.keep_model(split_num, lmax_model, res)
                 return res
             else: # generate == True
                 pass
@@ -1235,7 +1237,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             dmap = self.dmap(split_num, lmax)
 
         # get the model
-        with bench.show(f'Generating noise model for split {split_num}, lmax {lmax}'):
+        with bench.show(f'Generating noise model for split {split_num}, lmax {lmax_model}'):
             # in order to have load/keep operations in abstract get_model, need
             # to pass ivar and mask_obs here, rather than e.g. split_num
             model_dict = self._get_model(
@@ -1244,7 +1246,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         # keep, write data if requested
         if keep_model:
-            self.keep_model(split_num, lmax, model_dict)
+            self.keep_model(split_num, lmax_model, model_dict)
 
         if keep_mask_est:
             self.keep_mask_est(lmax, mask_est)
@@ -1262,7 +1264,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             self.keep_dmap(split_num, lmax, dmap)
 
         if write:
-            fn = self._get_model_fn(split_num, lmax, to_write=True)
+            fn = self._get_model_fn(split_num, lmax_model, to_write=True)
             self._write_model(fn, **model_dict)
 
         return model_dict
@@ -1608,15 +1610,16 @@ class TiledNoiseModel(BaseNoiseModel):
 
     def _get_model(self, dmap, lmax, mask_obs, mask_est, ivar, verbose):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
-        downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
+        lmax_model = lmax // self._pre_filt_rel_upgrade
+        downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax_model)
         _, wcs = utils.downgrade_geometry_cc_quad(
             self._full_shape, self._full_wcs, downgrade
             )
         
         sqrt_cov_mat, sqrt_cov_ell = tiled_noise.get_tiled_noise_covsqrt(
-            dmap, lmax*self._pre_filt_rel_upgrade, mask_obs=mask_obs,
-            mask_est=mask_est, ivar=ivar, width_deg=self._width_deg,
-            height_deg=self._height_deg, delta_ell_smooth=self._delta_ell_smooth,
+            dmap, lmax, mask_obs=mask_obs, mask_est=mask_est, ivar=ivar,
+            width_deg=self._width_deg, height_deg=self._height_deg,
+            delta_ell_smooth=self._delta_ell_smooth,
             post_filt_rel_downgrade=self._pre_filt_rel_upgrade,
             post_filt_downgrade_wcs=wcs, nthread=0, verbose=verbose
         )
@@ -1762,7 +1765,7 @@ class WaveletNoiseModel(BaseNoiseModel):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
         # method assumes 4d dmap
         sqrt_cov_mat, sqrt_cov_ell, w_ell = wav_noise.estimate_sqrt_cov_wav_from_enmap(
-            dmap[:, 0], lmax, mask_obs, mask_est, lamb=self._lamb, 
+            dmap.squeeze(axis=-4), lmax, mask_obs, mask_est, lamb=self._lamb, 
             w_lmin=self._w_lmin, w_lmax_j=self._w_lmax_j,
             smooth_loc=self._smooth_loc, fwhm_fact=self._fwhm_fact_func
         )
@@ -1989,19 +1992,20 @@ class FDWNoiseModel(BaseNoiseModel):
 
     def _get_model(self, dmap, lmax, mask_obs, mask_est, ivar, verbose):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
-        if lmax not in self._fk_dict:
-            print('Building and storing FDWKernels')
-            self._fk_dict[lmax] = self._get_kernels(lmax)
-        fk = self._fk_dict[lmax]
-
-        downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
+        lmax_model = lmax // self._pre_filt_rel_upgrade
+        downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax_model)
         _, wcs = utils.downgrade_geometry_cc_quad(
             self._full_shape, self._full_wcs, downgrade
-            )
+            )        
+        
+        if lmax_model not in self._fk_dict:
+            print('Building and storing FDWKernels')
+            self._fk_dict[lmax_model] = self._get_kernels(lmax_model)
+        fk = self._fk_dict[lmax_model]
         
         sqrt_cov_mat, sqrt_cov_ell = fdw_noise.get_fdw_noise_covsqrt(
-            fk, dmap, lmax*self._pre_filt_rel_upgrade, mask_obs=mask_obs,
-            mask_est=mask_est, fwhm_fact=self._fwhm_fact_func, 
+            fk, dmap, lmax, mask_obs=mask_obs, mask_est=mask_est,
+            fwhm_fact=self._fwhm_fact_func, 
             post_filt_rel_downgrade=self._pre_filt_rel_upgrade,
             post_filt_downgrade_wcs=wcs, nthread=0, verbose=verbose
         )

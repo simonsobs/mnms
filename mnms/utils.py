@@ -47,6 +47,10 @@ def get_mnms_fn(basename, pathtype, no_fn_collisions=True, to_write=False):
 
     Raises
     ------
+    KeyError
+        If private_path not in user's .mnms_config.yaml file but to_write
+        is True.
+
     FileExistsError
         If to_write is False:
             If no_fn_collisions is True and more than one of fns exists.
@@ -68,12 +72,23 @@ def get_mnms_fn(basename, pathtype, no_fn_collisions=True, to_write=False):
     # e.g. model.fits --> models/model.fits
     basename = os.path.join(pathtype, basename)
 
-    private_fn = a_utils.get_system_fn(
-        '.mnms_config', basename, config_keys=['private_path']
-        )
-    public_fn = a_utils.get_system_fn(
-        '.mnms_config', basename, config_keys=['public_path']
-        )
+    try:
+        private_fn = a_utils.get_system_fn(
+            '.mnms_config', basename, config_keys=['private_path']
+            )
+    except KeyError as e:
+        if to_write:
+            raise e
+        else:
+            private_fn = ''
+
+    try:
+        public_fn = a_utils.get_system_fn(
+            '.mnms_config', basename, config_keys=['public_path']
+            )
+    except KeyError:
+        public_fn = ''
+
     package_fn = a_utils.get_package_fn('mnms', basename)
     fns = [private_fn, public_fn, package_fn]
 
