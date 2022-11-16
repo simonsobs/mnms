@@ -32,7 +32,7 @@ def register(registry=REGISTERED_NOISE_MODELS):
 class DataManager:
 
     def __init__(self, *qids, data_model_name=None, calibrated=False,
-                 mask_est=None, mask_est_name=None, mask_obs=None,
+                 mask_est_dict=None, mask_est_name=None, mask_obs_dict=None,
                  mask_obs_name=None, ivar_dict=None, cfact_dict=None,
                  dmap_dict=None, catalog_name=None, kfilt_lbounds=None,
                  fwhm_ivar=None, dtype=np.float32, **kwargs):
@@ -98,6 +98,9 @@ class DataManager:
         """
         # store basic set of instance properties
         self._qids = qids
+
+        if data_model_name is None:
+            raise ValueError('data_model_name cannot be None')
         self._data_model = DataModel.from_config(data_model_name)
         self._data_model_name = os.path.splitext(data_model_name)[0]
         self._qid_names = '_'.join(
@@ -138,8 +141,13 @@ class DataManager:
         self._num_splits = num_splits
 
         # Possibly store input data
-        self._mask_est = mask_est
-        self._mask_obs = mask_obs
+        if mask_est_dict is None:
+            mask_est_dict = {}
+        self._mask_est_dict = mask_est_dict
+        
+        if mask_obs_dict is None:
+            mask_obs_dict = {}
+        self._mask_obs_dict = mask_obs_dict
         
         if ivar_dict is None:
             ivar_dict = {}
@@ -661,6 +669,18 @@ class DataManager:
         ostr += f' {mstr} for {qid}, split {split_num}'
         return ostr
 
+    def keep_mask_est(self, lmax, mask_est):
+        """Store a dictionary of mask_est in instance attributes under key lmax"""
+        if lmax not in self._mask_est_dict:
+            print(f'Storing mask_est for lmax {lmax} into memory')
+            self._mask_est_dict[lmax] = mask_est
+
+    def keep_mask_obs(self, lmax, mask_obs):
+        """Store a dictionary of mask_obs in instance attributes under key lmax"""
+        if lmax not in self._mask_obs_dict:
+            print(f'Storing mask_obs for lmax {lmax} into memory')
+            self._mask_obs_dict[lmax] = mask_obs
+
     def keep_ivar(self, split_num, lmax, ivar):
         """Store a dictionary of ivars in instance attributes under key split_num, lmax"""
         if (split_num, lmax) not in self._ivar_dict:
@@ -688,12 +708,32 @@ class DataManager:
         return self._num_splits
 
     @property
-    def mask_est(self):
-        return self._mask_est
+    def mask_est_dict(self):
+        return self._mask_est_dict
+
+    def mask_est(self, lmax):
+        return self._mask_est_dict[lmax]
+
+    def delete_mask_est(self, lmax):
+        """Delete a dictionary entry of mask_est from instance attributes under lmax"""
+        try:
+            del self._mask_est_dict[lmax]
+        except KeyError:
+            print(f'Nothing to delete, no mask_est in memory for split lmax {lmax}')
 
     @property
-    def mask_obs(self):
-        return self._mask_obs
+    def mask_obs_dict(self):
+        return self._mask_obs_dict
+
+    def mask_obs(self, lmax):
+        return self._mask_obs_dict[lmax]
+
+    def delete_mask_obs(self, lmax):
+        """Delete a dictionary entry of mask_obs from instance attributes under lmax"""
+        try:
+            del self._mask_obs_dict[lmax]
+        except KeyError:
+            print(f'Nothing to delete, no mask_obs in memory for split lmax {lmax}')
 
     @property
     def ivar_dict(self):
@@ -975,8 +1015,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     def _runtime_params(self):
         """Return bool if any runtime parameters passed to constructor"""
         runtime_params = False
-        runtime_params |= self._mask_est is not None
-        runtime_params |= self._mask_obs is not None
+        runtime_params |= self._mask_est_dict != {}
+        runtime_params |= self._mask_obs_dict != {}
         runtime_params |= self._ivar_dict != {}
         runtime_params |= self._cfact_dict != {}
         runtime_params |= self._dmap_dict != {}
@@ -988,11 +1028,12 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         """Return a dictionary of model parameters for this BaseNoiseModel"""
         return dict(
             data_model_name=self._data_model_name,
+            config_name=self._config_name,
             num_splits=self._num_splits, 
             calibrated=self._calibrated,
-            mask_est_name=os.path.splitext(self._mask_est_name)[0],
-            mask_obs_name=os.path.splitext(self._mask_obs_name)[0],
-            catalog_name=os.path.splitext(self._catalog_name)[0],
+            mask_est_name=self._mask_est_name,
+            mask_obs_name=self._mask_obs_name ,
+            catalog_name=self._catalog_name,
             kfilt_lbounds=self._kfilt_lbounds,
             fwhm_ivar=self._fwhm_ivar,
             dtype=np.dtype(self._dtype).str[1:], # remove endianness
@@ -1041,7 +1082,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     def _get_model_fn(self, split_num, lmax, to_write=False):
         """Get a noise model filename for split split_num; return as <str>"""
         kwargs = dict(
-            config_name=self._config_name,
             noise_model_name=self.__class__.noise_model_name(),
             qids='_'.join(self._qids),
             qid_names=self._qid_names,
@@ -1065,7 +1105,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     def _get_sim_fn(self, split_num, sim_num, lmax, alm=True, mask_obs=True, to_write=False):
         """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
         kwargs = dict(
-            config_name=self._config_name,
             noise_model_name=self.__class__.noise_model_name(),
             qids='_'.join(self._qids),
             qid_names=self._qid_names,
@@ -1092,7 +1131,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         return None
 
     def get_model(self, split_num, lmax, check_in_memory=True, check_on_disk=True,
-                  generate=True, keep_model=False, write=True, verbose=False):
+                  generate=True, keep_model=False, keep_mask_est=False,
+                  keep_mask_obs=False, keep_ivar=False, keep_cfact=False, 
+                  keep_dmap=False, write=True, verbose=False):
         """Load or generate a sqrt-covariance matrix from this NoiseModel. 
         Will load necessary products to disk if not yet stored in instance
         attributes.
@@ -1119,6 +1160,21 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         keep_model : bool, optional
             Store the loaded or generated model in the instance attributes, by 
             default False.
+        keep_mask_est : bool, optional
+            Store the loaded or generated mask_est in the instance attributes, by 
+            default False.
+        keep_mask_obs : bool, optional
+            Store the loaded or generated mask_obs in the instance attributes, by 
+            default False.
+        keep_ivar : bool, optional
+            Store the loaded or generated ivar in the instance attributes, by 
+            default False.
+        keep_cfact : bool, optional
+            Store the loaded or generated cfact in the instance attributes, by 
+            default False.
+        keep_dmap : bool, optional
+            Store the loaded or generated dmap in the instance attributes, by 
+            default False.
         write : bool, optional
             Save a generated model to disk, by default True.
         verbose : bool, optional
@@ -1130,10 +1186,10 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             Dictionary of noise model objects for this split, such as
             'sqrt_cov_mat' and auxiliary measurements (noise power spectra).
         """
+        self._save_to_config()
+
         downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax) 
         downgrade //= self._pre_filt_rel_upgrade
-
-        self._save_to_config()
 
         if check_in_memory:
             if (split_num, lmax) in self._model_dict:
@@ -1149,16 +1205,36 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                 return res
             else: # generate == True
                 pass
+        
+        # get the masks, ivar, cfact, dmap
+        if lmax not in self._mask_obs_dict:
+            mask_obs = self.get_mask_obs(downgrade=downgrade)
+        else:
+            mask_obs = self.mask_obs(lmax)
 
-        mask_obs = self.get_mask_obs(downgrade=downgrade)
-        # get the estimate mask
-        if self._mask_est is None:
-            self._mask_est = self.get_mask_est(downgrade=downgrade) * mask_obs
-        mask_est = self._mask_est
-        ivar = self.get_ivar(split_num, downgrade=downgrade, mask=mask_obs)
-        cfact = self.get_cfact(split_num, downgrade=downgrade, mask=mask_obs)
-        dmap = self.get_dmap(split_num, downgrade=downgrade, mask=mask_obs)
+        if lmax not in self._mask_est_dict:
+            # multiply by mask_obs to get power correction factors right;
+            # it doesn't change the masked maps of course
+            mask_est = self.get_mask_est(downgrade=downgrade) * mask_obs
+        else:
+            mask_est = self.mask_est(lmax)
 
+        if (split_num, lmax) not in self._ivar_dict:
+            ivar = self.get_ivar(split_num, downgrade=downgrade, mask=mask_obs)
+        else:
+            ivar = self.ivar(split_num, lmax)
+
+        if (split_num, lmax) not in self._cfact_dict:
+            cfact = self.get_cfact(split_num, downgrade=downgrade, mask=mask_obs)
+        else:
+            cfact = self.cfact(split_num, lmax)
+        
+        if (split_num, lmax) not in self._dmap_dict:
+            dmap = self.get_dmap(split_num, downgrade=downgrade, mask=mask_obs)
+        else:
+            dmap = self.dmap(split_num, lmax)
+
+        # get the model
         with bench.show(f'Generating noise model for split {split_num}, lmax {lmax}'):
             # in order to have load/keep operations in abstract get_model, need
             # to pass ivar and mask_obs here, rather than e.g. split_num
@@ -1166,8 +1242,24 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                 dmap*cfact, lmax, mask_obs, mask_est, ivar, verbose
                 )
 
+        # keep, write data if requested
         if keep_model:
             self.keep_model(split_num, lmax, model_dict)
+
+        if keep_mask_est:
+            self.keep_mask_est(lmax, mask_est)
+
+        if keep_mask_obs:
+            self.keep_mask_obs(lmax, mask_obs)
+
+        if keep_ivar:
+            self.keep_ivar(split_num, lmax, ivar)
+
+        if keep_cfact:
+            self.keep_cfact(split_num, lmax, cfact)
+
+        if keep_dmap:
+            self.keep_dmap(split_num, lmax, dmap)
 
         if write:
             fn = self._get_model_fn(split_num, lmax, to_write=True)
@@ -1237,7 +1329,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
     def get_sim(self, split_num, sim_num, lmax, alm=True, do_mask_obs=True,
                 check_on_disk=True, generate=True, keep_model=True,
-                keep_ivar=True, write=False, verbose=False):
+                keep_mask_obs=True, keep_ivar=True, write=False,
+                verbose=False):
         """Load or generate a sim from this NoiseModel. Will load necessary
         products to disk if not yet stored in instance attributes.
 
@@ -1272,9 +1365,12 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             Store the loaded model for this split in instance attributes, by default True.
             This spends memory to avoid spending time loading the model from disk
             for each call to this method.
+        keep_mask_obs : bool, optional
+            Store the loaded or generated mask_obs in the instance attributes, by 
+            default True.
         keep_ivar : bool, optional
             Store the loaded, possibly downgraded, ivar in the instance
-            attributes, by default False.
+            attributes, by default True.
         write : bool, optional
             Save a generated sim to disk, by default False.
         verbose : bool, optional
@@ -1287,9 +1383,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             (num_arrays, num_splits=1, num_pol, ny, nx), even if some of these
             axes have size 1. As implemented, num_splits is always 1. 
         """
-        downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax) 
-
         self._save_to_config()
+
+        downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax) 
 
         assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
 
@@ -1302,22 +1398,23 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             else: # generate == True
                 pass
 
-        # get the model
+        # get the model, observed-pixels mask and ivar
         if (split_num, lmax) not in self._model_dict:
             model_dict = self._check_model_on_disk(split_num, lmax, generate=False)
         else:
             model_dict = self.model(split_num, lmax)
 
-        # get the observed-pixels mask and ivar
-        if self._mask_obs is None:
-            self._mask_obs = self.get_mask_obs(downgrade=downgrade)
-        mask_obs = self._mask_obs
+        if lmax not in self._mask_obs_dict:
+            mask_obs = self.get_mask_obs(downgrade=downgrade)
+        else:
+            mask_obs = self.mask_obs(lmax)
 
         if (split_num, lmax) not in self._ivar_dict:
             ivar = self.get_ivar(split_num, downgrade=downgrade, mask=mask_obs)
         else:
             ivar = self.ivar(split_num, lmax)
         
+        # get the sim
         with bench.show(f'Generating noise sim for split {split_num}, map {sim_num}, lmax {lmax}'):
             seed = self._get_seed(split_num, sim_num)
             mask = mask_obs if do_mask_obs else None
@@ -1330,8 +1427,12 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                     model_dict, seed, lmax, mask, ivar, verbose
                     )
 
+        # keep, write data if requested
         if keep_model:
             self.keep_model(split_num, lmax, model_dict)
+
+        if keep_mask_obs:
+            self.keep_mask_obs(lmax, mask_obs)
 
         if keep_ivar:
             self.keep_ivar(split_num, lmax, ivar)
