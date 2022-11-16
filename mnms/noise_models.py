@@ -132,12 +132,21 @@ class DataManager:
 
         # get derived instance properties
         self._num_arrays = len(self._qids)
+
         for i, qid in enumerate(self._qids):
             if i == 0:
+                patch = self._data_model.qids_dict[qid]['patch']
+                daynight = self._data_model.qids_dict[qid]['daynight']
                 num_splits = self._data_model.qids_dict[qid]['num_splits']
             else:
+                assert patch == self._data_model.qids_dict[qid]['patch'], \
+                    'patch does not match for all qids' 
+                assert daynight == self._data_model.qids_dict[qid]['daynight'], \
+                    'daynight does not match for all qids'                                 
                 assert num_splits == self._data_model.qids_dict[qid]['num_splits'], \
                     'num_splits does not match for all qids'
+        self._patch = patch
+        self._daynight = daynight
         self._num_splits = num_splits
 
         # Possibly store input data
@@ -704,6 +713,14 @@ class DataManager:
         return self._dtype
 
     @property
+    def patch(self):
+        return self._patch
+
+    @property
+    def daynight(self):
+        return self._daynight
+
+    @property
     def num_splits(self):
         return self._num_splits
 
@@ -844,10 +861,10 @@ class ConfigManager(ABC):
             config_name = self._get_default_config_name()
         
         if model_file_template is None:
-            model_file_template = '{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
+            model_file_template = '{patch}_{daynight}_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
 
         if sim_file_template is None:
-            sim_file_template = '{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{mask_obs_str}_{alm_str}{sim_num}'
+            sim_file_template = '{patch}_{daynight}_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{mask_obs_str}_{alm_str}{sim_num}'
 
         self._config_name = os.path.splitext(config_name)[0]
         self._model_file_template = model_file_template
@@ -1029,7 +1046,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         return dict(
             data_model_name=self._data_model_name,
             config_name=self._config_name,
-            num_splits=self._num_splits, 
             calibrated=self._calibrated,
             mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name ,
@@ -1083,6 +1099,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         kwargs = dict(
             noise_model_name=self.__class__.noise_model_name(),
             qids='_'.join(self._qids),
+            patch=self._patch,
+            daynight=self._daynight,
+            num_splits=self._num_splits, 
             qid_names=self._qid_names,
             split_num=split_num,
             lmax=lmax,
@@ -1106,6 +1125,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         kwargs = dict(
             noise_model_name=self.__class__.noise_model_name(),
             qids='_'.join(self._qids),
+            patch=self._patch,
+            daynight=self._daynight,
+            num_splits=self._num_splits, 
             qid_names=self._qid_names,
             split_num=split_num,
             sim_num=str(sim_num).zfill(4),

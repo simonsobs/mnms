@@ -1,5 +1,6 @@
 BaseNoiseModel:
   calibrated: false
+  catalog_name: union_catalog_regular_20220316.csv
   config_name: dr6_default_cosmo
   data_model_name: dr6_default
   dtype: f4
@@ -7,14 +8,13 @@ BaseNoiseModel:
   kfilt_lbounds: null
   mask_est_name: dr6v3_20220316_baseline_union_mask.fits
   mask_obs_name: dr6v3_xlink_union_mask_0.001.fits
-  catalog_name: union_catalog_regular_20220316.csv
 
 TiledNoiseModel:
   delta_ell_smooth: 400
   height_deg: 4.0
   width_deg: 4.0
-  model_file_template: 'cmb_night_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
-  sim_file_template: 'cmb_night_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+  model_file_template: '{patch}_{daynight}_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
+  sim_file_template: '{patch}_{daynight}_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
 
 WaveletNoiseModel:
   fwhm_fact_pt1:
@@ -27,8 +27,8 @@ WaveletNoiseModel:
   smooth_loc: false
   w_lmax_j: 5300
   w_lmin: 10
-  model_file_template: 'cmb_night_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
-  sim_file_template: 'cmb_night_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+  model_file_template: '{patch}_{daynight}_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
+  sim_file_template: '{patch}_{daynight}_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
 
 FDWNoiseModel:
   fwhm_fact_pt1:
@@ -71,8 +71,8 @@ FDWNoiseModel:
   w_lmax: 10800
   w_lmax_j: 5300
   w_lmin: 10
-  model_file_template: 'cmb_night_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
-  sim_file_template: 'cmb_night_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+  model_file_template: '{patch}_{daynight}_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
+  sim_file_template: '{patch}_{daynight}_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
 
 HarmonicMixture:
   ell_highs:
@@ -86,4 +86,4 @@ HarmonicMixture:
   - FDWNoiseModel
   - TiledNoiseModel
   profile: cosine
-  sim_file_template: 'cmb_night_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+  sim_file_template: '{patch}_{daynight}_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
