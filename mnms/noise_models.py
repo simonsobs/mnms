@@ -1073,7 +1073,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         kwargs = config_dict['BaseNoiseModel']
         kwargs.update(config_dict[cls.__name__])
         kwargs.update(dict(
-            config_name=config_name,
             dumpable=False
             ))
 

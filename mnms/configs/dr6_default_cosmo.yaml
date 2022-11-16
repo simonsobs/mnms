@@ -1,5 +1,6 @@
 BaseNoiseModel:
   calibrated: false
+  config_name: dr6_default_cosmo
   data_model_name: dr6_default
   dtype: f4
   fwhm_ivar: null
