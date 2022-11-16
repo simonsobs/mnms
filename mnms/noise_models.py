@@ -886,10 +886,10 @@ class ConfigManager(ABC):
             3. It exists on-disk and the subclass parameters identically match
                the supplied subclass parameters.
         """
-        config_name = self._config_name.copy() # don't want to add extension to attribute
+        config_name = self._config_name
 
         if not config_name.endswith('.yaml'):
-            config_name += config_name + '.yaml'
+            config_name += '.yaml'
 
         # dont want to allow user to write to a packaged or distributed config
         config_fn = utils.get_mnms_fn(config_name, 'configs', to_write=True)
@@ -1302,16 +1302,16 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             else: # generate == True
                 pass
 
-        # get the observed-pixels mask
-        if self._mask_obs is None:
-            self._mask_obs = self.get_mask_obs(downgrade=downgrade)
-        mask_obs = self._mask_obs
-
-        # get the model and ivar
+        # get the model
         if (split_num, lmax) not in self._model_dict:
             model_dict = self._check_model_on_disk(split_num, lmax, generate=False)
         else:
             model_dict = self.model(split_num, lmax)
+
+        # get the observed-pixels mask and ivar
+        if self._mask_obs is None:
+            self._mask_obs = self.get_mask_obs(downgrade=downgrade)
+        mask_obs = self._mask_obs
 
         if (split_num, lmax) not in self._ivar_dict:
             ivar = self.get_ivar(split_num, downgrade=downgrade, mask=mask_obs)
