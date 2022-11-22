@@ -6,6 +6,7 @@ BaseNoiseModel:
   dtype: f4
   fwhm_ivar: null
   kfilt_lbounds: null
+  subproduct: default
   mask_est_name: dr6v3_20220316_baseline_union_mask.fits
   mask_obs_name: dr6v3_xlink_union_mask_0.001.fits
 

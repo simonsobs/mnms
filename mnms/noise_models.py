@@ -31,11 +31,12 @@ def register(registry=REGISTERED_NOISE_MODELS):
 # Helper class to load/preprocess data from disk
 class DataManager:
 
-    def __init__(self, *qids, data_model_name=None, calibrated=False,
-                 mask_est_dict=None, mask_est_name=None, mask_obs_dict=None,
-                 mask_obs_name=None, ivar_dict=None, cfact_dict=None,
-                 dmap_dict=None, catalog_name=None, kfilt_lbounds=None,
-                 fwhm_ivar=None, dtype=np.float32, **kwargs):
+    def __init__(self, *qids, data_model_name=None, subproduct='default',
+                 calibrated=False, mask_est_dict=None, mask_est_name=None, 
+                 mask_obs_dict=None, mask_obs_name=None, ivar_dict=None, 
+                 cfact_dict=None, dmap_dict=None, catalog_name=None, 
+                 kfilt_lbounds=None, fwhm_ivar=None, dtype=np.float32, 
+                 **kwargs):
         """Helper class for all BaseNoiseModel subclasses. Supports loading raw
         data necessary for all subclasses, such as masks and ivars. Also
         defines some class methods usable in subclasses.
@@ -46,6 +47,8 @@ class DataManager:
             One or more qids to incorporate in model.
         data_model_name : str
             Name of actapack.DataModel config to help load raw products (required).
+        subproduct : str, optional
+            Name of map subproduct to load raw products from, by default 'default'.
         calibrated : bool, optional
             Whether to load calibrated raw data, by default False.
         mask_est : enmap.ndmap, optional
@@ -103,9 +106,11 @@ class DataManager:
             raise ValueError('data_model_name cannot be None')
         self._data_model = DataModel.from_config(data_model_name)
         self._data_model_name = os.path.splitext(data_model_name)[0]
-        self._qid_names = '_'.join(
-            '{array}_{freq}'.format(**self._data_model.qids_dict[qid]) for qid in qids
-            )
+        self._subproduct = subproduct
+        self._qid_names = []
+        for qid in self._qids:
+            qid_kwargs = self._data_model.get_qid_kwargs_by_subproduct(qid, 'maps', self._subproduct)
+            self._qid_names.append('{array}_{freq}'.format(**qid_kwargs))
         
         self._calibrated = calibrated
 
@@ -134,16 +139,17 @@ class DataManager:
         self._num_arrays = len(self._qids)
 
         for i, qid in enumerate(self._qids):
+            qid_kwargs = self._data_model.get_qid_kwargs_by_subproduct(qid, 'maps', self._subproduct)
             if i == 0:
-                patch = self._data_model.qids_dict[qid]['patch']
-                daynight = self._data_model.qids_dict[qid]['daynight']
-                num_splits = self._data_model.qids_dict[qid]['num_splits']
+                patch = qid_kwargs['patch']
+                daynight = qid_kwargs['daynight']
+                num_splits = qid_kwargs['num_splits']
             else:
-                assert patch == self._data_model.qids_dict[qid]['patch'], \
+                assert patch == qid_kwargs['patch'], \
                     'patch does not match for all qids' 
-                assert daynight == self._data_model.qids_dict[qid]['daynight'], \
+                assert daynight == qid_kwargs['daynight'], \
                     'daynight does not match for all qids'                                 
-                assert num_splits == self._data_model.qids_dict[qid]['num_splits'], \
+                assert num_splits == qid_kwargs['num_splits'], \
                     'num_splits does not match for all qids'
         self._patch = patch
         self._daynight = daynight
@@ -181,7 +187,9 @@ class DataManager:
         """Check that each qid in this instance's qids has compatible shape and wcs."""
         for i, qid in enumerate(self._qids):
             for s in range(self._num_splits):
-                shape, wcs = utils.read_map_geometry(self._data_model, qid, split_num=s, ivar=True)
+                shape, wcs = utils.read_map_geometry(
+                    self._data_model, qid, split_num=s, ivar=True, subproduct=self._subproduct
+                    )
                 shape = shape[-2:]
                 assert len(shape) == 2, 'shape must have only 2 dimensions'
 
@@ -255,7 +263,9 @@ class DataManager:
                 for s in range(self._num_splits):
                     # we want to do this split-by-split in case we can save
                     # memory by downgrading one split at a time
-                    ivar = utils.read_map(self._data_model, qid, split_num=s, ivar=True)
+                    ivar = utils.read_map(
+                        self._data_model, qid, split_num=s, ivar=True, subproduct=self._subproduct
+                        )
                     ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
 
                     # iteratively build the mask_obs at full resolution, 
@@ -356,7 +366,9 @@ class DataManager:
 
                 # we want to do this split-by-split in case we can save
                 # memory by downgrading one split at a time
-                ivar = utils.read_map(self._data_model, qid, split_num=split_num, ivar=True)
+                ivar = utils.read_map(
+                    self._data_model, qid, split_num=split_num, ivar=True, subproduct=self._subproduct
+                    )
                 ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
                 ivar *= mul
                 
@@ -431,13 +443,17 @@ class DataManager:
                     mul = 1
 
                 # get the coadd from disk, this is the same for all splits
-                cvar = utils.read_map(self._data_model, qid, coadd=True, ivar=True)
+                cvar = utils.read_map(
+                    self._data_model, qid, coadd=True, ivar=True, subproduct=self._subproduct
+                    )
                 cvar = enmap.extract(cvar, self._full_shape, self._full_wcs)
                 cvar *= mul
 
                 # we want to do this split-by-split in case we can save
                 # memory by downgrading one split at a time
-                ivar = utils.read_map(self._data_model, qid, split_num=split_num, ivar=True)
+                ivar = utils.read_map(
+                    self._data_model, qid, split_num=split_num, ivar=True, subproduct=self._subproduct
+                    )
                 ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
                 ivar *= mul
 
@@ -498,26 +514,34 @@ class DataManager:
                     mul_ivar = 1
 
                 # get the coadd from disk, this is the same for all splits
-                cmap = utils.read_map(self._data_model, qid, coadd=True, ivar=False)
+                cmap = utils.read_map(
+                    self._data_model, qid, coadd=True, ivar=False, subproduct=self._subproduct
+                    )
                 cmap = enmap.extract(cmap, self._full_shape, self._full_wcs) 
                 cmap *= mul_imap
 
                 # need full-res coadd ivar if inpainting or kspace filtering
                 if self._catalog_name or self._kfilt_lbounds:
-                    cvar = utils.read_map(self._data_model, qid, coadd=True, ivar=True)
+                    cvar = utils.read_map(
+                        self._data_model, qid, coadd=True, ivar=True, subproduct=self._subproduct
+                        )
                     cvar = enmap.extract(cvar, self._full_shape, self._full_wcs)
                     cvar *= mul_ivar
 
                 # we want to do this split-by-split in case we can save
                 # memory by downgrading one split at a time
-                imap = utils.read_map(self._data_model, qid, split_num=split_num, ivar=False)
+                imap = utils.read_map(
+                    self._data_model, qid, split_num=split_num, ivar=False, subproduct=self._subproduct
+                    )
                 imap = enmap.extract(imap, self._full_shape, self._full_wcs)
                 imap *= mul_imap
 
                 # need to reload ivar at full res and get ivar_eff
                 # if inpainting or kspace filtering
                 if self._catalog_name or self._kfilt_lbounds:
-                    ivar = utils.read_map(self._data_model, qid, split_num=split_num, ivar=True)
+                    ivar = utils.read_map(
+                        self._data_model, qid, split_num=split_num, ivar=True, subproduct=self._subproduct
+                        )
                     ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
                     ivar *= mul_ivar
                     ivar_eff = utils.get_ivar_eff(ivar, sum_ivar=cvar, use_zero=True)
@@ -615,7 +639,9 @@ class DataManager:
         footprint_shape = shape[-2:]
         footprint_wcs = wcs
 
-        shape, _ = utils.read_map_geometry(self._data_model, self._qids[0], 0, ivar=ivar)
+        shape, _ = utils.read_map_geometry(
+            self._data_model, self._qids[0], 0, ivar=ivar, subproduct=self._subproduct
+            )
         shape = (shape[0], *footprint_shape)
 
         if num_arrays is None:
@@ -1045,6 +1071,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         """Return a dictionary of model parameters for this BaseNoiseModel"""
         return dict(
             data_model_name=self._data_model_name,
+            subproduct=self._subproduct,
             config_name=self._config_name,
             calibrated=self._calibrated,
             mask_est_name=self._mask_est_name,
