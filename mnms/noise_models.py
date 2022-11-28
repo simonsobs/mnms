@@ -890,7 +890,7 @@ class ConfigManager(ABC):
             model_file_template = '{patch}_{daynight}_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
 
         if sim_file_template is None:
-            sim_file_template = '{patch}_{daynight}_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{mask_obs_str}_{alm_str}{sim_num}'
+            sim_file_template = '{patch}_{daynight}_{qid_names}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
 
         self._config_name = os.path.splitext(config_name)[0]
         self._model_file_template = model_file_template
@@ -1147,8 +1147,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     def _model_ext(self):
         return ''
 
-    def _get_sim_fn(self, split_num, sim_num, lmax, alm=True, mask_obs=True, to_write=False):
-        """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
+    def _get_sim_fn(self, split_num, sim_num, lmax, alm=True, to_write=False):
+        """Get a sim filename for split split_num, sim sim_num, and bool alm; return as <str>"""
         kwargs = dict(
             noise_model_name=self.__class__.noise_model_name(),
             qids='_'.join(self._qids),
@@ -1161,7 +1161,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             lmax=lmax,
             downgrade=utils.downgrade_from_lmaxs(self._full_lmax, lmax),
             alm_str='alm' if alm else 'map',
-            mask_obs_str='masked' if mask_obs else 'unmasked'
             )
         kwargs.update(self._base_param_dict)
         kwargs.update(self._model_param_dict)
@@ -1377,10 +1376,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         """Write a dictionary of noise model variables to filename fn"""
         pass
 
-    def get_sim(self, split_num, sim_num, lmax, alm=True, do_mask_obs=True,
-                check_on_disk=True, generate=True, keep_model=True,
-                keep_mask_obs=True, keep_ivar=True, write=False,
-                verbose=False):
+    def get_sim(self, split_num, sim_num, lmax, alm=True, check_on_disk=True,
+                generate=True, keep_model=True, keep_mask_obs=True,
+                keep_ivar=True, write=False, verbose=False):
         """Load or generate a sim from this NoiseModel. Will load necessary
         products to disk if not yet stored in instance attributes.
 
@@ -1397,11 +1395,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             Bandlimit for output noise covariance.
         alm : bool, optional
             Generate simulated alms instead of a simulated map, by default True.
-        do_mask_obs : bool, optional
-            Apply the mask_obs to the sim, by default True. If not applied, the sim will bleed
-            into pixels unobserved by the model, but this can potentially avoid intermediate
-            calculation if the user will be applying their own, more-restrictive analysis mask
-            to sims before processing them.
         check_on_disk : bool, optional
             If True, first check if an identical sim (including the noise model 'notes')
             exists on-disk. If it does not, generate the sim if 'generate' is True, and
@@ -1441,7 +1434,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         if check_on_disk:
             res = self._check_sim_on_disk(
-                split_num, sim_num, lmax, alm=alm, do_mask_obs=do_mask_obs, generate=generate
+                split_num, sim_num, lmax, alm=alm, generate=generate
             )
             if res is not False:
                 return res
@@ -1467,14 +1460,13 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         # get the sim
         with bench.show(f'Generating noise sim for split {split_num}, map {sim_num}, lmax {lmax}'):
             seed = self._get_seed(split_num, sim_num)
-            mask = mask_obs if do_mask_obs else None
             if alm:
                 sim = self._get_sim_alm(
-                    model_dict, seed, lmax, mask, ivar, verbose
+                    model_dict, seed, lmax, mask_obs, ivar, verbose
                     )
             else:
                 sim = self._get_sim(
-                    model_dict, seed, lmax, mask, ivar, verbose
+                    model_dict, seed, lmax, mask_obs, ivar, verbose
                     )
 
         # keep, write data if requested
@@ -1488,7 +1480,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             self.keep_ivar(split_num, lmax, ivar)
         
         if write:
-            fn = self._get_sim_fn(split_num, sim_num, lmax, alm=alm, mask_obs=do_mask_obs, to_write=True)
+            fn = self._get_sim_fn(split_num, sim_num, lmax, alm=alm, to_write=True)
             if alm:
                 utils.write_alm(fn, sim)
             else:
@@ -1496,8 +1488,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         return sim
 
-    def _check_sim_on_disk(self, split_num, sim_num, lmax, alm=True, do_mask_obs=True,
-                           generate=True):
+    def _check_sim_on_disk(self, split_num, sim_num, lmax, alm=True, generate=True):
         """Check if this NoiseModel's sim for a given split, sim exists on-disk. 
         If it does, return it. Depending on the 'generate' kwarg, return either 
         False or raise a FileNotFoundError if it does not exist on-disk.
@@ -1512,9 +1503,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             Bandlimit for output noise covariance.
         alm : bool, optional
             Whether the sim is stored as an alm or map, by default True.
-        do_mask_obs : bool, optional
-            Whether the sim has been masked by this NoiseModel's mask_obs
-            in map-space, by default True.
         generate : bool, optional
             If the sim does not exist on-disk and 'generate' is True, then return
             False. If the sim does not exist on-disk and 'generate' is False, then
@@ -1532,7 +1520,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             If 'generate' is False and the sim does not exist on-disk.
         """
         try:        
-            fn = self._get_sim_fn(split_num, sim_num, lmax, alm=alm, mask_obs=do_mask_obs, to_write=False)
+            fn = self._get_sim_fn(split_num, sim_num, lmax, alm=alm, to_write=False)
             if alm:
                 return utils.read_alm(fn)
             else:
@@ -2691,10 +2679,10 @@ class HarmonicMixture(ConfigManager):
         # don't return anything (mainly memory motivated)
         return None
 
-    def get_sim(self, split_num, sim_num, alm=True, do_mask_obs=True,
-                check_on_disk=True, check_mix_on_disk=True, generate=True,
-                generate_mix=True, keep_model=True, keep_ivar=True,
-                write=False, write_mix=False, verbose=False):
+    def get_sim(self, split_num, sim_num, alm=True, check_on_disk=True,
+                check_mix_on_disk=True, generate=True, generate_mix=True,
+                keep_model=True, keep_ivar=True, write=False, write_mix=False,
+                verbose=False):
         """A wrapper around the HarmonicMixture's noise_model.get_sim(...) 
         methods, such that simulations from each noise_model are stitched
         together with the specified profiles in harmonic space.
@@ -2711,8 +2699,6 @@ class HarmonicMixture(ConfigManager):
             from the same noise model (including the 'notes').
         alm : bool, optional
             Generate simulated alms instead of a simulated map, by default True.
-        do_mask_obs : bool, optional
-            Whether to collect masked sims from the noise_models, by default True.
         check_on_disk : bool, optional
             Whether to check for existing noise_model sims on disk, by default
             True. If True, will only check for sims generated by each noise_model
@@ -2751,8 +2737,7 @@ class HarmonicMixture(ConfigManager):
 
         if check_mix_on_disk:
             res = self._check_sim_on_disk(
-                split_num, sim_num, alm=alm, do_mask_obs=do_mask_obs, generate=generate,
-                generate_mix = generate_mix
+                split_num, sim_num, alm=alm, generate=generate, generate_mix=generate_mix
             )
             if res is not False:
                 return res
@@ -2762,19 +2747,19 @@ class HarmonicMixture(ConfigManager):
         with bench.show(f'Generating noise sim for split {split_num}, map {sim_num}'):
             if alm:
                 sim = self._get_sim_alm(
-                    split_num, sim_num, do_mask_obs=do_mask_obs,
-                    check_on_disk=check_on_disk, generate=generate, keep_model=keep_model,
-                    keep_ivar=keep_ivar, write=write, verbose=verbose
+                    split_num, sim_num, check_on_disk=check_on_disk, generate=generate,
+                    keep_model=keep_model, keep_ivar=keep_ivar, write=write,
+                    verbose=verbose
                     )
             else:
                 sim = self._get_sim(
-                    split_num, sim_num, do_mask_obs=do_mask_obs,
-                    check_on_disk=check_on_disk, generate=generate, keep_model=keep_model,
-                    keep_ivar=keep_ivar, write=write, verbose=verbose
+                    split_num, sim_num, check_on_disk=check_on_disk, generate=generate,
+                    keep_model=keep_model, keep_ivar=keep_ivar, write=write,
+                    verbose=verbose
                     )
 
         if write_mix:
-            fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_obs, to_write=True)
+            fn = self._get_sim_fn(split_num, sim_num, alm=alm, to_write=True)
             if alm:
                 utils.write_alm(fn, sim)
             else:
@@ -2782,8 +2767,8 @@ class HarmonicMixture(ConfigManager):
 
         return sim
 
-    def _check_sim_on_disk(self, split_num, sim_num, alm=True, do_mask_obs=True,
-                           generate=True, generate_mix=True):
+    def _check_sim_on_disk(self, split_num, sim_num, alm=True, generate=True,
+                           generate_mix=True):
         """Check if this HarmonicMixture's sim a given split, sim exists on-disk. 
         If it does, return it. Depending on the 'generate_mix' kwarg, return either 
         False or raise a FileNotFoundError if it does not exist on-disk. Likewise,
@@ -2800,9 +2785,6 @@ class HarmonicMixture(ConfigManager):
             Whether the HarmonicMixture sim is stored as an alm or map, by default True.
             It is always assumed that the possible on-disk component noise_model sims are
             stored in alm format.
-        do_mask_obs : bool, optional
-            Whether to look for a masked HarmonicMixture and/or component noise_model
-            sims, by default True.
         generate : bool, optional
             Whether to allow component noise_models to generate not-on-disk sims on-the-fly,
             by default True.
@@ -2826,7 +2808,7 @@ class HarmonicMixture(ConfigManager):
             exist on-disk.
         """
         try:
-            fn = self._get_sim_fn(split_num, sim_num, alm=alm, mask_obs=do_mask_obs, to_write=False)
+            fn = self._get_sim_fn(split_num, sim_num, alm=alm, to_write=False)
             if alm:
                 return utils.read_alm(fn)
             else:
@@ -2837,7 +2819,7 @@ class HarmonicMixture(ConfigManager):
                 for i, noise_model in enumerate(self._noise_models):
                     lmax = self._lmaxs[i]
                     try:        
-                        noise_model._get_sim_fn(split_num, sim_num, lmax, alm=True, mask_obs=do_mask_obs, to_write=False)
+                        noise_model._get_sim_fn(split_num, sim_num, lmax, alm=True, to_write=False)
                     except FileNotFoundError as e:
                         if generate:
                             print(f'Sim for noise_model {i}, split {split_num}, map {sim_num}, lmax {lmax} not found on-disk, generating instead')
@@ -2851,8 +2833,8 @@ class HarmonicMixture(ConfigManager):
                 print(f'Sim for split {split_num}, map {sim_num} not found on-disk, please generate it first')
                 raise e
 
-    def _get_sim_fn(self, split_num, sim_num, alm=True, mask_obs=True, to_write=False):
-        """Get a sim filename for split split_num, sim sim_num, and bool alm/mask_obs; return as <str>"""
+    def _get_sim_fn(self, split_num, sim_num, alm=True, to_write=False):
+        """Get a sim filename for split split_num, sim sim_num, and bool alm; return as <str>"""
         base_model_info = ''
         for i, noise_model in enumerate(self._noise_models):
             base_model_info += noise_model.__class__.noise_model_name()
@@ -2873,7 +2855,6 @@ class HarmonicMixture(ConfigManager):
             lmax=self._lmaxs[-1],
             downgrade=utils.downgrade_from_lmaxs(self._full_lmax, self._lmaxs[-1]),
             alm_str='alm' if alm else 'map',
-            mask_obs_str='masked' if mask_obs else 'unmasked'
             )
         kwargs.update(self._base_param_dict)
         kwargs.update(self._model_param_dict)
@@ -2884,9 +2865,9 @@ class HarmonicMixture(ConfigManager):
         fn = utils.get_mnms_fn(fn, 'sims', to_write=to_write)
         return fn
 
-    def _get_sim(self, split_num, sim_num, do_mask_obs=True,
-                 check_on_disk=True, generate=True, keep_model=True,
-                 keep_ivar=True, write=False, verbose=False, **kwargs):
+    def _get_sim(self, split_num, sim_num, check_on_disk=True, generate=True,
+                 keep_model=True, keep_ivar=True, write=False, verbose=False,
+                 **kwargs):
         """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
         downgrade = utils.downgrade_from_lmaxs(self._full_lmax, self._lmaxs[-1])
         shape, wcs = utils.downgrade_geometry_cc_quad(
@@ -2894,22 +2875,22 @@ class HarmonicMixture(ConfigManager):
             )
 
         alm = self._get_sim_alm(
-            split_num, sim_num, do_mask_obs=do_mask_obs,
-            check_on_disk=check_on_disk, generate=generate, keep_model=keep_model,
-            keep_ivar=keep_ivar, write=write, verbose=verbose, **kwargs
+            split_num, sim_num, check_on_disk=check_on_disk, generate=generate,
+            keep_model=keep_model, keep_ivar=keep_ivar, write=write, verbose=verbose,
+            **kwargs
             )
         sim = utils.alm2map(alm, shape=shape, wcs=wcs, dtype=self._dtype)
         return sim
 
-    def _get_sim_alm(self, split_num, sim_num, do_mask_obs=True,
-                     check_on_disk=True, generate=True, keep_model=True,
-                     keep_ivar=True, write=False, verbose=False, **kwargs):
+    def _get_sim_alm(self, split_num, sim_num, check_on_disk=True, generate=True,
+                     keep_model=True, keep_ivar=True, write=False, verbose=False,
+                     **kwargs):
         """Return a masked alm sim from model_dict, with seed <sequence of ints>"""
         oainfo = sharp.alm_info(lmax=self._lmaxs[-1])
         mix_alm = 0
         for i, noise_model in enumerate(self._noise_models):
             alm = noise_model.get_sim(
-                split_num, sim_num, self._lmaxs[i], alm=True, do_mask_obs=do_mask_obs,
+                split_num, sim_num, self._lmaxs[i], alm=True, 
                 check_on_disk=check_on_disk, generate=generate, keep_model=keep_model,
                 keep_ivar=keep_ivar, write=write, verbose=verbose, **kwargs
                 )
