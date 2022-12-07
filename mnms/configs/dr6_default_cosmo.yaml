@@ -1,14 +1,19 @@
 BaseNoiseModel:
   calibrated: false
   catalog_name: union_catalog_regular_20220316.csv
-  config_name: dr6_default_cosmo
   data_model_name: dr6_default
   dtype: f4
+  enforce_equal_qid_kwargs:
+  - patch
+  - daynight
+  - num_splits
   fwhm_ivar: null
   kfilt_lbounds: null
-  subproduct: default
   mask_est_name: dr6v3_20220316_baseline_union_mask.fits
   mask_obs_name: dr6v3_xlink_union_mask_0.001.fits
+  possible_subproduct_kwargs: null
+  qid_names_template: '{array}_{freq}'
+  subproduct: default
 
 TiledNoiseModel:
   delta_ell_smooth: 400

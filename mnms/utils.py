@@ -2164,7 +2164,7 @@ def rfft(emap, omap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
     return res
 
 def read_map(data_model, qid, split_num=0, coadd=False, ivar=False,
-             subproduct='default'):
+             subproduct='default', **subproduct_kwargs):
     """Read a map from disk according to the data_model filename conventions.
 
     Parameters
@@ -2181,8 +2181,10 @@ def read_map(data_model, qid, split_num=0, coadd=False, ivar=False,
     ivar : bool, optional
         If True, load the inverse-variance map for the qid and split. If False,
         load the source-free map for the same, by default False.
-    subproduct : str
+    subproduct : str, optional
         Name of map subproduct to load raw products from, by default 'default'.
+    subproduct_kwargs : dict, optional
+        Any additional keyword arguments used to format the map filename.
 
     Returns
     -------
@@ -2191,19 +2193,23 @@ def read_map(data_model, qid, split_num=0, coadd=False, ivar=False,
     """
     if ivar:
         omap = data_model.read_map(
-            qid, split_num=split_num, coadd=coadd, maptag='ivar', subproduct=subproduct
+            qid, split_num=split_num, coadd=coadd, maptag='ivar',
+            subproduct=subproduct, **subproduct_kwargs
             )
     else:
         try:
             omap = data_model.read_map(
-                qid, split_num=split_num, coadd=coadd, maptag='map_srcfree', subproduct=subproduct
+                qid, split_num=split_num, coadd=coadd, maptag='map_srcfree',
+                subproduct=subproduct, **subproduct_kwargs
                 )
         except FileNotFoundError:
             omap = data_model.read_map(
-                qid, split_num=split_num, coadd=coadd, maptag='map', subproduct=subproduct
+                qid, split_num=split_num, coadd=coadd, maptag='map',
+                subproduct=subproduct, **subproduct_kwargs
                 )
             omap -= data_model.read_map(
-                qid, split_num=split_num, coadd=coadd, maptag='srcs', subproduct=subproduct
+                qid, split_num=split_num, coadd=coadd, maptag='srcs',
+                subproduct=subproduct, **subproduct_kwargs
                 )
 
     if omap.ndim == 2:
@@ -2211,7 +2217,7 @@ def read_map(data_model, qid, split_num=0, coadd=False, ivar=False,
     return omap
 
 def read_map_geometry(data_model, qid, split_num=0, coadd=False, ivar=False,
-                      subproduct='default'):
+                      subproduct='default', **subproduct_kwargs):
     """Read a map geometry from disk according to the data_model filename
     conventions.
 
@@ -2229,8 +2235,10 @@ def read_map_geometry(data_model, qid, split_num=0, coadd=False, ivar=False,
     ivar : bool, optional
         If True, load the inverse-variance map for the qid and split. If False,
         load the source-free map for the same, by default False.
-    subproduct : str
+    subproduct : str, optional
         Name of map subproduct to load raw products from, by default 'default'.
+    subproduct_kwargs : dict, optional
+        Any additional keyword arguments used to format the map filename.
 
     Returns
     -------
@@ -2239,18 +2247,21 @@ def read_map_geometry(data_model, qid, split_num=0, coadd=False, ivar=False,
     """
     if ivar:
         map_fn = data_model.get_map_fn(
-            qid, split_num=split_num, coadd=coadd, maptag='ivar', subproduct=subproduct
+            qid, split_num=split_num, coadd=coadd, maptag='ivar',
+            subproduct=subproduct, **subproduct_kwargs
             )
         shape, wcs = enmap.read_map_geometry(map_fn)
     else:
         try:
             map_fn = data_model.get_map_fn(
-                qid, split_num=split_num, coadd=coadd, maptag='map_srcfree', subproduct=subproduct
+                qid, split_num=split_num, coadd=coadd, maptag='map_srcfree',
+                subproduct=subproduct, **subproduct_kwargs
                 )
             shape, wcs = enmap.read_map_geometry(map_fn)
         except FileNotFoundError:
             map_fn = data_model.get_map_fn(
-                qid, split_num=split_num, coadd=coadd, maptag='map', subproduct=subproduct
+                qid, split_num=split_num, coadd=coadd, maptag='map',
+                subproduct=subproduct, **subproduct_kwargs
                 )
             shape, wcs = enmap.read_map_geometry(map_fn)
 
