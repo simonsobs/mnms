@@ -2163,6 +2163,58 @@ def rfft(emap, omap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
         res *= norm
     return res
 
+# NOTE: irfft overwrites the emap buffer!
+# normalizations adapted from pixell.enmap
+def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=False):
+    """Perform a 'real'-iFFT: an iFFT to recover a real-valued function, 
+    over only half the usual frequency modes.
+
+    Parameters
+    ----------
+    emap : (..., nky, nkx) ndmap
+        FFT to inverse transform.
+    omap : ndmap, optional
+        Output buffer into which result is written, by default None.
+    n : int, optional
+        Number of pixels in real-space x-direction, by default None.
+        If none, assumed to be 2(nkx-1), ie that real-space nx was
+        even.
+    nthread : int, optional
+        The number of threads, by default 0.
+        If 0, use output of get_cpu_count().
+    normalize : bool, optional
+        The FFT normalization, by default True. If True, normalize 
+        using pixel number. If in ['phy', 'phys', 'physical'],
+        normalize by sky area.
+    adjoint_ifft : bool, optional
+        Whether to perform the adjoint iFFT, by default False.
+
+    Returns
+    -------
+    (..., ny, nx) ndmap
+        A real-valued real-space map.
+    """
+    res  = enmap.samewcs(
+        enfft.irfft(emap, omap, n=n, axes=[-2, -1], nthread=nthread, normalize=False), emap
+        )
+    
+    # array size norms
+    if normalize == 'backward':
+        norm = 1/np.prod(res.shape[-2:])
+    elif normalize in ['ortho', 'phy', 'phys', 'physical']:
+        norm = 1/np.prod(res.shape[-2:])**0.5
+    else:
+        norm = 1
+
+    # phys norms
+    if normalize in ["phy","phys","physical"]:
+        if adjoint_fft: norm *= emap.pixsize()**0.5
+        else:           norm /= emap.pixsize()**0.5
+
+    if norm != 1:
+        res *= norm
+    return res
+
 def read_map(data_model, qid, split_num=0, coadd=False, ivar=False,
              subproduct='default', **subproduct_kwargs):
     """Read a map from disk according to the data_model filename conventions.
@@ -2294,58 +2346,6 @@ def get_mult_fact(data_model, qid, ivar=False):
 #         return 1/data_model.get_gain(qid)**2
 #     else:
 #         return data_model.get_gain(qid)
-
-# NOTE: irfft overwrites the emap buffer!
-# normalizations adapted from pixell.enmap
-def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=False):
-    """Perform a 'real'-iFFT: an iFFT to recover a real-valued function, 
-    over only half the usual frequency modes.
-
-    Parameters
-    ----------
-    emap : (..., nky, nkx) ndmap
-        FFT to inverse transform.
-    omap : ndmap, optional
-        Output buffer into which result is written, by default None.
-    n : int, optional
-        Number of pixels in real-space x-direction, by default None.
-        If none, assumed to be 2(nkx-1), ie that real-space nx was
-        even.
-    nthread : int, optional
-        The number of threads, by default 0.
-        If 0, use output of get_cpu_count().
-    normalize : bool, optional
-        The FFT normalization, by default True. If True, normalize 
-        using pixel number. If in ['phy', 'phys', 'physical'],
-        normalize by sky area.
-    adjoint_ifft : bool, optional
-        Whether to perform the adjoint iFFT, by default False.
-
-    Returns
-    -------
-    (..., ny, nx) ndmap
-        A real-valued real-space map.
-    """
-    res  = enmap.samewcs(
-        enfft.irfft(emap, omap, n=n, axes=[-2, -1], nthread=nthread, normalize=False), emap
-        )
-    
-    # array size norms
-    if normalize == 'backward':
-        norm = 1/np.prod(res.shape[-2:])
-    elif normalize in ['ortho', 'phy', 'phys', 'physical']:
-        norm = 1/np.prod(res.shape[-2:])**0.5
-    else:
-        norm = 1
-
-    # phys norms
-    if normalize in ["phy","phys","physical"]:
-        if adjoint_fft: norm *= emap.pixsize()**0.5
-        else:           norm /= emap.pixsize()**0.5
-
-    if norm != 1:
-        res *= norm
-    return res
 
 def write_alm(fn, alm):
     """Write alms to disk.
