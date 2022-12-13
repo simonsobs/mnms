@@ -1,8 +1,9 @@
 from pixell import enmap, wcsutils
 from mnms import covtools, utils
-import astropy.io.fits as pyfits
 
+import h5py
 import numpy as np
+from astropy.io import fits as pyfits
 
 import warnings
 
@@ -713,48 +714,53 @@ def get_tiled_noise_sim(covsqrt, ivar=None, sqrt_cov_ell=None, rfft=True,
 
     return omap
     
-# adapted from enmap.write_fits, but with added stuff for tiled_ndmap objects
-def write_tiled_ndmap(fname, imap, extra_header=None, extra_hdu=None):
+def write_tiled_ndmap(fname, imap, extra_attrs=None, extra_datasets=None):
+    if not fname.endswith('.hdf5'):
+        fname += '.hdf5'
 
-    # get our basic wcs header
-    header = imap.wcs.to_header(relax=True)
+    with h5py.File(fname, 'w') as hfile:
 
-    # add our default map headers
-    header['NAXIS'] = imap.ndim
-    for i,n in enumerate(imap.shape[::-1]):
-        header[f'NAXIS{i+1}'] = n
-    header['HIERARCH WIDTH_DEG'] = imap.width_deg
-    header['HIERARCH HEIGHT_DEG'] = imap.height_deg
-    header['ISHAPE_Y'] = imap.ishape[-2]
-    header['ISHAPE_X'] = imap.ishape[-1]
-    header['TILED'] = imap.tiled
-    header['HDU1'] = 'UNMASKED_TILES'
+        tset = hfile.create_dataset('tiled_ndmap/data', data=np.asarray(imap))
 
-    # add extra headers
-    if extra_header is not None:
-        for key, val in extra_header.items():
-            header[key] = val
+        if hasattr(imap, 'wcs'):
+            for k, v in imap.wcs.to_header().items():
+                tset.attrs[k] = v 
+        
+        # add tiled_ndmap parameters
+        tgrp = hfile.create_group('tiled_ndmap/parameters')
+        tgrp.attrs['width_deg'] = imap.width_deg
+        tgrp.attrs['height_deg'] = imap.height_deg
+        tgrp.attrs['ishape'] = imap.ishape
+        tgrp.attrs['tiled'] = imap.tiled
+        tgrp.attrs['unmasked_tiles'] = imap.unmasked_tiles
 
-    # add header for extra arrays
-    if extra_hdu is not None:
-        for i, key in enumerate(extra_hdu.keys()):
-            header[f'HDU{i+2}'] = key # HDU0, HDU1 taken by default
+        if extra_attrs is not None:
+            for k, v in extra_attrs.items():
+                hfile.attrs[k] = v
+
+        if extra_datasets is not None:
+            for ekey, emap in extra_datasets.items():
+                eset = hfile.create_dataset(ekey, data=np.asarray(emap))
+
+                if hasattr(emap, 'wcs'):
+                    for k, v in emap.wcs.to_header().items():
+                        eset.attrs[k] = v        
+
+def read_tiled_ndmap(fname, extra_header=None, extra_hdu=None, extra_attrs=None, extra_datasets=None):
+#     if fname[-5:] != '.hdf5':
+#         fname += '.hdf5'
     
-    # build primary hdu, add unmasked tiles
-    hdus = pyfits.HDUList([pyfits.PrimaryHDU(imap, header)])
-    hdus.append(pyfits.ImageHDU(imap.unmasked_tiles))
+#     with h5py.File(fname, 'r') as hfile:
+        
+#         extra_datasets_dict = {}
+#         iset = hfile
 
-    # add any other hdus
-    if extra_hdu is not None:
-        for arr in extra_hdu.values():
-            hdus.append(pyfits.ImageHDU(arr))
+#     # leave context of hfile
+#     omap = tiled_ndmap(
+#         imap, width_deg=width_deg, height_deg=height_deg, ishape=ishape, 
+#         tiled=tiled, unmasked_tiles=unmasked_tiles
+#         )
 
-    # write using enmap
-    with warnings.catch_warnings():
-        warnings.filterwarnings('ignore')
-        hdus.writeto(fname, overwrite=True)
-
-def read_tiled_ndmap(fname, extra_header=None, extra_hdu=None):
     # get data from the file
     with pyfits.open(fname) as hdus:
         fl = hdus[0]

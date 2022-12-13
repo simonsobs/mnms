@@ -7,6 +7,7 @@ from optweight import wavtrans, alm_c_utils
 
 import numpy as np
 import yaml
+import h5py
 
 from abc import ABC, abstractmethod
 from itertools import product
@@ -796,7 +797,7 @@ class ConfigManager(ABC):
 
     def __init__(self, config_name=None, dumpable=True, qid_names_template=None,
                  model_file_template=None, sim_file_template=None,
-                 notes=None, **kwargs):
+                 **kwargs):
         """Helper class for any object seeking to utilize a noise_model config
         to track parameters, filenames, etc. Also define some class methods
         usable in subclasses.
@@ -805,11 +806,12 @@ class ConfigManager(ABC):
         ----------
         config_name : str, optional
             Name of configuration file to save this NoiseModel instance's
-            parameters, set to default based on current time if None. Cannot
-            be shared with a file shipped by the mnms package. If dumpable is
-            True and this file already exists, all parameters will be checked
-            for compatibility with existing parameters within file. Must be 
-            a yaml file.
+            parameters, set to default based on current time if None. If
+            dumpable is True and this file already exists, all parameters
+            will be checked for compatibility with existing parameters
+            within file, and filename cannot be shared with a file shipped
+            by the mnms package. Must be a yaml file. If dumpable is False,
+            set to None and no compatibility checking occurs.
         dumpable: bool, optional
             Whether this instance will dump its parameters to a config. If False,
             user is responsible for covariance and sim filename management.
@@ -828,15 +830,31 @@ class ConfigManager(ABC):
             provided (not None) if dumpable is False. Otherwise, set to a
             reasonable default based on the NoiseModel subclass and config
             name.
-        notes : str, optional
-            A descriptor string to differentiate this instance from otherwise
-            identical instances, by default None. Will be added as comment to
-            config above subclass block when written to config for the first
-            time.
 
         Notes
         -----
-        Only supports configuration files with a yaml extension.
+        Only supports configuration files with a yaml extension. If dumpable
+        is True:
+
+        A config_name is not permissible and an exception raised if:
+            1. It exists as a shipped config within the mnms package OR
+            2. It exists on-disk but does not contain any BaseNoiseModel 
+               parameters OR
+            3. It exists on-disk and its BaseNoiseModel parameters are not
+               identical to the supplied BaseNoiseModel parameters OR
+            4. It exists on-disk and it contains subclass parameters and the
+               subclass parameters are not identical to the supplied subclass
+               paramaters.
+        
+        Conversely, config_name is permissible if:
+            1. It does not already exist on disk or in the mnms package OR
+            2. If exists on-disk and it contains BaseNoiseModel parameters and 
+               the BaseNoiseModel parameters identically match the supplied
+               BaseNoiseModel parameters OR
+            3. It exists on-disk and it does not contain subclass parameters OR
+            4. It exists on-disk and it contains subclass parameters and the
+               subclass parameters identically match the supplied subclass
+               parameters.
         """
         # check dumpability of model and whether filenames have been provided
         self._dumpable = dumpable and not self._runtime_params
@@ -862,16 +880,20 @@ class ConfigManager(ABC):
         if sim_file_template is None:
             sim_file_template = '{qids}_{noise_model_name}_{config_name}_{data_model_name}_{subproduct}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
 
-        self._config_name = os.path.splitext(config_name)[0]
         self._qid_names_template = qid_names_template
         self._model_file_template = model_file_template
         self._sim_file_template = sim_file_template
 
         # check availability, compatibility of config name
-        if self._dumpable:
-            self._config_fn = self._check_config(return_config_fn=True)
+        self._config_name = os.path.splitext(config_name)[0]
+        if not config_name.endswith('.yaml'):
+            config_name += '.yaml'
 
-        self._notes = notes
+        # helps distinguish the "from_config" case: this is already checked, so it will only
+        # fail when self._dumpable=False if not from config and more than one such config
+        # already exists (this is extra protection for filenames, not configs)
+        self._config_fn = utils.get_mnms_fn(config_name, 'configs', to_write=self._dumpable)
+        self._check_yaml_config(self._config_fn)
 
         super().__init__(**kwargs)
 
@@ -893,6 +915,17 @@ class ConfigManager(ABC):
         """Return a dictionary of model parameters particular to this class"""
         pass
 
+    @abstractmethod
+    def _model_param_dict_updater(self, model_param_dict):
+        """Add more entries to an instance's model_param_dict, e.g. file templates."""
+        pass
+
+    @classmethod
+    @abstractmethod
+    def from_config(cls, config_name, *qids):
+        """Load an instance from an on-disk config."""
+        pass
+
     def _get_default_config_name(self):
         """Return a default config name based on the current time.
 
@@ -910,93 +943,142 @@ class ConfigManager(ABC):
         default_name += f'{str(t.tm_min).zfill(2)}'
         return default_name
 
-    def _check_config(self, return_config_fn=False):
-        """Check for compatibility of supplied config with existing config on
-        disk, if there is one.
+    def _check_yaml_config(self, config_fn):
+        """Check for compatibility of config, if it exists on disk, with
+        this instance's BaseNoiseModel parameters and noise model subclass
+        parameters.
 
         Parameters
         ----------
-        return_config_fn : bool, optional
-            Return full path to supplied config, by default False.
+        config_fn : path-like
+            File for the config to be checked.
 
-        Returns
-        -------
-        str
-            Full path to supplied config if return_config_fn is True.
+        Raises
+        ------
+        KeyError
+            If config_fn does not contain an entry under key 'BaseNoiseModel'.
 
-        Notes
-        -----
-        A config is incompatible and an exception raised if:
-            1. It exists as a shipped config within the mnms package.
-            2. It exists on-disk and the BaseNoiseModel parameters are not
-               identical to the supplied BaseNoiseModel parameters.
-            3. It exists on-disk and the subclass parameters are not identical
-               to the supplied subclass paramaters.
-        
-        Conversely, config is compatible if:
-            1. It does not already exit on disk or in the mnms package.
-            2. If exists on-disk and the BaseNoiseModel parameters identically
-               match the supplied BaseNoiseModel parameters.
-            3. It exists on-disk and the subclass parameters identically match
-               the supplied subclass parameters.
+        AssertionError
+            If config_fn contains an entry under key 'BaseNoiseModel',
+            and the value under that entry does not match this instance's
+            _base_param_dict attribute.
+
+        AssertionError
+            If config_fn contains an entry under key 'XYZNoiseModel',
+            and the value under that entry does not match this instance's
+            _model_param_dict attribute (assuming the NoiseModel subclass of 
+            this instance is 'XYZNoiseModel').
         """
-        config_name = self._config_name
+        # if config doesn't exist on-disk, it is compatible
+        try:
+            on_disk_dict = a_utils.config_from_yaml_file(config_fn)
 
-        if not config_name.endswith('.yaml'):
-            config_name += '.yaml'
-
-        # dont want to allow user to write to a packaged or distributed config
-        config_fn = utils.get_mnms_fn(config_name, 'configs', to_write=True)
-
-        # if config name already exists on disk in user config directory, we
-        # want to check if our parameters are equivalent to what's there
-        if os.path.isfile(config_fn):
-            existing_config_dict = a_utils.config_from_yaml_file(config_fn)
-            existing_base_param_dict = existing_config_dict['BaseNoiseModel']
-            assert self._base_param_dict == existing_base_param_dict, \
-                f'Existing {config_name} BaseNoiseModel parameters do not match ' + \
+            # raise KeyError if no BaseNoiseModel
+            test_base_param_dict = on_disk_dict['BaseNoiseModel']
+            assert self._base_param_dict == test_base_param_dict, \
+                f'Internal BaseNoiseModel parameters do not match ' + \
                 f'supplied BaseNoiseModel parameters'
 
-            # if no NoiseModel of this type in the existing config, can return as-is
-            if self.__class__.__name__ in existing_config_dict:
-                existing_model_param_dict = existing_config_dict[self.__class__.__name__]
+            if self.__class__.__name__ in on_disk_dict:
+                test_model_param_dict = on_disk_dict[self.__class__.__name__]
                 model_param_dict = self._model_param_dict.copy()
                 self._model_param_dict_updater(model_param_dict)
-                assert model_param_dict == existing_model_param_dict, \
-                    f'Existing {config_name} {self.__class__.__name__} parameters ' + \
+                assert model_param_dict == test_model_param_dict, \
+                    f'Internal {self.__class__.__name__} parameters ' + \
                     f'do not match supplied {self.__class__.__name__} parameters'
+        except FileNotFoundError:
+            pass 
 
-        if return_config_fn:
-            return config_fn
-        else:
-            return None 
-
-    def _save_to_config(self):
+    def _save_yaml_config(self, config_fn):
         """Save the config to disk."""
-        if self._dumpable:
-            self._check_config()
-            if not os.path.isfile(self._config_fn):
-                with open(self._config_fn, 'w') as f:
-                    yaml.safe_dump({'BaseNoiseModel': self._base_param_dict}, f)
-                    
-            existing_config_dict = a_utils.config_from_yaml_file(self._config_fn)
-            if self.__class__.__name__ not in existing_config_dict:
-                with open(self._config_fn, 'a') as f:
+        self._check_yaml_config(config_fn)
+
+        assert self._dumpable, 'This instance is not dumpable'
+
+        try:
+            on_disk_dict = a_utils.config_from_yaml_file(config_fn)
+
+            if self.__class__.__name__ not in on_disk_dict:
+                model_param_dict = self._model_param_dict.copy()
+                self._model_param_dict_updater(model_param_dict)
+                
+                with open(config_fn, 'a') as f:
                     f.write('\n')
-                    if self._notes is not None:
-                        f.write(f'# {self._notes}\n')
-                    model_param_dict = self._model_param_dict.copy()
-                    self._model_param_dict_updater(model_param_dict)
                     yaml.safe_dump({self.__class__.__name__: model_param_dict}, f)    
 
-    @abstractmethod
-    def _model_param_dict_updater(self, model_param_dict):
-        pass
+        except FileNotFoundError:
+            with open(self._config_fn, 'w') as f:
+                yaml.safe_dump({'BaseNoiseModel': self._base_param_dict}, f)
+            self._save_yaml_config(config_fn)
 
-    @classmethod
-    @abstractmethod
-    def from_config(cls, config_name, *qids):
-        pass
+    def _check_hdf5_config(self, hfile, address=None, attr=None):
+        """Check for compatibility of config with this instance's
+        BaseNoiseModel parameters and noise model subclass parameters.
+
+        Parameters
+        ----------
+        hfile : h5py.Group
+            Open file stream for the config to be checked.
+        address : str, optional
+            Group in hfile to look for config, by default the root.
+        attr : any, optional
+            The attribute name in the group under which config is stored,
+            by default None.
+
+        Raises
+        ------
+        KeyError
+            If hfile does not contain a config at requested group address and
+            attribute location.
+            
+        KeyError
+            If config does not contain an entry under key 'BaseNoiseModel'.
+
+        AssertionError
+            If config contains an entry under key 'BaseNoiseModel',
+            and the value under that entry does not match this instance's
+            _base_param_dict attribute.
+
+        KeyError
+            If config does not contain an entry under key 'XYZNoiseModel'.
+
+        AssertionError
+            If config contains an entry under key 'XYZNoiseModel',
+            and the value under that entry does not match this instance's
+            _model_param_dict attribute (assuming the NoiseModel subclass of 
+            this instance is 'XYZNoiseModel').
+        """
+        # if hdf5 file does not contain requested config, it is NOT compatible
+        address = '/' if address is None else address
+        on_disk_dict = utils.config_from_hdf5_file(hfile, address=address, attr=attr)
+
+        # raise KeyError if no BaseNoiseModel
+        test_base_param_dict = on_disk_dict['BaseNoiseModel']
+        assert self._base_param_dict == test_base_param_dict, \
+            f'Internal BaseNoiseModel parameters do not match ' + \
+            f'supplied BaseNoiseModel parameters'
+
+        # raise KeyError if no subclass model
+        test_model_param_dict = on_disk_dict[self.__class__.__name__]
+        model_param_dict = self._model_param_dict.copy()
+        self._model_param_dict_updater(model_param_dict)
+        assert model_param_dict == test_model_param_dict, \
+            f'Internal {self.__class__.__name__} parameters ' + \
+            f'do not match supplied {self.__class__.__name__} parameters'
+
+    def _save_hdf5_config(self, hfile, address=None, attr=None):
+        """Save the config in filestream hfile at hfile[address].attrs[attr]."""
+        assert self._dumpable, 'This instance is not dumpable'
+
+        model_param_dict = self._model_param_dict.copy()
+        self._model_param_dict_updater(model_param_dict)
+
+        address = '/' if address is None else address
+        grp = hfile.require_group(address)
+        grp.attrs[attr] = yaml.safe_dump({
+            'BaseNoiseModel': self._base_param_dict,
+            self.__class__.__name__: model_param_dict
+            })
 
 
 # BaseNoiseModel API and concrete NoiseModel classes. 
@@ -1104,14 +1186,10 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         kwargs.update(self._model_param_dict)
 
         fn = self._model_file_template.format(**kwargs)
-        fn += self._model_ext
+        if not fn.endswith('.hdf5'):
+            fn += '.hdf5'
         fn = utils.get_mnms_fn(fn, 'models', to_write=to_write)
         return fn
-
-    @property
-    @abstractmethod
-    def _model_ext(self):
-        return ''
 
     def _get_sim_fn(self, split_num, sim_num, lmax, alm=True, to_write=False, **subproduct_kwargs):
         """Get a sim filename for split split_num, sim sim_num, and bool alm; return as <str>"""
@@ -1201,7 +1279,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             Dictionary of noise model objects for this split, such as
             'sqrt_cov_mat' and auxiliary measurements (noise power spectra).
         """
-        self._save_to_config()
+        if self._dumpable:
+            self._save_yaml_config(self._config_fn)
 
         downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
         lmax_model = lmax
@@ -1432,7 +1511,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             (num_arrays, num_splits=1, num_pol, ny, nx), even if some of these
             axes have size 1. As implemented, num_splits is always 1. 
         """
-        self._save_to_config()
+        if self._dumpable:
+            self._save_yaml_config(self._config_fn)
 
         downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax) 
 
@@ -1627,10 +1707,6 @@ class TiledNoiseModel(BaseNoiseModel):
         super().__init__(*qids, **kwargs)
 
     @property
-    def _model_ext(self):
-        return '.fits'
-
-    @property
     def _pre_filt_rel_upgrade(self):
         """Relative pixelization upgrade factor for model-building step"""
         return 2
@@ -1778,10 +1854,6 @@ class WaveletNoiseModel(BaseNoiseModel):
         # accesses this subclass's _model_param_dict which requires those
         # attributes to exist
         super().__init__(*qids, **kwargs)
-
-    @property
-    def _model_ext(self):
-        return '.hdf5'
 
     @property
     def _pre_filt_rel_upgrade(self):
@@ -1987,10 +2059,6 @@ class FDWNoiseModel(BaseNoiseModel):
         self._fk_dict = {}
 
     @property
-    def _model_ext(self):
-        return '.hdf5'
-
-    @property
     def _pre_filt_rel_upgrade(self):
         """Relative pixelization upgrade factor for model-building step"""
         return 2
@@ -2029,7 +2097,7 @@ class FDWNoiseModel(BaseNoiseModel):
 
     def _read_model(self, fn):
         """Read a noise model with filename fn; return a dictionary of noise model variables"""
-        sqrt_cov_mat, extra_datasets = fdw_noise.read_wavs(
+        sqrt_cov_mat, _, extra_datasets = fdw_noise.read_wavs(
             fn, extra_datasets=['sqrt_cov_ell']
         )
         sqrt_cov_ell = extra_datasets['sqrt_cov_ell']
@@ -2648,12 +2716,6 @@ class HarmonicMixture(ConfigManager):
             profile=self._profile,
         )        
 
-    def _save_to_config(self):
-        """Save the config to disk."""
-        for noise_model in self._noise_models:
-            noise_model._save_to_config()
-        super()._save_to_config()
-
     def _model_param_dict_updater(self, model_param_dict):
         model_param_dict.update(
             sim_file_template=self._sim_file_template
@@ -2696,6 +2758,12 @@ class HarmonicMixture(ConfigManager):
             ))
 
         return cls(**kwargs)
+
+    def _save_yaml_config(self, config_fn):
+        """Save the config to disk."""
+        for noise_model in self._noise_models:
+            noise_model._save_yaml_config(config_fn)
+        self._save_yaml_config(config_fn)
 
     def _get_sim_fn(self, split_num, sim_num, alm=True, to_write=False, **subproduct_kwargs):
         """Get a sim filename for split split_num, sim sim_num, and bool alm; return as <str>"""
@@ -2787,6 +2855,9 @@ class HarmonicMixture(ConfigManager):
             (num_arrays, num_splits=1, num_pol, ny, nx), even if some of these
             axes have size 1. As implemented, num_splits is always 1. 
         """
+        if self._dumpable:
+            self._save_yaml_config(self._config_fn)
+
         assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
 
         if check_mix_on_disk:
