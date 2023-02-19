@@ -2376,11 +2376,12 @@ def colorscheme_to_cmap(desc):
     return LinearSegmentedColormap(desc, cdict)
 
 def plot(imap, ax=None, downgrade=None, upgrade=None, mask=None, cmap=None,
-         desc='planck', range=None, min=None, max=None, ticks=None, grid=False,
-         xlabel=None, ylabel=None, title=None, colorbar=True,
-         colorbar_position='right', colorbar_size='1.5%', colorbar_pad='0.75%',
-         colorbar_label=None, colorbar_label_rotation=270, 
-         colorbar_labelpad=-12, **kwargs):
+         desc='planck', range=None, min=None, max=None, ticks=None,
+         tick_fontsize=12, grid=False, xlabel=None, ylabel=None, title=None,
+         label_fontsize=12, colorbar=True, colorbar_position='right',
+         colorbar_size='1.5%', colorbar_pad='0.75%', colorbar_tickformat=None,
+         colorbar_fontsize=12, colorbar_label=None,
+         colorbar_label_rotation=270, colorbar_labelpad=0, **kwargs):
     """Plot an ndmap with the added functionality/extensibility of matplotlib.
     This function's defaults are set for plotting maps of the ACT patch, but
     by passing a prebuilt axis or axes to 'ax', it can be made more flexible,
@@ -2426,6 +2427,8 @@ def plot(imap, ax=None, downgrade=None, upgrade=None, mask=None, cmap=None,
         Add labeled tick on plot(s) border with interval set by imap.wcs,
         by default None. If multiple plots produced, labels only on border
         of group of plots -- that is, not between plots.
+    tick_fontsize : scalar, optional
+        Fontsize of ticks, by default 12.
     grid : bool, optional
         Add gridlines to ticks, by default False.
     xlabel : str, optional
@@ -2436,6 +2439,8 @@ def plot(imap, ax=None, downgrade=None, upgrade=None, mask=None, cmap=None,
         only on first column of plots.
     title : str, optional
         Title for axes, by default None.
+    label_fontsize : scalar, optional
+        Fontsize of labels and title, by default 12.
     colorbar : bool, optional
         Whether to add colorbar to axes, by default True.
     colorbar_position : str, optional
@@ -2447,12 +2452,20 @@ def plot(imap, ax=None, downgrade=None, upgrade=None, mask=None, cmap=None,
     colorbar_pad : str, optional
         Colorbar spacing relative to axes, by default '0.75%'.
         See matplotlib.divider.append_axes.
+    colorbar_tickformat : str or Formatter, optional
+        Tick format string for the colorbar, by default None. If None, uses
+        default format unless abs(num) < .1 or >= 1000, then switches to
+        scientific notation (but 0 always scalar).
+    colorbar_fontsize : scalar, optional
+        Fontsize for colorbar ticks and label, by default 12.
     colorbar_label : str, optional
         Text to add to center of colorbar, by default None.
     colorbar_label_rotation : int, optional
         Rotation of label, by default 270.
     colorbar_labelpad : int, optional
-        Position of label relative to colorbar, by default -12.
+        Position of label relative to colorbar, by default 0.
+    kwargs : dict, optional
+        Remaining kwargs to pass to ax.imshow.
 
     Returns
     -------
@@ -2469,7 +2482,7 @@ def plot(imap, ax=None, downgrade=None, upgrade=None, mask=None, cmap=None,
             imap = imap.reshape(-1, 1, *imap.shape[-2:])
             nrows = imap.shape[0]
             _, ax = plt.subplots(
-                figsize=(12, 3*nrows), dpi=144, nrows=nrows, sharex=True, squeeze=False
+                figsize=(12, 3*nrows), dpi=196, nrows=nrows, sharex=True, squeeze=False
                 )
         else:
             ax = np.asarray(ax)
@@ -2481,11 +2494,12 @@ def plot(imap, ax=None, downgrade=None, upgrade=None, mask=None, cmap=None,
 
         for idx in np.ndindex(imap.shape[:-2]):
             plot(imap[idx], ax=ax[idx], downgrade=downgrade, upgrade=upgrade, mask=mask,
-                 cmap=cmap, desc=desc, range=range, min=min, max=max, ticks=ticks,
+                 cmap=cmap, desc=desc, range=range, min=min, max=max, ticks=ticks, tick_fontsize=tick_fontsize,
                  grid=grid, xlabel=xlabel if idx[0]==nrows-1 else None,
-                 ylabel=ylabel if idx[1]==0 else None, title=title, colorbar=colorbar,
+                 ylabel=ylabel if idx[1]==0 else None, title=title, label_fontsize=label_fontsize, colorbar=colorbar,
                  colorbar_position=colorbar_position, colorbar_size=colorbar_size,
-                 colorbar_pad=colorbar_pad, colorbar_label=colorbar_label,
+                 colorbar_pad=colorbar_pad, colorbar_tickformat=colorbar_tickformat,
+                 colorbar_fontsize=colorbar_fontsize, colorbar_label=colorbar_label,
                  colorbar_label_rotation=colorbar_label_rotation, 
                  colorbar_labelpad=colorbar_labelpad, **kwargs
                  )
@@ -2493,7 +2507,7 @@ def plot(imap, ax=None, downgrade=None, upgrade=None, mask=None, cmap=None,
         return ax
 
     if ax is None:
-        _, ax = plt.subplots(figsize=(12, 3), dpi=144)
+        _, ax = plt.subplots(figsize=(12, 3), dpi=196)
     
     if downgrade is not None:
         imap = imap.downgrade(downgrade)
@@ -2543,38 +2557,63 @@ def plot(imap, ax=None, downgrade=None, upgrade=None, mask=None, cmap=None,
                 x_labels.append(x_label)
 
         def format_func_y(value, tick_num):
-            return f'{y_labels[tick_num]:.0f}'
+            val = y_labels[tick_num]
+            if val.is_integer():
+                return f'{val:.0f}'
+            else:
+                return val
 
         def format_func_x(value, tick_num):
-            return f'{x_labels[tick_num]:.0f}'
-
+            val = x_labels[tick_num]
+            if val.is_integer():
+                return f'{val:.0f}'
+            else:
+                return val
+            
         ax.yaxis.set_major_locator(ticker.FixedLocator(y_pixs))
         ax.xaxis.set_major_locator(ticker.FixedLocator(x_pixs))
         ax.yaxis.set_major_formatter(ticker.FuncFormatter(format_func_y))
         ax.xaxis.set_major_formatter(ticker.FuncFormatter(format_func_x))
+        ax.tick_params(labelsize=tick_fontsize)
     else:
         ax.yaxis.set_major_locator(ticker.NullLocator())
         ax.xaxis.set_major_locator(ticker.NullLocator())    
 
     if grid:
-        ax.grid()
+        ax.grid(linewidth=.3, color='grey', alpha=.5)
 
     if xlabel is not None:
-        ax.set_xlabel(xlabel)
+        ax.set_xlabel(xlabel, fontsize=label_fontsize)
     if ylabel is not None:
-        ax.set_ylabel(ylabel)
+        ax.set_ylabel(ylabel, fontsize=label_fontsize)
     if title is not None:
-        ax.set_title(title)
+        ax.set_title(title, fontsize=label_fontsize)
 
     if colorbar:
         divider = make_axes_locatable(ax)
         ax_cb = divider.append_axes(
             colorbar_position, size=colorbar_size, pad=colorbar_pad
             )
-        cb = ax.get_figure().colorbar(im, cax=ax_cb, ticks=[min, max])
+        
+        def format_func_cbar(value, tick_num):
+            if value == 0:
+                return '0'
+            elif abs(value) < .1 or abs(value) >= 1000:
+                return np.format_float_scientific(value, precision=4, trim='-', exp_digits=0)
+            else:
+                return value
+        
+        if colorbar_tickformat is None:
+            colorbar_tickformat = ticker.FuncFormatter(format_func_cbar)
+
+        cb = ax.get_figure().colorbar(
+            im, cax=ax_cb, ticks=[min, max], format=colorbar_tickformat
+            )
+        
+        cb.ax.tick_params(labelsize=colorbar_fontsize)
         if colorbar_label is not None:
             cb.set_label(
-                colorbar_label, rotation=colorbar_label_rotation, labelpad=colorbar_labelpad
+                colorbar_label, rotation=colorbar_label_rotation, labelpad=colorbar_labelpad, fontsize=colorbar_fontsize
                 )
 
     return ax
