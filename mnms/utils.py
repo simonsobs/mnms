@@ -103,31 +103,25 @@ def get_mnms_fn(basename, pathtype, no_fn_collisions=True, to_write=False):
         fns, no_fn_collisions=no_fn_collisions, write_to_fn_idx=write_to_fn_idx
         )
 
-def config_from_hdf5_file(filename, address=None, attr=None):
-    """Return a yaml-encoded dictionary at hfile[address].attrs[attr]
-
+def config_from_hdf5_file(filename, address='/'):
+    """Return a dictionary of the attributes at hfile[address].attrs.
     Parameters
     ----------
     filename : h5py.Group or path-like
         Either an h5py.Group stream or a system path.
     address : str, optional
         Group in hfile to look for config, by default the root.
-    attr : any, optional
-        The attribute name in the group under which config is stored,
-        by default None.
 
     Returns
     -------
     dict
-        yaml-encoded dictionary at hfile[address].attrs[attr]
+        dict(hfile[address].attrs)
     """
-    address = '/' if address is None else address
-
     if not isinstance(filename, h5py.Group):
         with h5py.File(filename, 'r') as hfile:
-            return config_from_hdf5_file(hfile, address=address, attr=attr)
+            return config_from_hdf5_file(hfile, address=address)
     
-    return yaml.safe_load(filename[address].attrs[attr])
+    return dict(hfile[address].attrs)
 
 def slice_geometry_by_pixbox(ishape, iwcs, pixbox):
     pb = np.asarray(pixbox)

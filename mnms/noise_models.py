@@ -42,7 +42,7 @@ class DataManager:
 
     def __init__(self, *qids, data_model_name=None, subproduct='default',
                  possible_subproduct_kwargs=None, enforce_equal_qid_kwargs=None,
-                 calibrated=False, mask_est_name=None, mask_obs_name=None,
+                 calibrated=False, differenced=True, mask_est_name=None, mask_obs_name=None,
                  catalog_name=None, kfilt_lbounds=None, fwhm_ivar=None,
                  dtype=np.float32, cache=None, **kwargs):
         """Helper class for all BaseNoiseModel subclasses. Supports loading raw
@@ -68,6 +68,9 @@ class DataManager:
             are available to be passed to model or sim filename templates.
         calibrated : bool, optional
             Whether to load calibrated raw data, by default False.
+        differenced : bool, optional,
+            Whether to take differences between splits or treat loaded maps as raw noise 
+            (e.g., a time-domain sim) that will not be differenced, by default True.
         mask_est_name : str, optional
             Name of harmonic filter estimate mask file, by default None. This mask will
             be used as the mask_est (see above) if mask_est is None. Only allows fits
@@ -133,6 +136,7 @@ class DataManager:
 
         # other instance properties
         self._calibrated = calibrated
+        self._differenced = differenced
 
         if mask_est_name is not None:
             if not mask_est_name.endswith(('.fits', '.hdf5')):
@@ -172,7 +176,7 @@ class DataManager:
                 f'Found unknown cache product {k} in cache'
         self._cache = cache
 
-        # Get lmax, downgrade factor, shape, and wcs
+        # Get lmax, shape, and wcs
         self._full_shape, self._full_wcs = self._check_geometry()
         self._full_lmax = utils.lmax_from_wcs(self._full_wcs)
 
@@ -181,7 +185,8 @@ class DataManager:
 
     def subproduct_kwargs_iter(self):
         """An iterator yielding all possible subproduct_kwargs dictionaries."""
-        if self._possible_subproduct_kwargs is None:
+        possible_subproduct_kwargs = self._possible_subproduct_kwargs
+        if possible_subproduct_kwargs is None:
             possible_subproduct_kwargs = {}
 
         for subproduct_kwargs_values in product(*possible_subproduct_kwargs.values()):
@@ -427,7 +432,14 @@ class DataManager:
         """
         mask_good = ivar != 0
         inpaint.inpaint_median(ivar, mask_good, inplace=True)
-        utils.smooth_gauss(ivar, np.radians(self._fwhm_ivar), inplace=True)
+
+        # flatten_axes = [0] because ivar is (1, ny, nx) (i.e., no way
+        # to concurrent-ize this smoothing)
+        utils.smooth_gauss(
+            ivar, np.radians(self._fwhm_ivar), inplace=True, 
+            method='map', flatten_axes=[0], nthread=0,
+            mode=['nearest', 'wrap']
+            )
         ivar *= mask_good
         return ivar
 
@@ -445,9 +457,13 @@ class DataManager:
 
         Returns
         -------
-        cfact : (nmaps, nsplits=1, npol, ny, nx) enmap
-            Correction factor maps, possibly downgraded. 
+        cfact : int or (nmaps, nsplits=1, npol, ny, nx) enmap
+            Correction factor maps, possibly downgraded. If DataManger is 
+            not differenced (at initialization), return 1. 
         """
+        if not self._differenced:
+            return 1
+
         shape, wcs = utils.downgrade_geometry_cc_quad(
             self._full_shape, self._full_wcs, downgrade
             )
@@ -511,7 +527,10 @@ class DataManager:
         Returns
         -------
         dmap : (nmaps, nsplits=1, npol, ny, nx) enmap
-            Data split difference maps, possibly downgraded.
+            Data split difference maps, possibly downgraded. If DataManger is 
+            not differenced (at initialization), there is no difference taken:
+            the returned map is the raw loaded map (possibly inpainted,
+            downgraded etc.)
         """
         shape, wcs = utils.downgrade_geometry_cc_quad(
             self._full_shape, self._full_wcs, downgrade
@@ -537,15 +556,18 @@ class DataManager:
                     mul_ivar = 1
 
                 # get the coadd from disk, this is the same for all splits
-                cmap = utils.read_map(
-                    self._data_model, qid, coadd=True, ivar=False,
-                    subproduct=self._subproduct, **subproduct_kwargs
-                    )
-                cmap = enmap.extract(cmap, self._full_shape, self._full_wcs) 
-                cmap *= mul_imap
+                if self._differenced:
+                    cmap = utils.read_map(
+                        self._data_model, qid, coadd=True, ivar=False,
+                        subproduct=self._subproduct, **subproduct_kwargs
+                        )
+                    cmap = enmap.extract(cmap, self._full_shape, self._full_wcs) 
+                    cmap *= mul_imap
+                else:
+                    cmap = 0
 
                 # need full-res coadd ivar if inpainting or kspace filtering
-                if self._catalog_name or self._kfilt_lbounds:
+                if (self._catalog_name or self._kfilt_lbounds) and self._differenced:
                     cvar = utils.read_map(
                         self._data_model, qid, coadd=True, ivar=True,
                         subproduct=self._subproduct, **subproduct_kwargs
@@ -571,7 +593,10 @@ class DataManager:
                         )
                     ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
                     ivar *= mul_ivar
-                    ivar_eff = utils.get_ivar_eff(ivar, sum_ivar=cvar, use_zero=True)
+                    if self._differenced:
+                        ivar_eff = utils.get_ivar_eff(ivar, sum_ivar=cvar, use_zero=True)
+                    else:
+                        ivar_eff = ivar
 
                 # take difference before inpainting or kspace_filtering
                 dmap = imap - cmap
@@ -895,6 +920,9 @@ class ConfigManager(ABC):
         self._config_fn = utils.get_mnms_fn(config_name, 'configs', to_write=self._dumpable)
         self._check_yaml_config(self._config_fn)
 
+        # NOTE: we only save config with updates as necessary in call to get_model,
+        # to avoid proliferation of random configs from testing, etc.
+
         super().__init__(**kwargs)
 
     @property
@@ -942,143 +970,257 @@ class ConfigManager(ABC):
         default_name += f'{str(t.tm_hour).zfill(2)}'
         default_name += f'{str(t.tm_min).zfill(2)}'
         return default_name
-
-    def _check_yaml_config(self, config_fn):
-        """Check for compatibility of config, if it exists on disk, with
-        this instance's BaseNoiseModel parameters and noise model subclass
-        parameters.
+    
+    def _check_config(self, config_dict, permit_absent_subclass=True):
+        """Check a config dictionary for compatibility with this NoiseModel's
+        parameters. Config dictionary must have a BaseNoiseModel block
+        with parameters compatible with this model's BaseNoiseModel parameters.
+        Similar check performed on this model's NoiseModel subclass parameters
+        depending on permit_absent_cubclass.
 
         Parameters
         ----------
-        config_fn : path-like
-            File for the config to be checked.
+        config_dict : dict
+            yaml-encoded dictionary.
+        permit_absent_subclass : bool, optional
+            If True, config is compatibile even if config_dict does not contain
+            entry for this model's subclass, by default True. Regardless of value,
+            if config_dict does contain entry for this model's subclass, that 
+            entry is always checked for compatibility.
 
         Raises
         ------
         KeyError
-            If config_fn does not contain an entry under key 'BaseNoiseModel'.
+            If loaded config does not contain an entry under key 'BaseNoiseModel'.
 
         AssertionError
-            If config_fn contains an entry under key 'BaseNoiseModel',
-            and the value under that entry does not match this instance's
+            If the value under key 'BaseNoiseModel' does not match this instance's
             _base_param_dict attribute.
 
+        KeyError
+            If loaded config does not contain an entry under key 'XYZNoiseModel' and
+            permit_absent_subclass is False.
+
         AssertionError
-            If config_fn contains an entry under key 'XYZNoiseModel',
-            and the value under that entry does not match this instance's
-            _model_param_dict attribute (assuming the NoiseModel subclass of 
-            this instance is 'XYZNoiseModel').
+            If the value under key 'XYZNoiseModel' does not match this instance's
+            _model_param_dict attribute.
         """
-        # if config doesn't exist on-disk, it is compatible
+        # raise KeyError if no BaseNoiseModel
+        test_base_param_dict = config_dict['BaseNoiseModel']
+        assert self._base_param_dict == test_base_param_dict, \
+            f'Internal BaseNoiseModel parameters do not match ' + \
+            f'supplied BaseNoiseModel parameters'
+        
+        def _check_model_dict():
+            test_model_param_dict = config_dict[self.__class__.__name__]
+            model_param_dict = self._model_param_dict.copy()
+            self._model_param_dict_updater(model_param_dict)
+            assert model_param_dict == test_model_param_dict, \
+                f'Internal {self.__class__.__name__} parameters ' + \
+                f'do not match supplied {self.__class__.__name__} parameters'
+
+        if permit_absent_subclass:
+            # don't raise KeyError if no XYZNoiseModel
+            if self.__class__.__name__ in config_dict:
+                _check_model_dict()
+        else:
+            # raise KeyError if no XYZNoiseModel
+            _check_model_dict()
+            
+    def _check_yaml_config(self, file, permit_absent_config=True, 
+                           permit_absent_subclass=True):
+        """Check for compatibility of config saved in a yaml file. If file
+        exists, config dictionary must have a BaseNoiseModel block
+        with parameters compatible with this model's BaseNoiseModel parameters.
+        Similar check performed on this model's NoiseModel subclass parameters
+        depending on permit_absent_cubclass.
+
+        Parameters
+        ----------
+        file : path-like or io.TextIOBase
+            Filename or open file stream for the config to be checked.
+        permit_absent_config : bool
+            If True, config is compatibile even if config file not on-disk, by 
+            default True. Regardless of value, if config file does exist on-disk,
+            file is loaded and BaseNoiseModel is checked for compatibility.
+        permit_absent_subclass : bool, optional
+            If True, config is compatibile even if config_dict does not contain
+            entry for this model's subclass, by default True. Regardless of value,
+            if config_dict does contain entry for this model's subclass, that 
+            entry is always checked for compatibility.
+
+        Raises
+        ------
+        FileNotFoundError
+            If file does not exist and permit_absent_config is False.
+
+        KeyError
+            If loaded config does not contain an entry under key 'BaseNoiseModel'.
+
+        AssertionError
+            If the value under key 'BaseNoiseModel' does not match this instance's
+            _base_param_dict attribute.
+
+        KeyError
+            If loaded config does not contain an entry under key 'XYZNoiseModel' and
+            permit_absent_subclass is False.
+
+        AssertionError
+            If the value under key 'XYZNoiseModel' does not match this instance's
+            _model_param_dict attribute.
+        """
         try:
-            on_disk_dict = a_utils.config_from_yaml_file(config_fn)
+            on_disk_dict = a_utils.config_from_yaml_file(file)
+        except FileNotFoundError as e:
+            if not permit_absent_config:
+                raise e 
+            else:
+                return 
+    
+        self._check_config(on_disk_dict, permit_absent_subclass=permit_absent_subclass)
 
-            # raise KeyError if no BaseNoiseModel
-            test_base_param_dict = on_disk_dict['BaseNoiseModel']
-            assert self._base_param_dict == test_base_param_dict, \
-                f'Internal BaseNoiseModel parameters do not match ' + \
-                f'supplied BaseNoiseModel parameters'
-
-            if self.__class__.__name__ in on_disk_dict:
-                test_model_param_dict = on_disk_dict[self.__class__.__name__]
-                model_param_dict = self._model_param_dict.copy()
-                self._model_param_dict_updater(model_param_dict)
-                assert model_param_dict == test_model_param_dict, \
-                    f'Internal {self.__class__.__name__} parameters ' + \
-                    f'do not match supplied {self.__class__.__name__} parameters'
-        except FileNotFoundError:
-            pass 
-
-    def _save_yaml_config(self, config_fn):
-        """Save the config to disk."""
-        self._check_yaml_config(config_fn)
-
-        assert self._dumpable, 'This instance is not dumpable'
-
-        try:
-            on_disk_dict = a_utils.config_from_yaml_file(config_fn)
-
-            if self.__class__.__name__ not in on_disk_dict:
-                model_param_dict = self._model_param_dict.copy()
-                self._model_param_dict_updater(model_param_dict)
-                
-                with open(config_fn, 'a') as f:
-                    f.write('\n')
-                    yaml.safe_dump({self.__class__.__name__: model_param_dict}, f)    
-
-        except FileNotFoundError:
-            with open(self._config_fn, 'w') as f:
-                yaml.safe_dump({'BaseNoiseModel': self._base_param_dict}, f)
-            self._save_yaml_config(config_fn)
-
-    def _check_hdf5_config(self, hfile, address=None, attr=None):
+    def _check_hdf5_config(self, file, address='/', permit_absent_config=True, 
+                           permit_absent_subclass=True):
         """Check for compatibility of config with this instance's
         BaseNoiseModel parameters and noise model subclass parameters.
 
         Parameters
         ----------
-        hfile : h5py.Group
-            Open file stream for the config to be checked.
+        file : path-like or h5py.Group
+            Filename or open file stream for the config to be checked.
         address : str, optional
-            Group in hfile to look for config, by default the root.
-        attr : any, optional
-            The attribute name in the group under which config is stored,
-            by default None.
+            Group in file to look for config, by default the root.
+        permit_absent_config : bool
+            If True, config is compatibile even if config file not on-disk, by 
+            default True. Regardless of value, if config file does exist on-disk,
+            file is loaded and BaseNoiseModel is checked for compatibility.
+        permit_absent_subclass : bool, optional
+            If True, config is compatibile even if config_dict does not contain
+            entry for this model's subclass, by default True. Regardless of value,
+            if config_dict does contain entry for this model's subclass, that 
+            entry is always checked for compatibility.
 
         Raises
         ------
+        FileNotFoundError
+            If file does not exist, or file does not contain a config at 
+            requested group address and attribute location, and 
+            permit_absent_config is False.
+
         KeyError
-            If hfile does not contain a config at requested group address and
-            attribute location.
-            
-        KeyError
-            If config does not contain an entry under key 'BaseNoiseModel'.
+            If loaded config does not contain an entry under key 'BaseNoiseModel'.
 
         AssertionError
-            If config contains an entry under key 'BaseNoiseModel',
-            and the value under that entry does not match this instance's
+            If the value under key 'BaseNoiseModel' does not match this instance's
             _base_param_dict attribute.
 
         KeyError
-            If config does not contain an entry under key 'XYZNoiseModel'.
+            If loaded config does not contain an entry under key 'XYZNoiseModel' and
+            permit_absent_subclass is False.
 
         AssertionError
-            If config contains an entry under key 'XYZNoiseModel',
-            and the value under that entry does not match this instance's
-            _model_param_dict attribute (assuming the NoiseModel subclass of 
-            this instance is 'XYZNoiseModel').
+            If the value under key 'XYZNoiseModel' does not match this instance's
+            _model_param_dict attribute.
         """
-        # if hdf5 file does not contain requested config, it is NOT compatible
-        address = '/' if address is None else address
-        on_disk_dict = utils.config_from_hdf5_file(hfile, address=address, attr=attr)
+        try:
+            on_disk_dict = utils.config_from_hdf5_file(file, address=address)
+        except FileNotFoundError as e:
+            if not permit_absent_config:
+                raise e 
+            else:
+                return 
 
-        # raise KeyError if no BaseNoiseModel
-        test_base_param_dict = on_disk_dict['BaseNoiseModel']
-        assert self._base_param_dict == test_base_param_dict, \
-            f'Internal BaseNoiseModel parameters do not match ' + \
-            f'supplied BaseNoiseModel parameters'
+        self._check_config(on_disk_dict, permit_absent_subclass=permit_absent_subclass)
 
-        # raise KeyError if no subclass model
-        test_model_param_dict = on_disk_dict[self.__class__.__name__]
-        model_param_dict = self._model_param_dict.copy()
-        self._model_param_dict_updater(model_param_dict)
-        assert model_param_dict == test_model_param_dict, \
-            f'Internal {self.__class__.__name__} parameters ' + \
-            f'do not match supplied {self.__class__.__name__} parameters'
+    def _save_yaml_config(self, file, overwrite=False):
+        """Save the config to a yaml file on disk.
 
-    def _save_hdf5_config(self, hfile, address=None, attr=None):
-        """Save the config in filestream hfile at hfile[address].attrs[attr]."""
+        Parameters
+        ----------
+        file : path-like
+            Path to yaml file to be saved.
+        overwrite : bool, optional
+            Write to file whether or not it already exists, by default False.
+            If False, first check for compatibility permissively, then add
+            minimal information to config to be written (i.e., BaseNoiseModel
+            if none, else XYZNoiseModel if none).
+
+        Raises
+        ------
+        AssertionError
+            If this ConfigManager is not dumpable.
+        """
         assert self._dumpable, 'This instance is not dumpable'
 
+        # get things we might want to write
+        base_param_dict = self._base_param_dict
         model_param_dict = self._model_param_dict.copy()
         self._model_param_dict_updater(model_param_dict)
 
-        address = '/' if address is None else address
-        grp = hfile.require_group(address)
-        grp.attrs[attr] = yaml.safe_dump({
-            'BaseNoiseModel': self._base_param_dict,
-            self.__class__.__name__: model_param_dict
-            })
+        if overwrite:
+            with open(file, 'w') as f:
+                yaml.safe_dump({'BaseNoiseModel': base_param_dict}, f)
+                f.write('\n')
+                yaml.safe_dump({self.__class__.__name__: model_param_dict}, f) 
+
+        else:
+            self._check_yaml_config(file)
+
+            try:
+                on_disk_dict = a_utils.config_from_yaml_file(file)
+
+                if self.__class__.__name__ not in on_disk_dict:
+                    with open(file, 'a') as f:
+                        f.write('\n')
+                        yaml.safe_dump({self.__class__.__name__: model_param_dict}, f)    
+
+            except FileNotFoundError:
+                self._save_yaml_config(file, overwrite=True)
+
+    def _save_hdf5_config(self, file, address='/', overwrite=False):
+        """Save the config to a hdf5 file, at file[address].attrs, on disk.
+
+        Parameters
+        ----------
+        file : path-like
+            Path to hdf5 file to be saved.
+        overwrite : bool, optional
+            Write to file whether or not it already exists, by default False.
+            If False, first check for compatibility permissively, then add
+            minimal information to config to be written (i.e., BaseNoiseModel
+            if none, else XYZNoiseModel if none).
+
+        Raises
+        ------
+        AssertionError
+            If this ConfigManager is not dumpable.        
+        """
+        assert self._dumpable, 'This instance is not dumpable'
+
+        # get things we might want to write
+        base_param_dict = self._base_param_dict
+        model_param_dict = self._model_param_dict.copy()
+        self._model_param_dict_updater(model_param_dict)
+
+        if overwrite:
+            with h5py.File(file, 'w') as f:
+                grp = f.require_group(address)
+                grp.attrs['BaseNoiseModel'] = yaml.safe_dump(base_param_dict)   
+                grp.attrs[self.__class__.__name__] = yaml.safe_dump(model_param_dict)   
+
+        else:
+            self._check_hdf5_config(file)
+
+            try:
+                on_disk_dict = utils.config_from_hdf5_file(file, address=address)
+
+                if self.__class__.__name__ not in on_disk_dict:
+                    with h5py.File(file, 'a') as f:
+                        grp = f.require_group(address)
+                        grp.attrs[self.__class__.__name__] = yaml.safe_dump(model_param_dict)   
+
+            except FileNotFoundError:
+                self._save_hdf5_config(file, overwrite=True)
 
 
 # BaseNoiseModel API and concrete NoiseModel classes. 
@@ -1120,6 +1262,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             possible_subproduct_kwargs=self._possible_subproduct_kwargs,
             enforce_equal_qid_kwargs=self._enforce_equal_qid_kwargs,
             calibrated=self._calibrated,
+            differenced=self._differenced,
             mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name ,
             catalog_name=self._catalog_name,
@@ -1191,7 +1334,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         fn = utils.get_mnms_fn(fn, 'models', to_write=to_write)
         return fn
 
-    def _get_sim_fn(self, split_num, sim_num, lmax, alm=True, to_write=False, **subproduct_kwargs):
+    def _get_sim_fn(self, split_num, sim_num, lmax, alm=False, to_write=False, **subproduct_kwargs):
         """Get a sim filename for split split_num, sim sim_num, and bool alm; return as <str>"""
         kwargs = dict(
             noise_model_name=self.__class__.noise_model_name(),
@@ -1459,7 +1602,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         """Write a dictionary of noise model variables to filename fn"""
         pass
 
-    def get_sim(self, split_num, sim_num, lmax, alm=True, check_on_disk=True,
+    def get_sim(self, split_num, sim_num, lmax, alm=False, check_on_disk=True,
                 generate=True, keep_model=True, keep_mask_obs=True,
                 keep_ivar=True, write=False, verbose=False, **subproduct_kwargs):
         """Load or generate a sim from this NoiseModel. Will load necessary
@@ -1477,7 +1620,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         lmax : int
             Bandlimit for output noise covariance.
         alm : bool, optional
-            Generate simulated alms instead of a simulated map, by default True.
+            Generate simulated alms instead of a simulated map, by default False.
         check_on_disk : bool, optional
             If True, first check if an identical sim (including the noise model 'notes')
             exists on-disk. If it does not, generate the sim if 'generate' is True, and
@@ -1593,7 +1736,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         return sim
 
-    def _check_sim_on_disk(self, split_num, sim_num, lmax, alm=True, generate=True, **subproduct_kwargs):
+    def _check_sim_on_disk(self, split_num, sim_num, lmax, alm=False, generate=True, **subproduct_kwargs):
         """Check if this NoiseModel's sim for a given split, sim exists on-disk. 
         If it does, return it. Depending on the 'generate' kwarg, return either 
         False or raise a FileNotFoundError if it does not exist on-disk.
@@ -1607,7 +1750,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         lmax : int
             Bandlimit for output noise covariance.
         alm : bool, optional
-            Whether the sim is stored as an alm or map, by default True.
+            Whether the sim is stored as an alm or map, by default False.
         generate : bool, optional
             If the sim does not exist on-disk and 'generate' is True, then return
             False. If the sim does not exist on-disk and 'generate' is False, then
@@ -1634,10 +1777,10 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                 return enmap.read_map(fn)
         except FileNotFoundError as e:
             if generate:
-                print(f'Sim for split {_kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)} not found on-disk, generating instead')
+                print(f'Sim {_kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)} not found on-disk, generating instead')
                 return False
             else:
-                print(f'Sim for split {_kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)} not found on-disk, please generate it first')
+                print(f'Sim {_kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)} not found on-disk, please generate it first')
                 raise e
 
     def _get_seed(self, split_num, sim_num):
@@ -1723,11 +1866,11 @@ class TiledNoiseModel(BaseNoiseModel):
     def _read_model(self, fn):
         """Read a noise model with filename fn; return a dictionary of noise model variables"""
         # read from disk
-        sqrt_cov_mat, extra_hdu = tiled_noise.read_tiled_ndmap(
-            fn, extra_hdu=['SQRT_COV_ELL']
+        sqrt_cov_mat, _, extra_datasets = tiled_noise.read_tiled_ndmap(
+            fn, extra_datasets=['sqrt_cov_ell']
         )
-        sqrt_cov_ell = extra_hdu['SQRT_COV_ELL']
-    
+        sqrt_cov_ell = extra_datasets['sqrt_cov_ell']
+
         return {
             'sqrt_cov_mat': sqrt_cov_mat,
             'sqrt_cov_ell': sqrt_cov_ell
@@ -1757,7 +1900,7 @@ class TiledNoiseModel(BaseNoiseModel):
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
         """Write a dictionary of noise model variables to filename fn"""
         tiled_noise.write_tiled_ndmap(
-            fn, sqrt_cov_mat, extra_hdu={'SQRT_COV_ELL': sqrt_cov_ell}
+            fn, sqrt_cov_mat, extra_datasets={'sqrt_cov_ell': sqrt_cov_ell}
         )
 
     def _get_sim(self, model_dict, seed, lmax, mask, ivar, verbose):
@@ -2869,7 +3012,7 @@ class HarmonicMixture(ConfigManager):
             else: # generate_mix == True and: generate == True or all sims exist on disk
                 pass
 
-        with bench.show(f'Generating noise sim for split {_kwargs_str(split_num=split_num, sim_num=sim_num, alm=alm, **subproduct_kwargs)}'):
+        with bench.show(f'Generating noise sim {_kwargs_str(split_num=split_num, sim_num=sim_num, alm=alm, **subproduct_kwargs)}'):
             if alm:
                 sim = self._get_sim_alm(
                     split_num, sim_num, check_on_disk=check_on_disk, generate=generate,
@@ -2940,7 +3083,7 @@ class HarmonicMixture(ConfigManager):
                 return enmap.read_map(fn)
         except FileNotFoundError as e:
             if generate_mix:
-                print(f'Sim for split {_kwargs_str(split_num=split_num, sim_num=sim_num, alm=alm, **subproduct_kwargs)} not found on-disk, generating instead')
+                print(f'Sim {_kwargs_str(split_num=split_num, sim_num=sim_num, alm=alm, **subproduct_kwargs)} not found on-disk, generating instead')
                 for i, noise_model in enumerate(self._noise_models):
                     lmax = self._lmaxs[i]
                     try:        
@@ -2955,7 +3098,7 @@ class HarmonicMixture(ConfigManager):
                 # if we've gotten here, then either all base sims exist on disk or generate is True
                 return False
             else:
-                print(f'Sim for split {_kwargs_str(split_num=split_num, sim_num=sim_num, alm=alm, **subproduct_kwargs)} not found on-disk, please generate it first')
+                print(f'Sim {_kwargs_str(split_num=split_num, sim_num=sim_num, alm=alm, **subproduct_kwargs)} not found on-disk, please generate it first')
                 raise e
 
     def _get_sim(self, split_num, sim_num, check_on_disk=True, generate=True,

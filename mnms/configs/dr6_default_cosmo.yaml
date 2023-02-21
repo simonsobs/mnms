@@ -2,6 +2,7 @@ BaseNoiseModel:
   calibrated: false
   catalog_name: union_catalog_regular_20220316.csv
   data_model_name: dr6_default
+  differenced: true
   dtype: f4
   enforce_equal_qid_kwargs:
   - patch
