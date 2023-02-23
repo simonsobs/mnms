@@ -3,6 +3,9 @@ Serving up sugar-coated map-based models of ACT data. Each model supports drawin
 
 This codebase is under active-development -- we can't guarantee future commits won't break e.g. when interacting with old outputs. We will begin versioning when the code has converged more. 
 
+## Contact
+For any questions please reach out to Zach Atkins (email: [zatkins@princeton.edu](mailto:zatkins@princeton.edu), github: [@zatkins2](https://github.com/zatkins2)).
+
 ## Dependencies
 Users wishing to filter data or generate noise simulations should have the following dependencies in their environment:
 * from `simonsobs`: `pixell`, `soapack`
