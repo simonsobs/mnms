@@ -1,7 +1,7 @@
 BaseNoiseModel:
   calibrated: false
   catalog_name: union_catalog_regular_20220316.csv
-  data_model_name: dr6_default
+  data_model_name: act_dr6v3_default
   differenced: true
   dtype: f4
   enforce_equal_qid_kwargs:
@@ -14,6 +14,7 @@ BaseNoiseModel:
   mask_obs_name: dr6v3_xlink_union_mask_0.001.fits
   possible_subproduct_kwargs: null
   qid_names_template: '{array}_{freq}'
+  srcfree: true
   subproduct: default
 
 TiledNoiseModel:

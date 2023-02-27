@@ -2238,7 +2238,7 @@ def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=Fal
     return res
 
 def read_map(data_model, qid, split_num=0, coadd=False, ivar=False,
-             subproduct='default', **subproduct_kwargs):
+             subproduct='default', srcfree=True, **subproduct_kwargs):
     """Read a map from disk according to the data_model filename conventions.
 
     Parameters
@@ -2257,6 +2257,8 @@ def read_map(data_model, qid, split_num=0, coadd=False, ivar=False,
         load the source-free map for the same, by default False.
     subproduct : str, optional
         Name of map subproduct to load raw products from, by default 'default'.
+    srcfree : bool, optional
+        Whether to load a srcfree map or regular map, by default True.
     subproduct_kwargs : dict, optional
         Any additional keyword arguments used to format the map filename.
 
@@ -2270,7 +2272,7 @@ def read_map(data_model, qid, split_num=0, coadd=False, ivar=False,
             qid, split_num=split_num, coadd=coadd, maptag='ivar',
             subproduct=subproduct, **subproduct_kwargs
             )
-    else:
+    elif srcfree:
         try:
             omap = data_model.read_map(
                 qid, split_num=split_num, coadd=coadd, maptag='map_srcfree',
@@ -2285,13 +2287,18 @@ def read_map(data_model, qid, split_num=0, coadd=False, ivar=False,
                 qid, split_num=split_num, coadd=coadd, maptag='srcs',
                 subproduct=subproduct, **subproduct_kwargs
                 )
+    else:
+        omap = data_model.read_map(
+            qid, split_num=split_num, coadd=coadd, maptag='map',
+            subproduct=subproduct, **subproduct_kwargs
+            )
 
     if omap.ndim == 2:
         omap = omap[None]
     return omap
 
 def read_map_geometry(data_model, qid, split_num=0, coadd=False, ivar=False,
-                      subproduct='default', **subproduct_kwargs):
+                      subproduct='default', srcfree=True, **subproduct_kwargs):
     """Read a map geometry from disk according to the data_model filename
     conventions.
 
@@ -2311,6 +2318,10 @@ def read_map_geometry(data_model, qid, split_num=0, coadd=False, ivar=False,
         load the source-free map for the same, by default False.
     subproduct : str, optional
         Name of map subproduct to load raw products from, by default 'default'.
+    srcfree : bool, optional
+        Whether to load a srcfree map or regular map, by default True. If cannot
+        find the desired map to load geometry from (e.g. 'map_srcfree'), will 
+        look for the other (e.g. 'map').
     subproduct_kwargs : dict, optional
         Any additional keyword arguments used to format the map filename.
 
@@ -2326,15 +2337,19 @@ def read_map_geometry(data_model, qid, split_num=0, coadd=False, ivar=False,
             )
         shape, wcs = enmap.read_map_geometry(map_fn)
     else:
+        if srcfree:
+            maptags = ['map_srcfree', 'map']
+        else:
+            maptags = ['map', 'map_srcfree']
         try:
             map_fn = data_model.get_map_fn(
-                qid, split_num=split_num, coadd=coadd, maptag='map_srcfree',
+                qid, split_num=split_num, coadd=coadd, maptag=maptags[0],
                 subproduct=subproduct, **subproduct_kwargs
                 )
             shape, wcs = enmap.read_map_geometry(map_fn)
         except FileNotFoundError:
             map_fn = data_model.get_map_fn(
-                qid, split_num=split_num, coadd=coadd, maptag='map',
+                qid, split_num=split_num, coadd=coadd, maptag=maptags[1],
                 subproduct=subproduct, **subproduct_kwargs
                 )
             shape, wcs = enmap.read_map_geometry(map_fn)

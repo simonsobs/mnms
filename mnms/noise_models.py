@@ -42,8 +42,8 @@ class DataManager:
 
     def __init__(self, *qids, data_model_name=None, subproduct='default',
                  possible_subproduct_kwargs=None, enforce_equal_qid_kwargs=None,
-                 calibrated=False, differenced=True, mask_est_name=None, mask_obs_name=None,
-                 catalog_name=None, kfilt_lbounds=None, fwhm_ivar=None,
+                 calibrated=False, differenced=True, srcfree=True, mask_est_name=None,
+                 mask_obs_name=None, catalog_name=None, kfilt_lbounds=None, fwhm_ivar=None,
                  dtype=np.float32, cache=None, **kwargs):
         """Helper class for all BaseNoiseModel subclasses. Supports loading raw
         data necessary for all subclasses, such as masks and ivars. Also
@@ -92,6 +92,9 @@ class DataManager:
             The data type used in intermediate calculations and return types, by default 
             np.float32.
         cache : dict, optional
+            A dictionary of cached data products. See cache-related methods for more details.
+            Note that passing a cache at runtime means a noise model won't be dumpable to
+            a config file, since the config won't be able to recreate the cache.
 
         Notes
         -----
@@ -137,6 +140,7 @@ class DataManager:
         # other instance properties
         self._calibrated = calibrated
         self._differenced = differenced
+        self._srcfree = srcfree
 
         if mask_est_name is not None:
             if not mask_est_name.endswith(('.fits', '.hdf5')):
@@ -203,10 +207,12 @@ class DataManager:
                 for coadd in (True, False):
                     if coadd == True and s > 0: # coadds don't have splits
                         continue
+                    if coadd == True and not self._differenced: # undifferenced maps never use coadd
+                        continue
                     for subproduct_kwargs in self.subproduct_kwargs_iter():
                         shape, wcs = utils.read_map_geometry(
                             self._data_model, qid, split_num=s, coadd=coadd, 
-                            ivar=True, subproduct=self._subproduct,
+                            ivar=True, subproduct=self._subproduct, srcfree=self._srcfree,
                             **subproduct_kwargs
                             )
                         shape = shape[-2:]
@@ -289,7 +295,8 @@ class DataManager:
                     # memory by downgrading one split at a time
                     ivar = utils.read_map(
                         self._data_model, qid, split_num=s, ivar=True,
-                        subproduct=self._subproduct, **subproduct_kwargs
+                        subproduct=self._subproduct, srcfree=self._srcfree,
+                        **subproduct_kwargs
                         )
                     ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
 
@@ -393,7 +400,8 @@ class DataManager:
                 # memory by downgrading one split at a time
                 ivar = utils.read_map(
                     self._data_model, qid, split_num=split_num, ivar=True,
-                    subproduct=self._subproduct, **subproduct_kwargs
+                    subproduct=self._subproduct, srcfree=self._srcfree,
+                    **subproduct_kwargs
                     )
                 ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
                 ivar *= mul
@@ -461,9 +469,6 @@ class DataManager:
             Correction factor maps, possibly downgraded. If DataManger is 
             not differenced (at initialization), return 1. 
         """
-        if not self._differenced:
-            return 1
-
         shape, wcs = utils.downgrade_geometry_cc_quad(
             self._full_shape, self._full_wcs, downgrade
             )
@@ -471,6 +476,10 @@ class DataManager:
         # allocate a buffer to accumulate all ivar maps in.
         # this has shape (nmaps, nsplits=1, npol=1, ny, nx).
         cfacts = self._empty(shape, wcs, ivar=True, num_splits=1, **subproduct_kwargs)
+
+        if not self._differenced:
+            cfacts[:] = 1
+            return cfacts
 
         for i, qid in enumerate(self._qids):
             with bench.show('Generating difference-map correction-factors'):
@@ -482,7 +491,8 @@ class DataManager:
                 # get the coadd from disk, this is the same for all splits
                 cvar = utils.read_map(
                     self._data_model, qid, coadd=True, ivar=True,
-                    subproduct=self._subproduct, **subproduct_kwargs
+                    subproduct=self._subproduct, srcfree=self._srcfree,
+                    **subproduct_kwargs
                     )
                 cvar = enmap.extract(cvar, self._full_shape, self._full_wcs)
                 cvar *= mul
@@ -491,7 +501,8 @@ class DataManager:
                 # memory by downgrading one split at a time
                 ivar = utils.read_map(
                     self._data_model, qid, split_num=split_num, ivar=True,
-                    subproduct=self._subproduct, **subproduct_kwargs
+                    subproduct=self._subproduct, srcfree=self._srcfree,
+                    **subproduct_kwargs
                     )
                 ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
                 ivar *= mul
@@ -547,7 +558,7 @@ class DataManager:
                 )
     
         for i, qid in enumerate(self._qids):
-            with bench.show('Generating difference-maps'):
+            with bench.show('Generating difference maps'):
                 if self._calibrated:
                     mul_imap = utils.get_mult_fact(self._data_model, qid, ivar=False)
                     mul_ivar = utils.get_mult_fact(self._data_model, qid, ivar=True)
@@ -559,7 +570,8 @@ class DataManager:
                 if self._differenced:
                     cmap = utils.read_map(
                         self._data_model, qid, coadd=True, ivar=False,
-                        subproduct=self._subproduct, **subproduct_kwargs
+                        subproduct=self._subproduct, srcfree=self._srcfree,
+                        **subproduct_kwargs
                         )
                     cmap = enmap.extract(cmap, self._full_shape, self._full_wcs) 
                     cmap *= mul_imap
@@ -570,7 +582,8 @@ class DataManager:
                 if (self._catalog_name or self._kfilt_lbounds) and self._differenced:
                     cvar = utils.read_map(
                         self._data_model, qid, coadd=True, ivar=True,
-                        subproduct=self._subproduct, **subproduct_kwargs
+                        subproduct=self._subproduct, srcfree=self._srcfree,
+                        **subproduct_kwargs
                         )
                     cvar = enmap.extract(cvar, self._full_shape, self._full_wcs)
                     cvar *= mul_ivar
@@ -579,7 +592,8 @@ class DataManager:
                 # memory by downgrading one split at a time
                 imap = utils.read_map(
                     self._data_model, qid, split_num=split_num, ivar=False,
-                    subproduct=self._subproduct, **subproduct_kwargs
+                    subproduct=self._subproduct, srcfree=self._srcfree,
+                    **subproduct_kwargs
                     )
                 imap = enmap.extract(imap, self._full_shape, self._full_wcs)
                 imap *= mul_imap
@@ -589,7 +603,8 @@ class DataManager:
                 if self._catalog_name or self._kfilt_lbounds:
                     ivar = utils.read_map(
                         self._data_model, qid, split_num=split_num, ivar=True,
-                        subproduct=self._subproduct, **subproduct_kwargs
+                        subproduct=self._subproduct, srcfree=self._srcfree,
+                        **subproduct_kwargs
                         )
                     ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
                     ivar *= mul_ivar
@@ -697,7 +712,8 @@ class DataManager:
         # because we have checked geometry, we can pass qid[0], s=0, coadd=False...
         shape, _ = utils.read_map_geometry(
             self._data_model, self._qids[0], split_num=0, coadd=False,
-            ivar=ivar, subproduct=self._subproduct, **subproduct_kwargs
+            ivar=ivar, subproduct=self._subproduct, srcfree=self._srcfree, 
+            **subproduct_kwargs
             )
         shape = (shape[0], *footprint_shape)
 
@@ -803,9 +819,12 @@ class DataManager:
                 print(f'Clearing all {cacheprod} from cache')
                 self._cache[cacheprod] = {}
             else:
-                print(f"Clearing {cacheprod} for args {args}, kwargs {kwargs}")
                 key = (*args[1:], frozenset(kwargs.items()))
-                del self._cache[cacheprod][key]
+                try:
+                    del self._cache[cacheprod][key]
+                    print(f"Clearing {cacheprod} for args {args[1:]}, kwargs {kwargs}")
+                except KeyError:
+                    print(f"No {cacheprod} item for args {args[1:]}, kwargs {kwargs}, cannot clear")
 
     @property
     def cache(self):
@@ -1263,6 +1282,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             enforce_equal_qid_kwargs=self._enforce_equal_qid_kwargs,
             calibrated=self._calibrated,
             differenced=self._differenced,
+            srcfree=self._srcfree,
             mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name ,
             catalog_name=self._catalog_name,
@@ -1456,49 +1476,59 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             mask_obs = self.get_from_cache(
                 'mask_obs', downgrade=downgrade, **subproduct_kwargs
                 )
+            mask_obs_from_cache = True
         except KeyError:
             mask_obs = self.get_mask_obs(
                 downgrade=downgrade, **subproduct_kwargs
                 )
+            mask_obs_from_cache = False
 
         try:
             mask_est = self.get_from_cache(
                 'mask_est', downgrade=downgrade
                 )
+            mask_est_from_cache = True
         except KeyError:
             mask_est = self.get_mask_est(
                 downgrade=downgrade
                 )
+            mask_est_from_cache = False
         mask_est *= mask_obs
 
         try:
             ivar = self.get_from_cache(
                 'ivar', split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
+            ivar_from_cache = True
         except KeyError:
             ivar = self.get_ivar(
                 split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
+            ivar_from_cache = False
         ivar *= mask_obs
 
         try:
             cfact = self.get_from_cache(
                 'cfact', split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
+            cfact_from_cache = True
         except KeyError:
             cfact = self.get_cfact(
                 split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
+            cfact_from_cache = False
         cfact *= mask_obs
         
         try:
             dmap = self.get_from_cache(
                 'dmap', split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
+            dmap_from_cache = True
         except KeyError:
             dmap = self.get_dmap(
                 split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
+            dmap_from_cache = False
         dmap *= mask_obs
 
         # get the model
@@ -1515,27 +1545,27 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                 'model', model_dict, split_num=split_num, lmax=lmax_model, **subproduct_kwargs
                 )
 
-        if keep_mask_est:
+        if keep_mask_est and not mask_est_from_cache:
             self.cache_data(
                 'mask_est', mask_est, downgrade=downgrade
                 )
 
-        if keep_mask_obs:
+        if keep_mask_obs and not mask_obs_from_cache:
             self.cache_data(
                 'mask_obs', mask_obs, downgrade=downgrade, **subproduct_kwargs
                 )
 
-        if keep_ivar:
+        if keep_ivar and not ivar_from_cache:
             self.cache_data(
                 'ivar', ivar, split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
 
-        if keep_cfact:
+        if keep_cfact and not cfact_from_cache:
             self.cache_data(
                 'cfact', cfact, split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
 
-        if keep_dmap:
+        if keep_dmap and not dmap_from_cache:
             self.cache_data(
                 'dmap', dmap, split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
@@ -1675,28 +1705,34 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             model_dict = self.get_from_cache(
                 'model', split_num=split_num, lmax=lmax, **subproduct_kwargs
                 )
+            model_from_cache = True
         except KeyError:
             model_dict = self._check_model_on_disk(
                 split_num, lmax, generate=False, **subproduct_kwargs
                 )
+            model_from_cache = False
 
         try:
             mask_obs = self.get_from_cache(
                 'mask_obs', downgrade=downgrade, **subproduct_kwargs
                 )
+            mask_obs_from_cache = True
         except KeyError:
             mask_obs = self.get_mask_obs(
                 downgrade=downgrade, **subproduct_kwargs
                 )
+            mask_obs_from_cache = False
 
         try:
             ivar = self.get_from_cache(
                 'ivar', split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
+            ivar_from_cache = True
         except KeyError:
             ivar = self.get_ivar(
                 split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
+            ivar_from_cache = False
         ivar *= mask_obs
         
         # get the sim
@@ -1712,17 +1748,17 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                     )
 
         # keep, write data if requested
-        if keep_model:
+        if keep_model and not model_from_cache:
             self.cache_data(
                 'model', model_dict, split_num=split_num, lmax=lmax, **subproduct_kwargs
                 )
 
-        if keep_mask_obs:
+        if keep_mask_obs and not mask_obs_from_cache:
             self.cache_data(
                 'mask_obs', mask_obs, downgrade=downgrade, **subproduct_kwargs
                 )
 
-        if keep_ivar:
+        if keep_ivar and not ivar_from_cache:
             self.cache_data(
                 'ivar', ivar, split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )

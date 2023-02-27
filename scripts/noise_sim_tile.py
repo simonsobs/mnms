@@ -60,5 +60,5 @@ assert np.all(maps >= 0)
 for s in splits:
     for m in maps:
         model.get_sim(s, m, args.lmax, alm=args.alm, write=True, verbose=True)
-    model.delete_model(s, args.lmax)
-    model.delete_ivar(s, args.lmax)
+    model.cache_clear('model')
+    model.cache_clear('ivar')
