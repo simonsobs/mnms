@@ -1,5 +1,5 @@
 from pixell import enmap, wcsutils
-from mnms import covtools, utils
+from mnms import utils
 
 import h5py
 import numpy as np
