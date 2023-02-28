@@ -5,8 +5,7 @@ import h5py
 import numpy as np
 import astropy.io.fits as pyfits
 import astropy.wcs as pywcs
-
-import warnings
+from scipy import ndimage
 
 # constants that could be promoted to arguments some day (too much metadata to track)
 MIN_SQ_F_SKY = 1e-3
@@ -550,7 +549,7 @@ def get_tiled_noise_covsqrt(imap, lmax, mask_obs=None, mask_est=None, ivar=None,
             
             # smooth the 2D PS
             if delta_ell_smooth > 0:
-                power = covtools.smooth_ps_grid_uniform(
+                power = smooth_ps_grid_uniform(
                     power, delta_ell_smooth, diag=diag
                     )
             
@@ -831,3 +830,60 @@ def read_tiled_ndmap(fname, extra_attrs=None, extra_datasets=None):
                 extra_datasets_dict[k] = imap
 
     return tmap, extra_attrs_dict, extra_datasets_dict
+
+# adapted from tilec.covtools.py (https://github.com/ACTCollaboration/tilec/blob/master/tilec/covtools.py),
+# want to avoid dependency on tilec
+def smooth_ps_grid_uniform(ps, res, zero_dc=True, diag=False, shape=None, rfft=False,
+                        fill=False, fill_lmax=None, fill_lmax_est_width=None, fill_value=None, **kwargs):
+    """Smooth a 2d power spectrum to the target resolution in l.
+    """
+    # first fill any values beyond max lmax
+    if fill:
+        if fill_lmax is None:
+            fill_lmax = utils.lmax_from_wcs(ps.wcs)
+        fill_boundary(
+            ps, shape=shape, rfft=rfft, fill_lmax=fill_lmax,
+            fill_lmax_est_width=fill_lmax_est_width, fill_value=fill_value
+            )
+    if diag: assert np.all(ps>=0), 'If diag input ps must be positive semi-definite'
+    # First get our pixel size in l
+    if shape is None:
+        shape = ps.shape
+    ly, lx = enmap.laxes(shape, ps.wcs)
+    ires   = np.array([ly[1],lx[1]])
+    smooth = np.round(np.abs(res/ires)).astype(int)
+    # We now know how many pixels to somoth by in each direction,
+    # so perform the actual smoothing
+    if rfft:
+        # the y-direction needs a 'wrap' boundary and the x-direction
+        # needs a 'reflect' boundary. this is because the enmap rfft 
+        # convention cuts half the x-domain, so we don't have two-sided
+        # kx=0 data, but we do have two-sided ky=0 data. this is better 
+        # than the transpose, because it tends to be that the scan is
+        # up-down, making features stick out more along the x-axis than y
+        ps = ndimage.uniform_filter1d(ps, size=smooth[-2], axis=-2, mode='wrap')
+        ps = ndimage.uniform_filter1d(ps, size=smooth[-1], axis=-1, mode='reflect')
+    else:
+        ps = ndimage.uniform_filter(ps, size=smooth, mode='wrap')
+    if zero_dc: ps[..., 0,0] = 0
+    if diag: assert np.all(ps>=0), 'If diag output ps must be positive semi-definite'
+    return ps
+
+def fill_boundary(ps, shape=None, rfft=False, fill_lmax=None, fill_lmax_est_width=0, fill_value=None):
+    """Performs in-place filling of ps outer edge.
+    """
+    if shape is None:
+        shape = ps.shape
+    modlmap = enmap.modlmap(shape, ps.wcs)
+    if rfft:
+        modlmap = modlmap[..., :shape[-1]//2 + 1]
+    if fill_lmax is None:
+        fill_lmax = utils.lmax_from_wcs(ps.wcs)
+    assert fill_lmax_est_width > 0 or fill_value is not None, 'Must supply at least fill_lmax_est_width or fill_value'
+    if fill_lmax_est_width > 0 and fill_value is None:
+        fill_value = get_avg_value_by_ring(ps, modlmap, fill_lmax - fill_lmax_est_width, fill_lmax)
+    ps[fill_lmax <= modlmap] = fill_value
+
+def get_avg_value_by_ring(ps, modlmap, ell0, ell1):
+    ring_mask = np.logical_and(ell0 <= modlmap, modlmap < ell1)
+    return ps[ring_mask].mean()
