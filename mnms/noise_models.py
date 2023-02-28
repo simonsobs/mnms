@@ -1,5 +1,5 @@
 from mnms import utils, tiled_noise, wav_noise, fdw_noise, isoivar_noise, inpaint
-from actapack import utils as a_utils, DataModel
+from sofind import utils as s_utils, DataModel
 
 from pixell import enmap, wcsutils, sharp
 from enlib import bench
@@ -109,6 +109,9 @@ class DataManager:
         if data_model_name is None:
             raise ValueError('data_model_name cannot be None')
         self._data_model = DataModel.from_config(data_model_name)
+        # by adding yaml before splitext, allow config_name with periods
+        if not data_model_name.endswith('.yaml'):
+            data_model_name += '.yaml'
         self._data_model_name = os.path.splitext(data_model_name)[0]
         self._subproduct = subproduct
         self._possible_subproduct_kwargs = possible_subproduct_kwargs
@@ -928,10 +931,11 @@ class ConfigManager(ABC):
         self._model_file_template = model_file_template
         self._sim_file_template = sim_file_template
 
-        # check availability, compatibility of config name
-        self._config_name = os.path.splitext(config_name)[0]
+        # check availability, compatibility of config name.
+        # by adding yaml before splitext, allow config_name with periods
         if not config_name.endswith('.yaml'):
             config_name += '.yaml'
+        self._config_name = os.path.splitext(config_name)[0]
 
         # helps distinguish the "from_config" case: this is already checked, so it will only
         # fail when self._dumpable=False if not from config and more than one such config
@@ -1089,7 +1093,7 @@ class ConfigManager(ABC):
             _model_param_dict attribute.
         """
         try:
-            on_disk_dict = a_utils.config_from_yaml_file(file)
+            on_disk_dict = s_utils.config_from_yaml_file(file)
         except FileNotFoundError as e:
             if not permit_absent_config:
                 raise e 
@@ -1186,7 +1190,7 @@ class ConfigManager(ABC):
             self._check_yaml_config(file)
 
             try:
-                on_disk_dict = a_utils.config_from_yaml_file(file)
+                on_disk_dict = s_utils.config_from_yaml_file(file)
 
                 if self.__class__.__name__ not in on_disk_dict:
                     with open(file, 'a') as f:
@@ -1321,7 +1325,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         # to_write=False since this won't be dumpable
         config_fn = utils.get_mnms_fn(config_name, 'configs', to_write=False)
-        config_dict = a_utils.config_from_yaml_file(config_fn)
+        config_dict = s_utils.config_from_yaml_file(config_fn)
 
         kwargs = config_dict['BaseNoiseModel']
         kwargs.update(config_dict[cls.__name__])
@@ -2923,7 +2927,7 @@ class HarmonicMixture(ConfigManager):
 
         # to_write=False since this won't be dumpable
         config_fn = utils.get_mnms_fn(config_name, 'configs', to_write=False)
-        config_dict = a_utils.config_from_yaml_file(config_fn)
+        config_dict = s_utils.config_from_yaml_file(config_fn)
 
         kwargs = config_dict['HarmonicMixture']
         noise_models = []

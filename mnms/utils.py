@@ -1,4 +1,4 @@
-from actapack import utils as a_utils
+from sofind import utils as s_utils
 
 from pixell import enmap, curvedsky, fft as enfft, sharp
 import healpy as hp
@@ -75,7 +75,7 @@ def get_mnms_fn(basename, pathtype, no_fn_collisions=True, to_write=False):
     basename = os.path.join(pathtype, basename)
 
     try:
-        private_fn = a_utils.get_system_fn(
+        private_fn = s_utils.get_system_fn(
             '.mnms_config', basename, config_keys=['private_path']
             )
     except KeyError as e:
@@ -85,13 +85,13 @@ def get_mnms_fn(basename, pathtype, no_fn_collisions=True, to_write=False):
             private_fn = ''
 
     try:
-        public_fn = a_utils.get_system_fn(
+        public_fn = s_utils.get_system_fn(
             '.mnms_config', basename, config_keys=['public_path']
             )
     except KeyError:
         public_fn = ''
 
-    package_fn = a_utils.get_package_fn('mnms', basename)
+    package_fn = s_utils.get_package_fn('mnms', basename)
     fns = [private_fn, public_fn, package_fn]
 
     if to_write:
@@ -99,7 +99,7 @@ def get_mnms_fn(basename, pathtype, no_fn_collisions=True, to_write=False):
     else:
         write_to_fn_idx = None
 
-    return a_utils.get_protected_fn(
+    return s_utils.get_protected_fn(
         fns, no_fn_collisions=no_fn_collisions, write_to_fn_idx=write_to_fn_idx
         )
 
@@ -121,16 +121,16 @@ def config_from_hdf5_file(filename, address='/'):
         with h5py.File(filename, 'r') as hfile:
             return config_from_hdf5_file(hfile, address=address)
     
-    return dict(hfile[address].attrs)
+    idict = filename[address].attrs
+    odict = {}
+    for k, v in idict.items():
+        odict[k] = yaml.safe_load(v)
+    return odict
 
+# copied from tilec.tiling.py (https://github.com/ACTCollaboration/tilec/blob/master/tilec/tiling.py),
+# want to avoid dependency on tilec
 def slice_geometry_by_pixbox(ishape, iwcs, pixbox):
     pb = np.asarray(pixbox)
-    return enmap.slice_geometry(
-        ishape[-2:], iwcs, (slice(*pb[:, -2]), slice(*pb[:, -1])), nowrap=True
-        )
-
-def slice_geometry_by_geometry(ishape, iwcs, oshape, owcs):
-    pb = enmap.pixbox_of(iwcs, oshape, owcs)
     return enmap.slice_geometry(
         ishape[-2:], iwcs, (slice(*pb[:, -2]), slice(*pb[:, -1])), nowrap=True
         )
@@ -484,7 +484,9 @@ def rolling_average(x, N):
     cumsum = np.cumsum(np.insert(x, 0, 0))
     return (cumsum[N:] - cumsum[:-N]) / float(N)
 
-def linear_crossfade(cNy,cNx,npix_y,npix_x=None, dtype=np.float32):
+# ~copied from tilec.tiling.py (https://github.com/ACTCollaboration/tilec/blob/master/tilec/tiling.py),
+# want to avoid dependency on tilec
+def linear_crossfade(cNy, cNx, npix_y, npix_x=None, dtype=np.float32):
     if npix_x is None:
         npix_x = npix_y
     fys = np.ones(cNy, dtype=dtype)
@@ -2243,7 +2245,7 @@ def read_map(data_model, qid, split_num=0, coadd=False, ivar=False,
 
     Parameters
     ----------
-    data_model : actapack.DataModel
+    data_model : sofind.DataModel
         DataModel instance to help load raw products.
     qid : str
         Dataset identification string.
@@ -2304,7 +2306,7 @@ def read_map_geometry(data_model, qid, split_num=0, coadd=False, ivar=False,
 
     Parameters
     ----------
-    data_model : actapack.DataModel
+    data_model : sofind.DataModel
         DataModel instance to help load raw products.
     qid : str
         Dataset identification string.
@@ -2365,7 +2367,7 @@ def get_mult_fact(data_model, qid, ivar=False):
 
 #     Parameters
 #     ----------
-#     data_model : actapack.DataModel
+#     data_model : sofind.DataModel
 #          DataModel instance to help load raw products
 #     qid : str
 #         Map identification string.
@@ -2447,7 +2449,7 @@ def hash_str(istr, ndigits=9):
 
 def get_seed(split_num, sim_num, data_model_name, *qids, n_max_qids=4, ndigits=9):
     """Get a seed for a sim. The seed is unique for a given split number, sim
-    number, actapack.DataModel class, and list of array 'qids'.
+    number, sofind.DataModel class, and list of array 'qids'.
 
     Parameters
     ----------
