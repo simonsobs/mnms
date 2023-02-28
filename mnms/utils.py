@@ -2447,7 +2447,7 @@ def hash_str(istr, ndigits=9):
     """Turn a string into an ndigit hash, using hashlib.sha256 hashing"""
     return int(hashlib.sha256(istr.encode('utf-8')).hexdigest(), 16) % 10**ndigits
 
-def get_seed(split_num, sim_num, data_model_name, *qids, n_max_qids=4, ndigits=9):
+def get_seed(split_num, sim_num, name_str, *qids, n_max_qids=4, ndigits=9):
     """Get a seed for a sim. The seed is unique for a given split number, sim
     number, sofind.DataModel class, and list of array 'qids'.
 
@@ -2457,9 +2457,9 @@ def get_seed(split_num, sim_num, data_model_name, *qids, n_max_qids=4, ndigits=9
         The 0-based index of the split to simulate.
     sim_num : int
         The map index, used in setting the random seed. Must be non-negative.
-    data_model_name : str
-        Name of data model as a string, so that sims from different data models
-        are different.
+    name_str : str
+        Name of noise model or data model as a string, so that sims from different
+        noise models or data models are different.
     n_max_qids : int, optional
         The maximum number of allowed 'qids' to be passed at once, by default
         4. This way, seeds can be safely modified by appending integers outside
@@ -2481,7 +2481,7 @@ def get_seed(split_num, sim_num, data_model_name, *qids, n_max_qids=4, ndigits=9
     seed = [0 for i in range(3 + n_max_qids)]
     seed[0] = split_num
     seed[1] = sim_num
-    seed[2] = hash_str(data_model_name, ndigits=ndigits)*0 + 3
+    seed[2] = hash_str(name_str, ndigits=ndigits)
     for i in range(len(qids)):
         seed[i+3] = hash_str(qids[i], ndigits=ndigits)
     return seed

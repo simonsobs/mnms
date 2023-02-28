@@ -667,7 +667,9 @@ class DataManager:
         mask_bool = utils.get_mask_bool(mask)
 
         if qid:
-            # This makes sure each qid gets a unique seed. The sim index is fixed.
+            # This makes sure each qid gets a unique seed. The sim index is fixed,
+            # and noise models share data model so the data is inpainted "once" for
+            # all the different noise models as it were
             split_idx = 0 if split_num is None else split_num
             seed = utils.get_seed(*(split_idx, 999_999_999, self._data_model_name, qid))
         else:
@@ -1825,7 +1827,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
     def _get_seed(self, split_num, sim_num):
         """Return seed for sim with split_num, sim_num."""
-        return utils.get_seed(*(split_num, sim_num, self._data_model_name, *self._qids))
+        return utils.get_seed(*(split_num, sim_num, self.__class__.noise_model_name(), *self._qids))
 
     @abstractmethod
     def _get_sim(self, model_dict, seed, lmax, mask, ivar, verbose):

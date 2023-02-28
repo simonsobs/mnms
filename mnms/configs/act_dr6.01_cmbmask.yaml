@@ -21,8 +21,8 @@ TiledNoiseModel:
   delta_ell_smooth: 400
   height_deg: 4.0
   width_deg: 4.0
-  model_file_template: '{data_model_name}_{patch}_{qid_names}_{daynight}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
-  sim_file_template: '{data_model_name}_{patch}_{qid_names}_{daynight}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+  model_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
+  sim_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
 
 WaveletNoiseModel:
   fwhm_fact_pt1:
@@ -35,8 +35,8 @@ WaveletNoiseModel:
   smooth_loc: false
   w_lmax_j: 5300
   w_lmin: 10
-  model_file_template: '{data_model_name}_{patch}_{qid_names}_{daynight}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
-  sim_file_template: '{data_model_name}_{patch}_{qid_names}_{daynight}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+  model_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
+  sim_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
 
 FDWNoiseModel:
   fwhm_fact_pt1:
@@ -79,8 +79,8 @@ FDWNoiseModel:
   w_lmax: 10800
   w_lmax_j: 5300
   w_lmin: 10
-  model_file_template: '{data_model_name}_{patch}_{qid_names}_{daynight}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
-  sim_file_template: '{data_model_name}_{patch}_{qid_names}_{daynight}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+  model_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
+  sim_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
 
 HarmonicMixture:
   ell_highs:
@@ -94,4 +94,4 @@ HarmonicMixture:
   - FDWNoiseModel
   - TiledNoiseModel
   profile: cosine
-  sim_file_template: '{data_model_name}_{patch}_{qid_names}_{daynight}_{noise_model_name}_{config_name}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+  sim_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
