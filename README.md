@@ -8,14 +8,15 @@ For any questions please reach out to Zach Atkins (email: [zatkins@princeton.edu
 
 ## Dependencies
 Users wishing to filter data or generate noise simulations should have the following dependencies in their environment:
-* from `simonsobs`: `pixell`, `soapack`
+* from `simonsobs`: `pixell`
+* from `ACTCollaboration`: `actapack`
 * from individuals: [`enlib`](https://github.com/amaurea/enlib), [`optweight`](https://github.com/AdriJD/optweight)
 
 All other dependencies (e.g. `numpy` etc.) are required by packages listed here, especially by `pixell`.
 
 A note on `soapack`: as of 2021/12/07, please ensure the `prelim_dr6` branch is installed. This branch should subsume all previous branches (won't break past code) but will allow users to work with ACT `dr6v3` maps via the `DR6v3` data model subclass.
 
-A note on [`enlib`](https://github.com/amaurea/enlib): users need access to the top-level python modules and the compiled library "array ops." The first is achieved just by adding the repo to your `PYTHONPATH`. The second must be compiled via `make array_ops` executed from within the top-level directory. Please see the enlib docs for more info on how to do this on your system. We have had success using an up-to-date intel `c` compiler with intel `mkl` loaded in your environment, if available.
+A note on [`enlib`](https://github.com/amaurea/enlib): all users need access to the top-level python modules. This is achieved just by adding the repo to your `PYTHONPATH`. Only if you are generating new noise models, you will also to compile the library "array ops."  This is done via `make array_ops` executed from within the top-level directory. Please see the enlib docs for more info on how to do this on your system. We have had success using an up-to-date intel `c` compiler with intel `mkl` loaded in your environment, if available.
 
 ## Installation
 Clone this repo and `cd` to `/path/to/mnms/`:

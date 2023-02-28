@@ -1,7 +1,8 @@
+from sofind import utils as s_utils
+
 from pixell import enmap, curvedsky, fft as enfft, sharp
 import healpy as hp
 from enlib import array_ops
-from soapack import interfaces as sints
 from optweight import alm_c_utils
 
 import numpy as np
@@ -11,142 +12,125 @@ import numba
 import healpy as hp
 from astropy.io import fits
 import yaml
+import h5py
 
-import pkgutil
 from concurrent import futures
 import multiprocessing
 import os
 import hashlib
+import warnings
 
 # Utility functions to support tiling classes and functions. Just keeping code organized so I don't get whelmed.
 
-def qid2arrfreq(qid):
-    """Transform dr6-style qid to array_frequency, e.g. pa5a to pa5_f090.
-    """
-    arrs2freqs = {
-        4: ['150', '220'],
-        5: ['090', '150'],
-        6: ['090', '150'],
-        7: ['030', '040']
-    }
-    return f"{qid[:3]}_f{arrs2freqs[int(qid[2])]['ab'.index(qid[3])]}"
-
-# copied from soapack.interfaces
-def config_from_yaml_file(filename):
-    """Returns a dictionary from a yaml file given by absolute filename.
-    """
-    with open(filename) as f:
-        config = yaml.safe_load(f)
-    return config
-
-def config_from_yaml_resource(resource):
-    """Returns a dictionary from a yaml file given by the resource name (relative to mnms package).
-    """
-    f = pkgutil.get_data('mnms', resource).decode()
-    config = yaml.safe_load(f)
-    return config
-
-def get_default_data_model():
-    """Returns a soapack.interfaces.DataModel instance depending on the
-    name of the data model specified in the users's soapack config 
-    'mnms' block, under key 'default_data_model'.
-
-    Returns
-    -------
-    soapack.interfaces.DataModel instance
-        An object used for loading raw data from disk.
-    """
-    return get_data_model()
-
-def get_data_model(name=None):
-    """Returns a soapack.interfaces.DataModel instance depending on the
-    name of the data model.
-    
-    Parameters
-    ----------
-    name : str
-        Name string of DataModel class to load. If None, grab the name
-        specified in the users's soapack config 'mnms' block, under key
-        'default_data_model'. By default None.
-
-    Returns
-    -------
-    soapack.interfaces.DataModel instance
-        An object used for loading raw data from disk.
-    """
-    if name is None:
-        config = sints.dconfig['mnms']
-        name = config['default_data_model']
-    
-    # capitalize all chars except v
-    name = ''.join(
-        [name[i].upper() if name[i] != 'v' else 'v' for i in range(len(name))]
-            )
-    return getattr(sints, name)()
-
-def trim_shared_fn_tags(basefn, ifn):
-    """Return joined tags in input that are not shared with those in a 
-    base filename.
+def get_mnms_fn(basename, pathtype, no_fn_collisions=True, to_write=False):
+    """Get an absolute path to an mnms file. The file may exist or not
+    in any of the user's private mnms data directory, the system's 
+    public mnms data directory, or the mnms package. 
 
     Parameters
     ----------
-    basefn : path-like
-        Base filename of form 'tag1_tag2_tag3
-    ifn : path_like 
-        Input filename of form 'tag2_tag1_tag4_tag5'
+    basename : str
+        Basename of the file.
+    pathtype : str
+        The subdirectory (kind) of file. Must be one of configs, models, 
+        sims, masks, catalogs.
+    no_fn_collisions : bool, optional
+        If to_write is False: enforce that at most one of the supplied fns exists if 
+        True, and return the first fn that exists in fns if False. If to_write is True,
+        then enforce that none of the fns other than the private_fn exists.
+    to_write : bool, optional
+        Whether the returned file will be used for writing, by default False.
+        If True, then return private_fn.
 
     Returns
     -------
     str
-        In this case, 'tag4_tag5'
+        Full path to file.
+
+    Raises
+    ------
+    KeyError
+        If private_path not in user's .mnms_config.yaml file but to_write
+        is True.
+
+    FileExistsError
+        If to_write is False:
+            If no_fn_collisions is True and more than one of fns exists.
+
+        Or to_write is True:
+            If no_fn_collisions is True and more than zero of the other
+            fns exists.
+    FileNotFoundError
+        If to_write is False and none of fns exists.
+
+    Notes
+    -----
+    If no_fn_collisions is False and the file exists in more than one location,
+    the priority order is private, public, then package location.
     """
-    basefn = os.path.splitext(os.path.basename(basefn))[0]
-    ifn = os.path.splitext(os.path.basename(ifn))[0]
+    assert pathtype in ['configs', 'models', 'sims', 'masks', 'catalogs'], \
+        'pathtype must be one of configs, models, sims, masks, catalogs'
 
-    basetags = basefn.split('_')
-    itags = ifn.split('_')
+    # e.g. model.fits --> models/model.fits
+    basename = os.path.join(pathtype, basename)
 
-    otags = []
-    for itag in itags:
-        if itag not in basetags:
-            otags.append(itag)
-    
-    return '_'.join(otags)
-
-def get_default_mask_version():
-    """Returns the mask version (string) depending on what is specified
-    in the user's soapack config. If the 'mnms' block has a key
-    'default_mask_version', return the value of that key. If not, return
-    the 'default_mask_version' from the user's default data model block.
-
-    Returns
-    -------
-    str
-        A default mask version string to help find an analysis mask. With
-        no arguments, a NoiseModel constructor will use this mask version
-        to seek the analysis mask in directory mask_path/mask_version.
-    """
-    config = sints.dconfig['mnms']
     try:
-        mask_version = config['default_mask_version']
+        private_fn = s_utils.get_system_fn(
+            '.mnms_config', basename, config_keys=['private_path']
+            )
+    except KeyError as e:
+        if to_write:
+            raise e
+        else:
+            private_fn = ''
+
+    try:
+        public_fn = s_utils.get_system_fn(
+            '.mnms_config', basename, config_keys=['public_path']
+            )
     except KeyError:
-        dm_name = config['default_data_model'].lower()
-        config = sints.dconfig[dm_name]
-        mask_version = config['default_mask_version']
-    return mask_version
+        public_fn = ''
 
-def get_nsplits_by_qid(qid, data_model):
-    """Get the number of splits in the raw data corresponding to this array 'qid'"""
-    return int(data_model.adf[data_model.adf['#qid']==qid]['nsplits'])
+    package_fn = s_utils.get_package_fn('mnms', basename)
+    fns = [private_fn, public_fn, package_fn]
 
-def slice_geometry_by_pixbox(ishape, iwcs, pixbox):
-    pb = np.asarray(pixbox)
-    return enmap.slice_geometry(
-        ishape[-2:], iwcs, (slice(*pb[:, -2]), slice(*pb[:, -1])), nowrap=True
+    if to_write:
+        write_to_fn_idx = 0
+    else:
+        write_to_fn_idx = None
+
+    return s_utils.get_protected_fn(
+        fns, no_fn_collisions=no_fn_collisions, write_to_fn_idx=write_to_fn_idx
         )
 
-def slice_geometry_by_geometry(ishape, iwcs, oshape, owcs):
-    pb = enmap.pixbox_of(iwcs, oshape, owcs)
+def config_from_hdf5_file(filename, address='/'):
+    """Return a dictionary of the attributes at hfile[address].attrs.
+    Parameters
+    ----------
+    filename : h5py.Group or path-like
+        Either an h5py.Group stream or a system path.
+    address : str, optional
+        Group in hfile to look for config, by default the root.
+
+    Returns
+    -------
+    dict
+        dict(hfile[address].attrs)
+    """
+    if not isinstance(filename, h5py.Group):
+        with h5py.File(filename, 'r') as hfile:
+            return config_from_hdf5_file(hfile, address=address)
+    
+    idict = filename[address].attrs
+    odict = {}
+    for k, v in idict.items():
+        odict[k] = yaml.safe_load(v)
+    return odict
+
+# copied from tilec.tiling.py (https://github.com/ACTCollaboration/tilec/blob/master/tilec/tiling.py),
+# want to avoid dependency on tilec
+def slice_geometry_by_pixbox(ishape, iwcs, pixbox):
+    pb = np.asarray(pixbox)
     return enmap.slice_geometry(
         ishape[-2:], iwcs, (slice(*pb[:, -2]), slice(*pb[:, -1])), nowrap=True
         )
@@ -500,7 +484,9 @@ def rolling_average(x, N):
     cumsum = np.cumsum(np.insert(x, 0, 0))
     return (cumsum[N:] - cumsum[:-N]) / float(N)
 
-def linear_crossfade(cNy,cNx,npix_y,npix_x=None, dtype=np.float32):
+# ~copied from tilec.tiling.py (https://github.com/ACTCollaboration/tilec/blob/master/tilec/tiling.py),
+# want to avoid dependency on tilec
+def linear_crossfade(cNy, cNx, npix_y, npix_x=None, dtype=np.float32):
     if npix_x is None:
         npix_x = npix_y
     fys = np.ones(cNy, dtype=dtype)
@@ -1230,14 +1216,33 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, **kwar
     return omap
 
 # this is twice the theoretical CAR bandlimit!
-def lmax_from_wcs(wcs):
-    """Returns 180/wcs.cdelt[1]; this is twice the theoretical CAR bandlimit"""
-    return int(180/np.abs(wcs.wcs.cdelt[1]))
+def lmax_from_wcs(wcs, threshold=1e-6):
+    """Return the lmax corresponding to the Nyquist bandlimit
+    of the wcs, rounded to the nearest integer.
+
+    Parameters
+    ----------
+    wcs : astropy.wcs.WCS
+        The wcs of the desired pixels.
+    threshold : scalar, optional
+        If the lmax is not within threshold of an integer, issue
+        a warning, by default 1e-6.
+
+    Returns
+    -------
+    int
+        Nyquist bandlimit of the wcs.
+    """
+    lmax = 180/np.abs(wcs.wcs.cdelt[1])
+    rounded_lmax = np.round(lmax)
+    if abs(lmax - rounded_lmax) >= threshold:
+        warnings.warn(f'lmax from wcs, {lmax}, more than {threshold} from nearest integer') 
+    return int(rounded_lmax)
 
 def downgrade_from_lmaxs(lmax_in, lmax_out):
     """Maximum integer downgrade factor for pixels to support new, lower lmax"""
     assert lmax_out <= lmax_in, 'lmax_out must be <= lmax_in'
-    return lmax_in // lmax_out
+    return int(lmax_in // lmax_out)
 
 def downgrade_geometry_cc_quad(shape, wcs, dg):
     """Get downgraded geometry that adheres to Clenshaw-Curtis quadrature.
@@ -2234,6 +2239,153 @@ def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=Fal
         res *= norm
     return res
 
+def read_map(data_model, qid, split_num=0, coadd=False, ivar=False,
+             subproduct='default', srcfree=True, **subproduct_kwargs):
+    """Read a map from disk according to the data_model filename conventions.
+
+    Parameters
+    ----------
+    data_model : sofind.DataModel
+        DataModel instance to help load raw products.
+    qid : str
+        Dataset identification string.
+    split_num : int, optional
+        The 0-based index of the split to simulate, by default 0.
+    coadd : bool, optional
+        If True, load the corresponding product for the on-disk coadd map,
+        by default False.
+    ivar : bool, optional
+        If True, load the inverse-variance map for the qid and split. If False,
+        load the source-free map for the same, by default False.
+    subproduct : str, optional
+        Name of map subproduct to load raw products from, by default 'default'.
+    srcfree : bool, optional
+        Whether to load a srcfree map or regular map, by default True.
+    subproduct_kwargs : dict, optional
+        Any additional keyword arguments used to format the map filename.
+
+    Returns
+    -------
+    enmap.ndmap
+        The loaded map product, with at least 3 dimensions.
+    """
+    if ivar:
+        omap = data_model.read_map(
+            qid, split_num=split_num, coadd=coadd, maptag='ivar',
+            subproduct=subproduct, **subproduct_kwargs
+            )
+    elif srcfree:
+        try:
+            omap = data_model.read_map(
+                qid, split_num=split_num, coadd=coadd, maptag='map_srcfree',
+                subproduct=subproduct, **subproduct_kwargs
+                )
+        except FileNotFoundError:
+            omap = data_model.read_map(
+                qid, split_num=split_num, coadd=coadd, maptag='map',
+                subproduct=subproduct, **subproduct_kwargs
+                )
+            omap -= data_model.read_map(
+                qid, split_num=split_num, coadd=coadd, maptag='srcs',
+                subproduct=subproduct, **subproduct_kwargs
+                )
+    else:
+        omap = data_model.read_map(
+            qid, split_num=split_num, coadd=coadd, maptag='map',
+            subproduct=subproduct, **subproduct_kwargs
+            )
+
+    if omap.ndim == 2:
+        omap = omap[None]
+    return omap
+
+def read_map_geometry(data_model, qid, split_num=0, coadd=False, ivar=False,
+                      subproduct='default', srcfree=True, **subproduct_kwargs):
+    """Read a map geometry from disk according to the data_model filename
+    conventions.
+
+    Parameters
+    ----------
+    data_model : sofind.DataModel
+        DataModel instance to help load raw products.
+    qid : str
+        Dataset identification string.
+    split_num : int, optional
+        The 0-based index of the split to simulate, by default 0.
+    coadd : bool, optional
+        If True, load the corresponding product for the on-disk coadd map,
+        by default False.
+    ivar : bool, optional
+        If True, load the inverse-variance map for the qid and split. If False,
+        load the source-free map for the same, by default False.
+    subproduct : str, optional
+        Name of map subproduct to load raw products from, by default 'default'.
+    srcfree : bool, optional
+        Whether to load a srcfree map or regular map, by default True. If cannot
+        find the desired map to load geometry from (e.g. 'map_srcfree'), will 
+        look for the other (e.g. 'map').
+    subproduct_kwargs : dict, optional
+        Any additional keyword arguments used to format the map filename.
+
+    Returns
+    -------
+    tuple of int, astropy.wcs.WCS
+        The loaded map product geometry, with at least 3 dimensions, and its wcs.
+    """
+    if ivar:
+        map_fn = data_model.get_map_fn(
+            qid, split_num=split_num, coadd=coadd, maptag='ivar',
+            subproduct=subproduct, **subproduct_kwargs
+            )
+        shape, wcs = enmap.read_map_geometry(map_fn)
+    else:
+        if srcfree:
+            maptags = ['map_srcfree', 'map']
+        else:
+            maptags = ['map', 'map_srcfree']
+        try:
+            map_fn = data_model.get_map_fn(
+                qid, split_num=split_num, coadd=coadd, maptag=maptags[0],
+                subproduct=subproduct, **subproduct_kwargs
+                )
+            shape, wcs = enmap.read_map_geometry(map_fn)
+        except FileNotFoundError:
+            map_fn = data_model.get_map_fn(
+                qid, split_num=split_num, coadd=coadd, maptag=maptags[1],
+                subproduct=subproduct, **subproduct_kwargs
+                )
+            shape, wcs = enmap.read_map_geometry(map_fn)
+
+    if len(shape) == 2:
+        shape = (1, *shape)
+    return shape, wcs
+
+def get_mult_fact(data_model, qid, ivar=False):
+    raise NotImplementedError('Currently do not support loading calibration factors in mnms')
+#     """Get a map calibration factor depending on the array and 
+#     map type.
+
+#     Parameters
+#     ----------
+#     data_model : sofind.DataModel
+#          DataModel instance to help load raw products
+#     qid : str
+#         Map identification string.
+#     ivar : bool, optional
+#         If True, load the factor for the inverse-variance map for the
+#         qid and split. If False, load the factor for the source-free map
+#         for the same, by default False.
+
+#     Returns
+#     -------
+#     float
+#         Calibration factor.
+#     """
+#     if ivar:
+#         return 1/data_model.get_gain(qid)**2
+#     else:
+#         return data_model.get_gain(qid)
+
 def write_alm(fn, alm):
     """Write alms to disk.
 
@@ -2291,13 +2443,13 @@ def read_alm(fn):
     
     return real + 1j*imag
 
-def hash_qid(qid, ndigits=9):
-    """Turn a qid string into an ndigit hash, using hashlib.sha256 hashing"""
-    return int(hashlib.sha256(qid.encode('utf-8')).hexdigest(), 16) % 10**ndigits
+def hash_str(istr, ndigits=9):
+    """Turn a string into an ndigit hash, using hashlib.sha256 hashing"""
+    return int(hashlib.sha256(istr.encode('utf-8')).hexdigest(), 16) % 10**ndigits
 
-def get_seed(split_num, sim_num, data_model, *qids, n_max_qids=4, ndigits=9):
+def get_seed(split_num, sim_num, name_str, *qids, n_max_qids=4, ndigits=9):
     """Get a seed for a sim. The seed is unique for a given split number, sim
-    number, soapack.interfaces.DataModel class, and list of array 'qids'.
+    number, sofind.DataModel class, and list of array 'qids'.
 
     Parameters
     ----------
@@ -2305,8 +2457,9 @@ def get_seed(split_num, sim_num, data_model, *qids, n_max_qids=4, ndigits=9):
         The 0-based index of the split to simulate.
     sim_num : int
         The map index, used in setting the random seed. Must be non-negative.
-    data_model : soapack.DataModel
-        DataModel instance to help load raw products,
+    name_str : str
+        Name of noise model or data model as a string, so that sims from different
+        noise models or data models are different.
     n_max_qids : int, optional
         The maximum number of allowed 'qids' to be passed at once, by default
         4. This way, seeds can be safely modified by appending integers outside
@@ -2328,9 +2481,9 @@ def get_seed(split_num, sim_num, data_model, *qids, n_max_qids=4, ndigits=9):
     seed = [0 for i in range(3 + n_max_qids)]
     seed[0] = split_num
     seed[1] = sim_num
-    seed[2] = sints.noise_seed_indices[data_model.name]
+    seed[2] = hash_str(name_str, ndigits=ndigits)
     for i in range(len(qids)):
-        seed[i+3] = hash_qid(qids[i], ndigits=ndigits)
+        seed[i+3] = hash_str(qids[i], ndigits=ndigits)
     return seed
 
 def get_mask_bool(mask, threshold=1e-3):
@@ -2381,21 +2534,32 @@ def get_bool_mask_from_ivar(ivar):
 
     return enmap.enmap(mask, wcs=ivar.wcs, copy=False)
 
-def get_catalog(union_sources):
+def get_catalog(catalog_fn):
     """Load and process source catalog.
 
     Parameters
     ----------
-    union_sources : str
-        A soapack source catalog.
+    catalog_fn : str
+        A file for a source catalog. The source catalog must have the following
+        features:
+            * A row-major list of coordinates
+            * The first column is RA (in degrees)
+            * The second column is DEC (in degrees)
+            * Columns are comma-separated
 
     Returns
     -------
     catalog : (2, N) array
         DEC and RA values (in radians) for each point source.
+
+    Notes
+    -----
+    Expects RA, DEC columns (degrees), returns DEC, RA rows (radians).
     """
-    ra, dec = sints.get_act_mr3f_union_sources(version=union_sources)
-    return np.radians(np.vstack([dec, ra]))        
+    ra, dec = np.loadtxt(catalog_fn, unpack=True, usecols=[0, 1], delimiter=',')
+    out = np.radians(np.vstack([dec, ra]))
+
+    return out
 
 def eplot(x, *args, fname=None, show=False, **kwargs):
     """Return a list of enplot plots. Optionally, save and display them.

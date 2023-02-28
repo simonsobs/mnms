@@ -1,0 +1,97 @@
+BaseNoiseModel:
+  calibrated: false
+  catalog_name: union_catalog_regular_20220316.csv
+  data_model_name: act_dr6.01
+  differenced: true
+  dtype: f4
+  enforce_equal_qid_kwargs:
+  - patch
+  - daynight
+  - num_splits
+  fwhm_ivar: null
+  kfilt_lbounds: null
+  mask_est_name: dr6v3_20220316_baseline_union_mask.fits
+  mask_obs_name: dr6v3_xlink_union_mask_0.001.fits
+  possible_subproduct_kwargs: null
+  qid_names_template: '{array}_{freq}'
+  srcfree: true
+  subproduct: default
+
+TiledNoiseModel:
+  delta_ell_smooth: 400
+  height_deg: 4.0
+  width_deg: 4.0
+  model_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
+  sim_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+
+WaveletNoiseModel:
+  fwhm_fact_pt1:
+  - 1350
+  - 10.0
+  fwhm_fact_pt2:
+  - 5400
+  - 16.0
+  lamb: 1.3
+  smooth_loc: false
+  w_lmax_j: 5300
+  w_lmin: 10
+  model_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
+  sim_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+
+FDWNoiseModel:
+  fwhm_fact_pt1:
+  - 1350
+  - 10.0
+  fwhm_fact_pt2:
+  - 5400
+  - 16.0
+  lamb: 1.6
+  n: 36
+  nback:
+  - 0
+  nforw:
+  - 0
+  - 6
+  - 6
+  - 6
+  - 6
+  - 12
+  - 12
+  - 12
+  - 12
+  - 24
+  - 24
+  p: 2
+  pback:
+  - 0
+  pforw:
+  - 0
+  - 6
+  - 4
+  - 2
+  - 2
+  - 12
+  - 8
+  - 4
+  - 2
+  - 12
+  - 8
+  w_lmax: 10800
+  w_lmax_j: 5300
+  w_lmin: 10
+  model_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
+  sim_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+
+HarmonicMixture:
+  ell_highs:
+  - 5000
+  ell_lows:
+  - 4000
+  lmaxs:
+  - 5400
+  - 10800
+  noise_models:
+  - FDWNoiseModel
+  - TiledNoiseModel
+  profile: cosine
+  sim_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'

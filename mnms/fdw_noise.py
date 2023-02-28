@@ -1108,21 +1108,20 @@ def write_wavs(fname, wavs, extra_attrs=None, extra_datasets=None):
     -----
     Will overwrite a file at fname if it already exists.
     """
-    if fname[-5:] != '.hdf5':
+    if not fname.endswith('.hdf5'):
         fname += '.hdf5'
 
     with h5py.File(fname, 'w') as hfile:
 
+        wavs_grp = hfile.create_group('wavs')
         for kern_key, wmap in wavs.items():
-            
             # if kern_key is singleton (not tuple)
             try:
                 dname = '_'.join([str(i) for i in kern_key])
             except TypeError:
                 dname = '_'.join([str(kern_key)])
             
-            wset = hfile.create_dataset(dname, data=np.asarray(wmap))
-
+            wset = wavs_grp.create_dataset(dname, data=np.asarray(wmap))
             if hasattr(wmap, 'wcs'):
                 for k, v in wmap.wcs.to_header().items():
                     wset.attrs[k] = v
@@ -1131,10 +1130,10 @@ def write_wavs(fname, wavs, extra_attrs=None, extra_datasets=None):
             for k, v in extra_attrs.items():
                 hfile.attrs[k] = v
 
+        extra_datasets_grp = hfile.create_group('extra_datasets')
         if extra_datasets is not None:
             for ekey, emap in extra_datasets.items():
-                eset = hfile.create_dataset(ekey, data=np.asarray(emap))
-
+                eset = extra_datasets_grp.create_dataset(ekey, data=np.asarray(emap))
                 if hasattr(emap, 'wcs'):
                     for k, v in emap.wcs.to_header().items():
                         eset.attrs[k] = v
@@ -1156,23 +1155,18 @@ def read_wavs(fname, extra_attrs=None, extra_datasets=None):
 
     Returns
     -------
-    dict, [dict], [dict]
-        Always returns a dictionary  of wavelet maps, indexed by the wavelet 
-        key (radial index, azimuthal index). If extra_attrs supplied, 
-        also returns a dictionary with keys given by the supplied arguments. If
-        extra_datasets supplied, also returns a dictionary with keys given by 
-        the supplied arguments. If both extra_attrs and extra_datasets supplied,
-        extra_attrs will correspond to the second returned object, and
-        extra_datasets to the third.
+    dict, dict, dict
+        A dictionary of wavelet maps, indexed by the wavelet key (radial index,
+        azimuthal index). A dictionary of with keys given by extra_attrs. A
+        dictionary with keys given by extra_datasets.
     """
-    if fname[-5:] != '.hdf5':
+    if not fname.endswith('.hdf5'):
         fname += '.hdf5'
     
     with h5py.File(fname, 'r') as hfile:
 
         wavs = {}
-        extra_datasets_dict = {}
-        for ikey, iset in hfile.items():
+        for ikey, iset in hfile['wavs'].items():
 
             imap = np.empty(iset.shape, iset.dtype)
             iset.read_direct(imap)
@@ -1185,35 +1179,32 @@ def read_wavs(fname, extra_attrs=None, extra_datasets=None):
                 wcs = pywcs.WCS(header)
                 imap = enmap.ndmap(imap, wcs)
 
-            try: # look for numeric style key
-                ikey = tuple([int(i) for i in ikey.split('_')])
-                if len(ikey) == 1:
-                    ikey = ikey[0]
-                wavs[ikey] = imap
-            except ValueError: # otherwise it's extra
-                ikey = str(ikey)
-                extra_datasets_dict[ikey] = imap
+            ikey = tuple([int(i) for i in ikey.split('_')])
+            if len(ikey) == 1:
+                ikey = ikey[0]
+            wavs[ikey] = imap
 
         extra_attrs_dict = {}
         if extra_attrs is not None:
             for k in extra_attrs:
                 extra_attrs_dict[k] = hfile.attrs[k]
 
-        # any extra maps will have already been loaded into extra_datasets_dict
-        # so, if not requested, need to delete them out
-        if extra_datasets is None:
-            extra_datasets = {}
-        # get copy of keys so can delete while iterating
-        for k in list(extra_datasets_dict.keys()):
-            if k not in extra_datasets:
-                del extra_datasets_dict[k]
+        extra_datasets_dict = {}
+        if extra_datasets is not None:
+            for k in extra_datasets:
+                iset = hfile[f'extra_datasets/{k}']
 
-    # return
-    if extra_attrs_dict == {} and extra_datasets_dict == {}:
-        return wavs
-    elif extra_datasets_dict == {}:
-        return wavs, extra_attrs_dict
-    elif extra_attrs_dict == {}:
-        return wavs, extra_datasets_dict
-    else:
-        return wavs, extra_attrs_dict, extra_datasets_dict
+                imap = np.empty(iset.shape, iset.dtype)
+                iset.read_direct(imap)
+
+                # get possible wcs information
+                if len(iset.attrs) > 0:
+                    header = pyfits.Header()
+                    for k, v in iset.attrs.items():
+                        header[k] = v
+                    wcs = pywcs.WCS(header)
+                    imap = enmap.ndmap(imap, wcs)
+                
+                extra_datasets_dict[k] = imap
+
+    return wavs, extra_attrs_dict, extra_datasets_dict

@@ -114,7 +114,7 @@ def write_isoivar(fname, sqrt_cov_ell, extra_attrs=None):
     -----
     Will overwrite a file at fname if it already exists.
     """
-    if fname[-5:] != '.hdf5':
+    if not fname.endswith('.hdf5'):
         fname += '.hdf5'
 
     with h5py.File(fname, 'w') as hfile:
@@ -142,7 +142,7 @@ def read_isoivar(fname, extra_attrs=None):
         extra_attrs supplied, also returns a dictionary with keys given by
         the supplied arguments.
     """
-    if fname[-5:] != '.hdf5':
+    if not fname.endswith('.hdf5'):
         fname += '.hdf5'
     
     with h5py.File(fname, 'r') as hfile:
@@ -155,11 +155,7 @@ def read_isoivar(fname, extra_attrs=None):
             for k in extra_attrs:
                 extra_attrs_dict[k] = hfile.attrs[k]
 
-    # return
-    if extra_attrs_dict == {}:
-        return sqrt_cov_ell
-    else:
-        return sqrt_cov_ell, extra_attrs_dict
+    return sqrt_cov_ell, extra_attrs_dict
 
 # def get_isoivar_noise_covsqrt(imap, ivar=None, mask_est=1, verbose=True):
 #     """Get the 1D global, isotropic power spectra to draw sims from later. Ivar maps, if passed
