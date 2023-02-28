@@ -1,11 +1,15 @@
 from sofind import utils as s_utils
 
-from pixell import enmap, curvedsky, fft as enfft, sharp
+from pixell import enmap, curvedsky, fft as enfft, sharp, colorize, cgrid
 import healpy as hp
 from enlib import array_ops
 from optweight import alm_c_utils
 
 import numpy as np
+import matplotlib.pyplot as plt 
+from matplotlib import ticker
+from matplotlib.colors import LinearSegmentedColormap
+from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 from scipy.interpolate import interp1d, RectBivariateSpline
 from scipy import ndimage
 import numba
@@ -2560,6 +2564,257 @@ def get_catalog(catalog_fn):
     out = np.radians(np.vstack([dec, ra]))
 
     return out
+
+def colorscheme_to_cmap(desc):
+    """Convert a pixell.colorize.Colorscheme to a matplotlib.colors.Colormap"""
+    c = colorize.Colorscheme(desc)
+    cdict = {}
+    for i, col in enumerate(['red', 'green', 'blue', 'alpha']):
+        cdict[col] = np.stack((c.vals, c.cols[:, i]/255, c.cols[:, i]/255), axis=-1)
+    return LinearSegmentedColormap(desc, cdict)
+
+def plot(imap, ax=None, downgrade=None, upgrade=None, mask=None, cmap=None,
+         desc='planck', range=None, min=None, max=None, ticks=None,
+         tick_fontsize=12, grid=False, xlabel=None, ylabel=None, title=None,
+         label_fontsize=12, colorbar=True, colorbar_position='right',
+         colorbar_size='1.5%', colorbar_pad='0.75%', colorbar_tickformat=None,
+         colorbar_fontsize=12, colorbar_label=None,
+         colorbar_label_rotation=270, colorbar_labelpad=0, **kwargs):
+    """Plot an ndmap with the added functionality/extensibility of matplotlib.
+    This function's defaults are set for plotting maps of the ACT patch, but
+    by passing a prebuilt axis or axes to 'ax', it can be made more flexible,
+    e.g. for stamps or grids of subplots, etc.
+    
+    While it can support passing a prebuilt array of axes, this is best for
+    viewing plots quickly on-the-fly. For publication-quality arrays of
+    subplots, it is most flexible to iterate over the sublots outside this
+    function, and pass each subplot one-at-a-time as a singleton axis to 
+    this function. 
+
+    Parameters
+    ----------
+    imap : (..., ny, nx) ndmap
+        Map(s) to be plotted.
+    ax : matplotlib.axes.Axes or 2d array of same, optional
+        Axes instance into which plot is drawn. If imap has no preshape, must 
+        be singleton instance or None, in which case new figure with single axis
+        is built. If imap has preshape, must be 2d array of Axes instances
+        with same shape as imap (imap preshape must also be 2d) or None, in which
+        case new figure with (nrows=imap.preshape.flatten(), ncols=1) arrangement
+        of axes is built.
+    downgrade : int, optional
+        Downgrade imap by this factor before calling plt.imshow.
+    upgrade : int, optional
+        Upgrade imap by this factor before calling plt.imshow.
+    mask : scalar, optional
+        Values in imap equal to mask are not plotted.
+    cmap : matplotlib.Colormap, optional
+        Colormap to use in plotting, by default None. If None, desc is used
+        to build colormap from pixell.colorize.Colorscheme.
+    desc : str, optional
+        Name of pixell.colorize.Colorscheme to use if cmap is None, by default
+        'planck'.
+    range : scalar, optional
+        0-symmetric min/max of plot(s), by default None. Takes precedence over
+        min/max if supplied.
+    min : scalar, optional
+        Minimum value of plot(s), by default None.
+    max : scalar, optional
+        Maximum value of plot(s), by default None.
+    ticks : int, optional
+        Add labeled tick on plot(s) border with interval set by imap.wcs,
+        by default None. If multiple plots produced, labels only on border
+        of group of plots -- that is, not between plots.
+    tick_fontsize : scalar, optional
+        Fontsize of ticks, by default 12.
+    grid : bool, optional
+        Add gridlines to ticks, by default False.
+    xlabel : str, optional
+        Label for x-axis, by default None. If multiple plots produced, label
+        only on last row of plots.
+    ylabel : _type_, optional
+        Label for y-axis, by default None. If multiple plots produced, label
+        only on first column of plots.
+    title : str, optional
+        Title for axes, by default None.
+    label_fontsize : scalar, optional
+        Fontsize of labels and title, by default 12.
+    colorbar : bool, optional
+        Whether to add colorbar to axes, by default True.
+    colorbar_position : str, optional
+        Colorbar position relative to axes, by default 'right'.
+        See matplotlib.divider.append_axes.
+    colorbar_size : str, optional
+        Colorbar size relative to axes, by default '1.5%'.
+        See matplotlib.divider.append_axes.
+    colorbar_pad : str, optional
+        Colorbar spacing relative to axes, by default '0.75%'.
+        See matplotlib.divider.append_axes.
+    colorbar_tickformat : str or Formatter, optional
+        Tick format string for the colorbar, by default None. If None, uses
+        default format unless abs(num) < .1 or >= 1000, then switches to
+        scientific notation (but 0 always scalar).
+    colorbar_fontsize : scalar, optional
+        Fontsize for colorbar ticks and label, by default 12.
+    colorbar_label : str, optional
+        Text to add to center of colorbar, by default None.
+    colorbar_label_rotation : int, optional
+        Rotation of label, by default 270.
+    colorbar_labelpad : int, optional
+        Position of label relative to colorbar, by default 0.
+    kwargs : dict, optional
+        Remaining kwargs to pass to ax.imshow.
+
+    Returns
+    -------
+    matplotlib.axes.Axes or array of same
+        The axes instance or array of instances into which plots were drawn.
+    """
+    assert downgrade is None or upgrade is None, \
+        'Cannot supply both downgrade and upgrade'
+
+    imap = enmap.samewcs(imap)
+
+    if len(imap.shape[:-2]) > 0:
+        if ax is None:
+            imap = imap.reshape(-1, 1, *imap.shape[-2:])
+            nrows = imap.shape[0]
+            _, ax = plt.subplots(
+                figsize=(12, 3*nrows), dpi=196, nrows=nrows, sharex=True, squeeze=False
+                )
+        else:
+            ax = np.asarray(ax)
+            nrows = imap.shape[0]
+            assert ax.shape == imap.shape[:-2], \
+                f'Shape of ax must match imap preshape, got {ax.shape} and {imap.shape[:-2]}'
+            assert len(imap.shape[:-2]) == 2, \
+                f'imap preshape must be 2d, got {imap.shape[:-2]}'
+
+        for idx in np.ndindex(imap.shape[:-2]):
+            plot(imap[idx], ax=ax[idx], downgrade=downgrade, upgrade=upgrade, mask=mask,
+                 cmap=cmap, desc=desc, range=range, min=min, max=max, ticks=ticks, tick_fontsize=tick_fontsize,
+                 grid=grid, xlabel=xlabel if idx[0]==nrows-1 else None,
+                 ylabel=ylabel if idx[1]==0 else None, title=title, label_fontsize=label_fontsize, colorbar=colorbar,
+                 colorbar_position=colorbar_position, colorbar_size=colorbar_size,
+                 colorbar_pad=colorbar_pad, colorbar_tickformat=colorbar_tickformat,
+                 colorbar_fontsize=colorbar_fontsize, colorbar_label=colorbar_label,
+                 colorbar_label_rotation=colorbar_label_rotation, 
+                 colorbar_labelpad=colorbar_labelpad, **kwargs
+                 )
+        ax[idx].get_figure().subplots_adjust(hspace=0.08, wspace=0.08)
+        return ax
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(12, 3), dpi=196)
+    
+    if downgrade is not None:
+        imap = imap.downgrade(downgrade)
+    if upgrade is not None:
+        imap = imap.upgrade(upgrade)
+    shape, wcs = imap.geometry
+
+    if mask is not None:
+        imap = imap.copy()
+        imap[imap == mask] = np.nan
+
+    if cmap is None:
+        cmap = colorscheme_to_cmap(desc)
+
+    if min is None:
+        min = np.min(imap)
+    if max is None:
+        max = np.max(imap)
+    if range is not None:
+        min = -range
+        max = range    
+    im = ax.imshow(imap, origin='lower', cmap=cmap, vmin=min, vmax=max, **kwargs)
+
+    if ticks is not None:
+        ticks = np.zeros(2) + ticks
+
+        gridinfo = cgrid.calc_gridinfo(shape, wcs, steps=ticks, nstep=[2, 2])
+        
+        y_pixs = []
+        y_labels = []
+        for obj in gridinfo.lat:
+            y_pix = obj[1][0][0, 1]
+            y_label = obj[0]
+
+            if (np.round(y_pix) != 0) and (np.round(y_pix) != shape[-2]-1):
+                y_pixs.append(y_pix)
+                y_labels.append(y_label)
+
+        x_pixs = []
+        x_labels = []
+        for obj in gridinfo.lon:
+            x_pix = obj[1][0][0, 0]
+            x_label = obj[0]
+
+            if (np.round(x_pix) != 0) and (np.round(x_pix) != shape[-1]-1):
+                x_pixs.append(x_pix)
+                x_labels.append(x_label)
+
+        def format_func_y(value, tick_num):
+            val = y_labels[tick_num]
+            if val.is_integer():
+                return f'{val:.0f}'
+            else:
+                return val
+
+        def format_func_x(value, tick_num):
+            val = x_labels[tick_num]
+            if val.is_integer():
+                return f'{val:.0f}'
+            else:
+                return val
+            
+        ax.yaxis.set_major_locator(ticker.FixedLocator(y_pixs))
+        ax.xaxis.set_major_locator(ticker.FixedLocator(x_pixs))
+        ax.yaxis.set_major_formatter(ticker.FuncFormatter(format_func_y))
+        ax.xaxis.set_major_formatter(ticker.FuncFormatter(format_func_x))
+        ax.tick_params(labelsize=tick_fontsize)
+    else:
+        ax.yaxis.set_major_locator(ticker.NullLocator())
+        ax.xaxis.set_major_locator(ticker.NullLocator())    
+
+    if grid:
+        ax.grid(linewidth=.3, color='grey', alpha=.5)
+
+    if xlabel is not None:
+        ax.set_xlabel(xlabel, fontsize=label_fontsize)
+    if ylabel is not None:
+        ax.set_ylabel(ylabel, fontsize=label_fontsize)
+    if title is not None:
+        ax.set_title(title, fontsize=label_fontsize)
+
+    if colorbar:
+        divider = make_axes_locatable(ax)
+        ax_cb = divider.append_axes(
+            colorbar_position, size=colorbar_size, pad=colorbar_pad
+            )
+        
+        def format_func_cbar(value, tick_num):
+            if value == 0:
+                return '0'
+            elif abs(value) < .1 or abs(value) >= 1000:
+                return np.format_float_scientific(value, precision=4, trim='-', exp_digits=0)
+            else:
+                return value
+        
+        if colorbar_tickformat is None:
+            colorbar_tickformat = ticker.FuncFormatter(format_func_cbar)
+
+        cb = ax.get_figure().colorbar(
+            im, cax=ax_cb, ticks=[min, max], format=colorbar_tickformat
+            )
+        
+        cb.ax.tick_params(labelsize=colorbar_fontsize)
+        if colorbar_label is not None:
+            cb.set_label(
+                colorbar_label, rotation=colorbar_label_rotation, labelpad=colorbar_labelpad, fontsize=colorbar_fontsize
+                )
+
+    return ax
 
 def eplot(x, *args, fname=None, show=False, **kwargs):
     """Return a list of enplot plots. Optionally, save and display them.
