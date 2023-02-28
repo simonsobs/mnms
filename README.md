@@ -1,5 +1,5 @@
-# Map-based Noise ModelS (mnms)
-Serving up sugar-coated map-based models of ACT data. Each model supports drawing map-based simulations. The only ingredients are data splits with independent realizations of the noise or equivalent, like an independent set of time-domain sims. 
+# `M`ap-based `N`oise `M`odel`S`
+Serving up sugar-coated map-based models of SO/ACT data. Each model supports drawing map-based simulations. The only ingredients are data splits with independent realizations of the noise or equivalent, like an independent set of time-domain sims. 
 
 This codebase is under active-development -- we can't guarantee future commits won't break e.g. when interacting with old outputs. We will begin versioning when the code has converged more. 
 
@@ -8,15 +8,12 @@ For any questions please reach out to Zach Atkins (email: [zatkins@princeton.edu
 
 ## Dependencies
 Users wishing to filter data or generate noise simulations should have the following dependencies in their environment:
-* from `simonsobs`: `pixell`
-* from `ACTCollaboration`: `actapack`
+* from `simonsobs`: `pixell`, `sofind`
 * from individuals: [`enlib`](https://github.com/amaurea/enlib), [`optweight`](https://github.com/AdriJD/optweight)
 
 All other dependencies (e.g. `numpy` etc.) are required by packages listed here, especially by `pixell`.
 
-A note on `soapack`: as of 2021/12/07, please ensure the `prelim_dr6` branch is installed. This branch should subsume all previous branches (won't break past code) but will allow users to work with ACT `dr6v3` maps via the `DR6v3` data model subclass.
-
-A note on [`enlib`](https://github.com/amaurea/enlib): all users need access to the top-level python modules. This is achieved just by adding the repo to your `PYTHONPATH`. Only if you are generating new noise models, you will also to compile the library "array ops."  This is done via `make array_ops` executed from within the top-level directory. Please see the enlib docs for more info on how to do this on your system. We have had success using an up-to-date intel `c` compiler with intel `mkl` loaded in your environment, if available.
+A note on [`enlib`](https://github.com/amaurea/enlib): all users need access to the top-level python modules. This is achieved just by adding the repo to your `PYTHONPATH`. **Only if you are generating new noise models,** you will also to compile the library `array_ops`.  This is done via `make array_ops` executed from within the top-level directory. Please see the enlib docs for more info on how to do this on your system. We have had success using an up-to-date intel `c` compiler with intel `mkl` loaded in your environment, if available. **You do not need to compile `array_ops` if you are only drawing simulations or loading existing products from disk.**
 
 ## Installation
 Clone this repo and `cd` to `/path/to/mnms/`:
@@ -32,7 +29,7 @@ to see changes to source code automatically updated in your environment. To chec
 ```
 $ pytest
 ```
-Tests are being built and may not work properly. A good sanity check that your installation and setup were successful is to make sure the tutorial notebook (`tutorials/mnms_quick_tutorial.ipynb`) runs all cells.
+Tests are still under construction!
 
 ## Setup
 This package looks for raw data and saves products using the functionality in `soapack`. Users must create the following file in their home directory:
