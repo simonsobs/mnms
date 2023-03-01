@@ -266,7 +266,7 @@ class tiled_ndmap(enmap.ndmap):
     # also need to divide out the global "border" since we don't want any crossfade original in the 
     # final map
     def from_tiled(self, power=1.0, return_as_enmap=True):
-        assert self.tiled is True, 'Can only stitch tiles if object is already tiled'
+        assert self.tiled, 'Can only stitch tiles if object is already tiled'
 
         # get empty "canvas" we will place tiles on
         oshape_y = self.numy * self.pix_height + 2*self.pix_cross_y
