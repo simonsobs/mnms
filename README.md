@@ -8,8 +8,8 @@ For any questions please reach out to Zach Atkins (email: [zatkins@princeton.edu
 
 ## Dependencies
 Users wishing to filter data or generate noise simulations should have the following dependencies in their environment:
-* from `simonsobs`: `pixell`, `sofind`
-* from individuals: [`enlib`](https://github.com/amaurea/enlib), [`optweight`](https://github.com/AdriJD/optweight)
+* from `simonsobs`: [`pixell`](https://github.com/simonsobs/pixell), [`sofind`](https://github.com/simonsobs/sofind)
+* from the community: [`numba`](https://numba.pydata.org/), [`enlib`](https://github.com/amaurea/enlib), [`optweight`](https://github.com/AdriJD/optweight)
 
 All other dependencies (e.g. `numpy` etc.) are required by packages listed here, especially by `pixell`.
 
