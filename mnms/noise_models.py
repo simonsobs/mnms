@@ -68,9 +68,11 @@ class DataManager:
             are available to be passed to model or sim filename templates.
         calibrated : bool, optional
             Whether to load calibrated raw data, by default False.
-        differenced : bool, optional,
+        differenced : bool, optional
             Whether to take differences between splits or treat loaded maps as raw noise 
             (e.g., a time-domain sim) that will not be differenced, by default True.
+        srcfree : bool, optional
+            Whether to load point-source subtracted maps or raw maps, by default True.
         mask_est_name : str, optional
             Name of harmonic filter estimate mask file, by default None. This mask will
             be used as the mask_est (see above) if mask_est is None. Only allows fits
