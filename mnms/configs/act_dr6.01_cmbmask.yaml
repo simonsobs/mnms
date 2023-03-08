@@ -81,17 +81,3 @@ FDWNoiseModel:
   w_lmin: 10
   model_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
   sim_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
-
-HarmonicMixture:
-  ell_highs:
-  - 5000
-  ell_lows:
-  - 4000
-  lmaxs:
-  - 5400
-  - 10800
-  noise_models:
-  - FDWNoiseModel
-  - TiledNoiseModel
-  profile: cosine
-  sim_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
