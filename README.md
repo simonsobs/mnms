@@ -2,7 +2,7 @@
 Serving up sugar-coated map-based models of SO/ACT data. Each model supports drawing map-based simulations. The only ingredients are data splits with independent realizations of the noise or equivalent, like an independent set of time-domain sims. 
 
 ## Contact
-For any questions please reach out to Zach Atkins (email: [zatkins@princeton.edu](mailto:zatkins@princeton.edu), github: [@zatkins2](https://github.com/zatkins2)). If you use any released `mnms` products or this code in your own work, please cite [Atkins et. al. 2023](http://arxiv.org).
+For any questions please reach out to Zach Atkins (email: [zatkins@princeton.edu](mailto:zatkins@princeton.edu), github: [@zatkins2](https://github.com/zatkins2)). If you use any released `mnms` products or this code in your own work, please cite [Atkins et. al. 2023](https://arxiv.org/abs/2303.04180).
 
 ## Products
 Products for the ACT DR6.01 release are available at `NERSC` and at Princeton (`della`). You can create a public account on `NERSC` following [these instructions](https://crd.lbl.gov/divisions/scidata/c3/c3-research/cosmic-microwave-background/cmb-data-at-nersc/).
