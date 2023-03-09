@@ -2,7 +2,10 @@
 Serving up sugar-coated map-based models of SO/ACT data. Each model supports drawing map-based simulations. The only ingredients are data splits with independent realizations of the noise or equivalent, like an independent set of time-domain sims. 
 
 ## Contact
-For any questions please reach out to Zach Atkins (email: [zatkins@princeton.edu](mailto:zatkins@princeton.edu), github: [@zatkins2](https://github.com/zatkins2)).
+For any questions please reach out to Zach Atkins (email: [zatkins@princeton.edu](mailto:zatkins@princeton.edu), github: [@zatkins2](https://github.com/zatkins2)). If you use any released `mnms` products or this code in your own work, please cite [Atkins et. al. 2023](http://arxiv.org).
+
+## Products
+Products for the ACT DR6.01 release are available at `NERSC` and at Princeton (`della`). You can create a public account on `NERSC` following [these instructions](https://crd.lbl.gov/divisions/scidata/c3/c3-research/cosmic-microwave-background/cmb-data-at-nersc/).
 
 ## Dependencies
 Users wishing to filter data or generate noise simulations should have the following dependencies in their environment:
@@ -77,7 +80,7 @@ python noise_{all/gen/sim}_{tile/wav/fdw}.py --help
 Products written by users are **always** saved in their `private_path`!
 
 ## Configs and Metadata
-The recommended way to instantiate a `BaseNoiseModel` subclass of any type is by loading a configuration file (in fact, the provided scripts require this). A configuration file lives either at the package level (in `mnms/mnms/configs`), in the `public_path/configs` directory, or in the `private_path/configs` directory. Any configs written by users will be stored in the latter location. A config file of the same name may not exist in more than one location; `mnms` will raise an error if this happens. An example config file is provided with the package, `act_dr6.01_cmbmask.yaml` (all configs are always `yaml` files).
+The recommended way to instantiate a `BaseNoiseModel` subclass of any type is by loading a configuration file (in fact, the provided scripts require this). A configuration file lives either at the package level (in `mnms/mnms/configs`), in the `public_path/configs` directory, or in the `private_path/configs` directory. An example config file is provided with the package, `act_dr6.01_cmbmask.yaml` (all configs are always `yaml` files).
 
 The job of a config is to store the metadata that helps instantiate noise models in a centralized location. For instance, you wouldn't want to have to manage all the arguments for a `FDWNoiseModel` instance yourself! In addition, the config maps this metadata to filenames. All of this metadata lives either under the `BaseNoiseModel` block in the config --- these are the kwargs for the `DataManager` and `ConfigManager` objects that each `BaseNoiseModel` will inherit from --- or under the particular subclass, e.g., `TiledNoiseModel` --- these are the kwargs unique to a `TiledNoiseModel`. Each subclass also stores a `model_file_template` and a `sim_file_template` which will be populated by the kwargs in the config when those products are written. Users can experiment with changing the templates to match their preferred filename --- note, some additional kwargs provided at runtime to `get_model` and `get_sim` likely go here, e.g. `lmax` or `split_num`.
 
