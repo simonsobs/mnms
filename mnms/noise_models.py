@@ -1816,7 +1816,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         try:        
             fn = self._get_sim_fn(split_num, sim_num, lmax, alm=alm, to_write=False, **subproduct_kwargs)
             if alm:
-                return utils.read_alm(fn)
+                return utils.read_alm(fn, preshape=(self._num_arrays, 1))
             else:
                 return enmap.read_map(fn)
         except FileNotFoundError as e:
