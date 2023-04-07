@@ -1,43 +1,34 @@
-from mnms import utils, tiled_noise, wav_noise, fdw_noise, inpaint
-from sofind import utils as s_utils, DataModel
+from mnms import inpaint, utils, tiled_noise, wav_noise, fdw_noise
 
+from sofind import DataModel, utils as s_utils
 from pixell import enmap, wcsutils
 from enlib import bench
 from optweight import wavtrans
 
 import numpy as np
-import yaml
 import h5py
+import yaml
 
-from abc import ABC, abstractmethod
-from itertools import product
-import warnings
 import os
+from itertools import product
 import time
+import warnings
+from abc import ABC, abstractmethod
+
 
 # expose only concrete noise models, helpful for namespace management in client
 # package development. NOTE: this design pattern inspired by the super-helpful
 # registry trick here: https://numpy.org/doc/stable/user/basics.dispatch.html
 REGISTERED_NOISE_MODELS = {}
 
-
 def register(registry=REGISTERED_NOISE_MODELS):
     """Add a concrete BaseNoiseModel implementation to the specified registry (dictionary)."""
     def decorator(noise_model_class):
         registry[noise_model_class.__name__] = noise_model_class
-        registry[noise_model_class.noise_model_name()] = noise_model_class
         return noise_model_class
     return decorator
 
-def _kwargs_str(**kwargs):
-    """For printing kwargs as a string"""
-    kwargs_str = ''
-    for k, v in kwargs.items():
-        kwargs_str += f'{k} {v}, '
-    return kwargs_str
 
-
-# Helper class to load/preprocess data from disk
 class DataManager:
 
     def __init__(self, *qids, data_model_name=None, subproduct='default',
@@ -138,8 +129,8 @@ class DataManager:
                 reference_qid_kwargs = {k: qid_kwargs[k] for k in enforce_equal_qid_kwargs}
             else:
                 assert {k: qid_kwargs[k] for k in enforce_equal_qid_kwargs} == reference_qid_kwargs, \
-                    f'Reference qid_kwargs are {_kwargs_str(**reference_qid_kwargs)} but found ' + \
-                    f'{_kwargs_str(**{k: qid_kwargs[k] for k in enforce_equal_qid_kwargs})}'
+                    f'Reference qid_kwargs are {utils.kwargs_str(**reference_qid_kwargs)} but found ' + \
+                    f'{utils.kwargs_str(**{k: qid_kwargs[k] for k in enforce_equal_qid_kwargs})}'
         self._reference_qid_kwargs = reference_qid_kwargs
 
         # other instance properties
@@ -840,12 +831,6 @@ class DataManager:
 
 class ConfigManager(ABC):
 
-    @classmethod
-    @abstractmethod
-    def noise_model_name(cls):
-        """A shorthand name for this model, e.g. for filenames"""
-        return ''
-
     def __init__(self, config_name=None, dumpable=True, qid_names_template=None,
                  model_file_template=None, sim_file_template=None,
                  **kwargs):
@@ -926,10 +911,10 @@ class ConfigManager(ABC):
             config_name = self._get_default_config_name()
 
         if model_file_template is None:
-            model_file_template = '{qids}_{noise_model_name}_{config_name}_{data_model_name}_{subproduct}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
+            model_file_template = '{config_name}_{noise_model_name}_{qid_names}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
 
         if sim_file_template is None:
-            sim_file_template = '{qids}_{noise_model_name}_{config_name}_{data_model_name}_{subproduct}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
+            sim_file_template = '{config_name}_{noise_model_name}_{qid_names}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
 
         self._qid_names_template = qid_names_template
         self._model_file_template = model_file_template
@@ -1343,7 +1328,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     def _get_model_fn(self, split_num, lmax, to_write=False, **subproduct_kwargs):
         """Get a noise model filename for split split_num; return as <str>"""
         kwargs = dict(
-            noise_model_name=self.__class__.noise_model_name(),
+            noise_model_name=self.name,
             qids='_'.join(self._qids),
             qid_names=self._qid_names,
             config_name=self._config_name,
@@ -1365,7 +1350,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     def _get_sim_fn(self, split_num, sim_num, lmax, alm=False, to_write=False, **subproduct_kwargs):
         """Get a sim filename for split split_num, sim sim_num, and bool alm; return as <str>"""
         kwargs = dict(
-            noise_model_name=self.__class__.noise_model_name(),
+            noise_model_name=self.name,
             qids='_'.join(self._qids),
             qid_names=self._qid_names,
             config_name=self._config_name,
@@ -1388,9 +1373,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
     @property
     @abstractmethod
-    def _pre_filt_rel_upgrade(self):
-        """Relative pixelization upgrade factor for model-building step"""
-        return None
+    def name(self):
+        """A shorthand name for this model, e.g. for filenames"""
+        return ''
 
     def get_model(self, split_num, lmax, check_in_memory=True, check_on_disk=True,
                   generate=True, keep_model=False, keep_mask_est=False,
@@ -1540,7 +1525,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         dmap *= mask_obs
 
         # get the model
-        with bench.show(f'Generating noise model for {_kwargs_str(split_num=split_num, lmax=lmax_model, **subproduct_kwargs)}'):
+        with bench.show(f'Generating noise model for {utils.kwargs_str(split_num=split_num, lmax=lmax_model, **subproduct_kwargs)}'):
             # in order to have load/keep operations in abstract get_model, need
             # to pass ivar and mask_obs here, rather than e.g. split_num
             model_dict = self._get_model(
@@ -1619,10 +1604,10 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             return self._read_model(fn)
         except FileNotFoundError as e:
             if generate:
-                print(f'Model for {_kwargs_str(split_num=split_num, lmax=lmax, **subproduct_kwargs)} not found on-disk, generating instead')
+                print(f'Model for {utils.kwargs_str(split_num=split_num, lmax=lmax, **subproduct_kwargs)} not found on-disk, generating instead')
                 return False
             else:
-                print(f'Model for {_kwargs_str(split_num=split_num, lmax=lmax, **subproduct_kwargs)} not found on-disk, please generate it first')
+                print(f'Model for {utils.kwargs_str(split_num=split_num, lmax=lmax, **subproduct_kwargs)} not found on-disk, please generate it first')
                 raise e
 
     @abstractmethod
@@ -1744,7 +1729,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         ivar *= mask_obs
         
         # get the sim
-        with bench.show(f'Generating noise sim for {_kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)}'):
+        with bench.show(f'Generating noise sim for {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)}'):
             seed = self._get_seed(split_num, sim_num)
             if alm:
                 sim = self._get_sim_alm(
@@ -1821,15 +1806,15 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                 return enmap.read_map(fn)
         except FileNotFoundError as e:
             if generate:
-                print(f'Sim {_kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)} not found on-disk, generating instead')
+                print(f'Sim {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)} not found on-disk, generating instead')
                 return False
             else:
-                print(f'Sim {_kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)} not found on-disk, please generate it first')
+                print(f'Sim {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)} not found on-disk, please generate it first')
                 raise e
 
     def _get_seed(self, split_num, sim_num):
         """Return seed for sim with split_num, sim_num."""
-        return utils.get_seed(*(split_num, sim_num, self.__class__.noise_model_name(), *self._qids))
+        return utils.get_seed(*(split_num, sim_num, self.name, *self._qids))
 
     @abstractmethod
     def _get_sim(self, model_dict, seed, lmax, mask, ivar, verbose):
@@ -1844,10 +1829,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
 @register()
 class TiledNoiseModel(BaseNoiseModel):
-
-    @classmethod
-    def noise_model_name(cls):
-        return 'tile'
 
     def __init__(self, *qids, width_deg=4., height_deg=4.,
                  delta_ell_smooth=400, **kwargs):
@@ -1894,9 +1875,9 @@ class TiledNoiseModel(BaseNoiseModel):
         super().__init__(*qids, **kwargs)
 
     @property
-    def _pre_filt_rel_upgrade(self):
-        """Relative pixelization upgrade factor for model-building step"""
-        return 2
+    def name(self):
+        """A shorthand name for this model, e.g. for filenames"""
+        return 'tile'
 
     @property
     def _model_param_dict(self):
@@ -1975,10 +1956,6 @@ class TiledNoiseModel(BaseNoiseModel):
 @register()
 class WaveletNoiseModel(BaseNoiseModel):
 
-    @classmethod
-    def noise_model_name(cls):
-        return 'wav'
-
     def __init__(self, *qids, lamb=1.3, w_lmin=10, w_lmax_j=5300,
                  smooth_loc=False, fwhm_fact_pt1=[1350, 10.],
                  fwhm_fact_pt2=[5400, 16.], **kwargs):
@@ -2043,9 +2020,9 @@ class WaveletNoiseModel(BaseNoiseModel):
         super().__init__(*qids, **kwargs)
 
     @property
-    def _pre_filt_rel_upgrade(self):
-        """Relative pixelization upgrade factor for model-building step"""
-        return 1
+    def name(self):
+        """A shorthand name for this model, e.g. for filenames"""
+        return 'wav'
     
     @property
     def _model_param_dict(self):
@@ -2136,10 +2113,6 @@ class WaveletNoiseModel(BaseNoiseModel):
 
 @register()
 class FDWNoiseModel(BaseNoiseModel):
-
-    @classmethod
-    def noise_model_name(cls):
-        return 'fdw'
 
     def __init__(self, *qids, lamb=1.6, w_lmax=10_800, w_lmin=10, 
                  w_lmax_j=5300, n=36, p=2,
@@ -2246,9 +2219,9 @@ class FDWNoiseModel(BaseNoiseModel):
         self._fk_dict = {}
 
     @property
-    def _pre_filt_rel_upgrade(self):
-        """Relative pixelization upgrade factor for model-building step"""
-        return 2
+    def name(self):
+        """A shorthand name for this model, e.g. for filenames"""
+        return 'fdw'
 
     @property
     def _model_param_dict(self):

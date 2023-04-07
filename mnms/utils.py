@@ -1,5 +1,4 @@
 from sofind import utils as s_utils
-
 from pixell import enmap, curvedsky, fft as enfft, sharp, colorize, cgrid
 import healpy as hp
 from enlib import array_ops
@@ -130,6 +129,10 @@ def config_from_hdf5_file(filename, address='/'):
     for k, v in idict.items():
         odict[k] = yaml.safe_load(v)
     return odict
+
+def kwargs_str(**kwargs):
+    """For printing kwargs as a string"""
+    return ', '.join([f'{k} {v}' for k, v in kwargs.items()])
 
 # copied from tilec.tiling.py (https://github.com/ACTCollaboration/tilec/blob/master/tilec/tiling.py),
 # want to avoid dependency on tilec
@@ -1685,8 +1688,8 @@ def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
         return np.piecewise(ell, condlist, funclist)
     return lfunc1, lfunc2
 
-def get_ell_trans_profiles(ell_lows, ell_highs, lmax, profile='cosine',
-                           e=1, dtype=np.float32):
+def get_ell_trans_profiles(ell_lows, ell_highs, lmax=None, 
+                           profile='cosine', e=1, dtype=np.float32):
     """Generate profiles over ell that smoothly transition from 1 to 0 (and
     vice-versa) in defined regions. 
 
@@ -1698,10 +1701,11 @@ def get_ell_trans_profiles(ell_lows, ell_highs, lmax, profile='cosine',
     ell_highs : iterable of int
         The upper bounds of the transition regions. Must be in
         strictly increasing order. Must be the same length as
-        ell_lows. Together with ell_centers, ell_widths must be
+        ell_lows. Together with ell_lows, ell_highs must be
         defined such that no regions overlap.
-    lmax : int
-        The maximum scale of the returned profiles.
+    lmax : int, optional
+        The maximum scale of the returned profiles. If None, each profile
+        only extends to its own lmax set by ell_high.
     profile : str, optional
         The transition region shape, by default 'cosine'. Other supported
         option is 'linear'.
@@ -1713,7 +1717,7 @@ def get_ell_trans_profiles(ell_lows, ell_highs, lmax, profile='cosine',
 
     Returns
     -------
-    (len(ell_lows)+1, lmax+1) ndarray
+    list
         The profiles over all ells.
 
     Raises
@@ -1732,8 +1736,12 @@ def get_ell_trans_profiles(ell_lows, ell_highs, lmax, profile='cosine',
     ell_infos = np.asarray([ell_lows, ell_highs], dtype=int).T
     assert ell_infos.ndim == 2, 'ell_lows, ell_highs must be 1d'
 
-    ell = np.arange(lmax+1)
-    out = np.ones((ell_infos.shape[0]+1, lmax+1), dtype=dtype)
+    if lmax is None:
+        ell = np.arange(ell_highs[-1]+1, dtype=dtype)
+    else:
+        ell = np.arange(lmax+1, dtype=dtype)
+    out = np.ones((ell_infos.shape[0]+1, ell.size), dtype=dtype)
+
     for i, ell_info in enumerate(ell_infos):
         bottom, top = ell_info
 
@@ -1757,7 +1765,7 @@ def get_ell_trans_profiles(ell_lows, ell_highs, lmax, profile='cosine',
                 assert bottom >= other_ell_high, \
                     f'transfer regions cannot overlap, conflict between regions {i} and {j}'
             else:
-                raise ValueError('ell_centers must be unique')
+                raise ValueError('ell_lows, ell_highs must be unique')
 
         ell_width = top - bottom
         if ell_width == 0:
@@ -1777,6 +1785,13 @@ def get_ell_trans_profiles(ell_lows, ell_highs, lmax, profile='cosine',
     assert np.all(np.sum(out**(1/e), axis=0) - 1 < 1e-6), \
         f'Profile sum does not equal 1, max error is {np.max(np.abs(np.sum(out**(1/e), axis=0) - 1))}'
     
+    out = list(out)
+
+    # bandlimit each profile
+    if lmax is None:
+        for i, ell_high in enumerate(ell_highs):
+            out[i] = out[i][:ell_high+1]
+        
     return out
 
 def get_fwhm_fact_func_from_pts(pt1, pt2, pt0_y=2.):
