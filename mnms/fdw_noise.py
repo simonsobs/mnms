@@ -1,5 +1,6 @@
-from pixell import enmap
 from mnms import utils
+
+from pixell import enmap
 from optweight import wlm_utils
 
 import numpy as np 
@@ -10,7 +11,9 @@ import astropy.wcs as pywcs
 import h5py
 
 
+# constants that could be promoted to arguments some day (too much metadata to track)
 FWHM_FACT_0 = 2
+
 
 class FDWKernels:
 

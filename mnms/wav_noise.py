@@ -1,10 +1,12 @@
-import numpy as np
+from mnms import utils
 
 from pixell import enmap, curvedsky, sharp
-from mnms import utils
 from optweight import noise_utils, type_utils, alm_c_utils, operators, wlm_utils
 from optweight import mat_utils, wavtrans, map_utils
+
+import numpy as np
 import healpy as hp
+
 
 def rand_alm_from_sqrt_cov_wav(sqrt_cov_wav, sqrt_cov_ell, lmax, w_ell,
                                dtype=np.complex64, seed=None, nthread=0):

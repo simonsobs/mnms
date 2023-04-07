@@ -1,9 +1,10 @@
-import numpy as np
-import warnings
+from mnms import utils as m_utils
 
 from pixell import enmap, utils
 
-from mnms import utils as m_utils
+import numpy as np
+import warnings
+
 
 def catalog_to_mask(catalog, shape, wcs, radius=np.radians(4/60)):
     """

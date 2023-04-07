@@ -1,11 +1,13 @@
-from pixell import enmap, wcsutils
 from mnms import utils
+
+from pixell import enmap, wcsutils
 
 import h5py
 import numpy as np
 import astropy.io.fits as pyfits
 import astropy.wcs as pywcs
 from scipy import ndimage
+
 
 # constants that could be promoted to arguments some day (too much metadata to track)
 MIN_SQ_F_SKY = 1e-3
