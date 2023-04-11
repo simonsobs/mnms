@@ -614,21 +614,21 @@ def interp1d_bins(bins, y, return_vals=False, **interp1d_kwargs):
 
 def get_ps_mat(inp, outbasis, e, inbasis='harmonic', mask_est=None, 
                shape=None, wcs=None):
-    """Get a power spectrum matrix from input alm's, raised to a given
+    """Get a power spectrum matrix from input alm's or fft's, raised to a given
     matrix power.
 
     Parameters
     ----------
     inp : (*preshape, nelem) np.ndarray
         Input alm's or fft's to generate auto- and cross-spectra.
-    inbasis : str
-        The basis of the input data, either 'harmonic' or 'fourier.' If
-        'fourier', assumed only the 'real-fft' modes.
     outbasis : str
         The basis of the power spectrum matrix, either 'harmonic' or 'fourier'.
         If 'fourier', only the 'real-fft' modes.
     e : scalar
         Matrix power.
+    inbasis : str
+        The basis of the input data, either 'harmonic' or 'fourier.' If
+        'fourier', assumed only the 'real-fft' modes.
     mask_est : (ny, nx) enmap.ndmap, optional
         Mask applied to map before measuring input alm's, by default None. If
         provided, power spectra matrix is normalized by sky fraction before
@@ -771,7 +771,8 @@ def get_ps_mat(inp, outbasis, e, inbasis='harmonic', mask_est=None,
     return out
 
 def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic', 
-                          ainfo=None, lmax=None, nthread=0, tweak=False):
+                          ainfo=None, lmax=None, nthread=0, tweak=False,
+                          inplace=False):
     """Multiply map data by correlation matrix in frequency space.
 
     Parameters
@@ -800,6 +801,9 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
     tweak : bool, optional
         To pass to map2alm if inbasis is 'map' and map2basis is 'harmonic',
         by default False.
+    inplace : bool, optional
+        Filter the input inplace, by default False. Only possible for harmonic
+        filters. Fourier inplace filtering will raise a NotImplementedError.
 
     Returns
     -------
@@ -811,15 +815,17 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
     ValueError
         If inbasis is not 'harmonic', 'fourier', or 'map', or if inbasis is
         'map' and map2basis is not 'harmonic' or 'fourier'.
+
+    NotImplementedError
+        If inbasis is 'fourier' and inplace is True.
     """
     inshape = inp.shape
 
     if inbasis == 'harmonic':
         inp = atleast_nd(inp, 2)
         preshape = inshape[:-1]
-        postshape = inshape[-1]
         ncomp = np.prod(preshape, dtype=int)
-        inp = inp.reshape(ncomp, postshape)
+        inp = inp.reshape(ncomp, -1)
 
         # user must ensure this broadcasting of lfilter_mat is both possible
         # and correct 
@@ -830,23 +836,32 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
             if lmax is None:
                 raise ValueError('If ainfo is None, must provide lmax')
             ainfo = sharp.alm_info(lmax)
-        out = alm_c_utils.lmul(inp, lfilter_mat, ainfo, inplace=False)
+        out = alm_c_utils.lmul(inp, lfilter_mat, ainfo, inplace=inplace)
+
+        # reshape
+        out = out.reshape(inshape)
 
     elif inbasis == 'fourier':
+        if inplace:
+            raise NotImplementedError()
+
         inp = atleast_nd(inp, 3)
         preshape = inshape[:-2]
-        postshape = inshape[-2:]
         ncomp = np.prod(preshape, dtype=int)
-        inp = inp.reshape(ncomp, *postshape)
+        inp = inp.reshape(ncomp, -1)
 
         # user must ensure this broadcasting of lfilter_mat is both possible
         # and correct 
-        lfilter_mat = lfilter_mat.reshape(ncomp, ncomp, *postshape)
+        lfilter_mat = lfilter_mat.reshape(ncomp, ncomp, -1)
 
         # do filtering. concurrent loop over pixels
         out = concurrent_einsum(
             '...ab, ...b -> ...a', lfilter_mat, inp, nthread=nthread
             )
+        
+        # reshape
+        out = out.reshape(inshape)
+
         out = enmap.ndmap(out, inp.wcs)
 
     elif inbasis == 'map':
@@ -873,8 +888,6 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
     else:
         raise ValueError('Only harmonic, fourier, or map basis supported')
 
-    # reshape
-    out = out.reshape(inshape)
     return out
 
 # further extended here for ffts
@@ -1100,7 +1113,7 @@ def ell_flatten(imap, mask_obs=1, mask_est=1, return_sqrt_cov=True, per_split=Tr
     else:
         raise NotImplementedError('Only implemented modes are fft and curvedsky')
 
-def map2alm(imap, alm=None, ainfo=None, lmax=None, **kwargs):
+def map2alm(imap, alm=None, ainfo=None, lmax=None, alm2map_adjoint=False, **kwargs):
     """A wrapper around pixell.curvedsky.map2alm that performs proper
     looping over array 'pre-dimensions'. Always performs a spin[0,2]
     transform if imap.ndim >= 3; therefore, 'pre-dimensions' are those
@@ -1117,6 +1130,10 @@ def map2alm(imap, alm=None, ainfo=None, lmax=None, **kwargs):
         An alm_info object, by default None.
     lmax : int, optional
         Transform bandlimit, by default None.
+    alm2map_adjoint : bool, optional
+        Perform adjoint transform, by default False.
+    kwargs : dict, optional
+        Other kwargs to pass to curvedsky.map2alm.
 
     Returns
     -------
@@ -1131,7 +1148,8 @@ def map2alm(imap, alm=None, ainfo=None, lmax=None, **kwargs):
         # map2alm, alm2map doesn't work well for other dims beyond pol component
         assert imap[preidx].ndim in [2, 3]
         curvedsky.map2alm(
-            imap[preidx], alm=alm[preidx], ainfo=ainfo, lmax=lmax, **kwargs
+            imap[preidx], alm=alm[preidx], ainfo=ainfo, lmax=lmax, 
+            alm2map_adjoint=alm2map_adjoint, **kwargs
             )
     return alm
 
@@ -1180,7 +1198,8 @@ def alm2cl(alm1, alm2=None, method='curvedsky'):
 
     return out
 
-def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, **kwargs):
+def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, 
+            map2alm_adjoint=False, **kwargs):
     """A wrapper around pixell.curvedsky.alm2map that performs proper
     looping over array 'pre-dimensions'. Always performs a spin[0,2]
     transform if imap.ndim >= 3; therefore, 'pre-dimensions' are those
@@ -1204,6 +1223,10 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, **kwar
         is None. If omap is None and dtype is None, will be set to alm.real.dtype.
     ainfo : sharp.alm_info, optional
         An alm_info object, by default None.
+    map2alm_adjoint : bool, optional
+        Perform adjoint transform, by default False.
+    kwargs : dict, optional
+        Other kwargs to pass to curvedsky.alm2map.
 
     Returns
     -------
@@ -1218,7 +1241,8 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, **kwar
         # map2alm, alm2map doesn't work well for other dims beyond pol component
         assert omap[preidx].ndim in [2, 3]
         omap[preidx] = curvedsky.alm2map(
-            alm[preidx], omap[preidx], ainfo=ainfo, **kwargs
+            alm[preidx], omap[preidx], ainfo=ainfo, 
+            map2alm_adjoint=map2alm_adjoint, **kwargs
             )
     return omap
 
@@ -1673,21 +1697,6 @@ def concurrent_gaussian_filter(a, sigma_pix, *args, flatten_axes=[0],
 
     return a
 
-def get_ell_linear_transition_funcs(center, width, dtype=np.float32):
-    lmin = center - width/2
-    lmax = center + width/2
-    def lfunc1(ell):
-        ell = np.asarray(ell, dtype=dtype)
-        condlist = [ell < lmin, np.logical_and(lmin <= ell, ell < lmax), lmax <= ell]
-        funclist = [lambda x: 1, lambda x: -(x - lmin)/(lmax - lmin) + 1, lambda x: 0]
-        return np.piecewise(ell, condlist, funclist)
-    def lfunc2(ell):
-        ell = np.asarray(ell, dtype=dtype)
-        condlist = [ell < lmin, np.logical_and(lmin <= ell, ell < lmax), lmax <= ell]
-        funclist = [lambda x: 0, lambda x: (x - lmin)/(lmax - lmin), lambda x: 1]
-        return np.piecewise(ell, condlist, funclist)
-    return lfunc1, lfunc2
-
 def get_ell_trans_profiles(ell_lows, ell_highs, lmax=None, 
                            profile='cosine', e=1, dtype=np.float32):
     """Generate profiles over ell that smoothly transition from 1 to 0 (and
@@ -1704,8 +1713,8 @@ def get_ell_trans_profiles(ell_lows, ell_highs, lmax=None,
         ell_lows. Together with ell_lows, ell_highs must be
         defined such that no regions overlap.
     lmax : int, optional
-        The maximum scale of the returned profiles. If None, each profile
-        only extends to its own lmax set by ell_high.
+        The maximum scale of the highest-ell profile. If None, then the 
+        highest ell_high.
     profile : str, optional
         The transition region shape, by default 'cosine'. Other supported
         option is 'linear'.
@@ -1788,9 +1797,8 @@ def get_ell_trans_profiles(ell_lows, ell_highs, lmax=None,
     out = list(out)
 
     # bandlimit each profile
-    if lmax is None:
-        for i, ell_high in enumerate(ell_highs):
-            out[i] = out[i][:ell_high+1]
+    for i, ell_high in enumerate(ell_highs):
+        out[i] = out[i][:ell_high+1]
         
     return out
 
@@ -2086,7 +2094,7 @@ def concurrent_einsum(subscripts, a, b, *args, flatten_axes=[-2, -1],
     out = np.moveaxis(out, range(len(oshape_axes)), flatten_axes)
     return out
 
-def eigpow(A, e, axes=[-2, -1]):
+def eigpow(A, e, axes=[-2, -1], copy=False):
     """A hack around enlib.array_ops.eigpow which upgrades the data
     precision to at least double precision if necessary prior to
     operation.
@@ -2104,10 +2112,11 @@ def eigpow(A, e, axes=[-2, -1]):
     if np.dtype(dtype).itemsize < 8:
         A = np.asanyarray(A, dtype=np.float64)
         recast = True
+        copy = False # we already copied in recasting
     else:
         recast = False
 
-    array_ops.eigpow(A, e, axes=axes, copy=False)
+    array_ops.eigpow(A, e, axes=axes, copy=copy)
 
     # cast back to input precision if necessary
     if recast:
@@ -2118,7 +2127,7 @@ def eigpow(A, e, axes=[-2, -1]):
 
     return A
 
-def chunked_eigpow(A, e, axes=[-2, -1], chunk_axis=0, target_gb=5):
+def chunked_eigpow(A, e, axes=[-2, -1], chunk_axis=0, target_gb=5, copy=False):
     """A hack around utils.eigpow which performs the operation
     one chunk at a time to reduce memory usage."""
     # store wcs if imap is ndmap
@@ -2147,7 +2156,7 @@ def chunked_eigpow(A, e, axes=[-2, -1], chunk_axis=0, target_gb=5):
 
     # call eigpow for each chunk
     for i in range(nchunks):
-        A[i*chunksize:(i+1)*chunksize] = eigpow(A[i*chunksize:(i+1)*chunksize], e, axes=eaxes)
+        A[i*chunksize:(i+1)*chunksize] = eigpow(A[i*chunksize:(i+1)*chunksize], e, axes=eaxes, copy=copy)
 
     # reshape
     A = np.moveaxis(A, 0, chunk_axis)
@@ -2229,7 +2238,7 @@ def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=Fal
         The FFT normalization, by default True. If True, normalize 
         using pixel number. If in ['phy', 'phys', 'physical'],
         normalize by sky area.
-    adjoint_ifft : bool, optional
+    adjoint_fft : bool, optional
         Whether to perform the adjoint iFFT, by default False.
 
     Returns
