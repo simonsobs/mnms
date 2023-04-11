@@ -7,17 +7,23 @@ BaseNoiseModel:
   enforce_equal_qid_kwargs:
   - num_splits
   iso_filt:
-    basis: harmonic
-    pre_filt_rel_upgrade: 2
+    method: harmonic
+    kwargs:
+      pre_filt_rel_upgrade: 2
   ivar_filt:
-    ell_lows:
-      - 100
-    ell_highs:
-      - 200
-    lmaxs:
-      - 100
-      - null
-    fwhm_ivar: 0.25
+    method: scaledep
+    kwargs:
+      ell_lows:
+        - 100
+      ell_highs:
+        - 200
+      ivar_lmaxs:
+        - 100
+        - null
+      ivar_fwhms:
+        - null
+        - 0.25
+      profile: cosine
   kfilt_lbounds: null
   mask_est_name: so_scan_s0003_mask.fits
   mask_obs_name: null
