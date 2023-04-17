@@ -1113,7 +1113,8 @@ def ell_flatten(imap, mask_obs=1, mask_est=1, return_sqrt_cov=True, per_split=Tr
     else:
         raise NotImplementedError('Only implemented modes are fft and curvedsky')
 
-def map2alm(imap, alm=None, ainfo=None, lmax=None, alm2map_adjoint=False, **kwargs):
+def map2alm(imap, alm=None, ainfo=None, lmax=None, no_aliasing=True, 
+            alm2map_adjoint=False, **kwargs):
     """A wrapper around pixell.curvedsky.map2alm that performs proper
     looping over array 'pre-dimensions'. Always performs a spin[0,2]
     transform if imap.ndim >= 3; therefore, 'pre-dimensions' are those
@@ -1130,6 +1131,9 @@ def map2alm(imap, alm=None, ainfo=None, lmax=None, alm2map_adjoint=False, **kwar
         An alm_info object, by default None.
     lmax : int, optional
         Transform bandlimit, by default None.
+    no_aliasing : bool, optional
+        Enforce that the lmax of the transform is not higher than that
+        permitted by the imap pixelization, by default True.
     alm2map_adjoint : bool, optional
         Perform adjoint transform, by default False.
     kwargs : dict, optional
@@ -1144,6 +1148,11 @@ def map2alm(imap, alm=None, ainfo=None, lmax=None, alm2map_adjoint=False, **kwar
         alm, _ = curvedsky.prepare_alm(
             alm=alm, ainfo=ainfo, lmax=lmax, pre=imap.shape[:-2], dtype=imap.dtype
             )
+    if no_aliasing:
+        lmax = sharp.nalm2lmax(alm.shape[-1])
+        if lmax_from_wcs(imap.wcs) < lmax:
+            raise ValueError(f'Pixelization cdelt: {imap.wcs.wcs.cdelt} cannot'
+                             f' support SH transforms of requested lmax: {lmax}')
     for preidx in np.ndindex(imap.shape[:-3]):
         # map2alm, alm2map doesn't work well for other dims beyond pol component
         assert imap[preidx].ndim in [2, 3]
