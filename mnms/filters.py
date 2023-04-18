@@ -91,8 +91,13 @@ def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
     return imap, {'sqrt_cov_ell': sqrt_cov_ell}
 
 @register('harmonic', 'harmonic', iso_filt_method='harmonic')
-def iso_harmonic_ivar_none(alm, ainfo=None, lmax=None, adjoint=False, **kwargs):
-    pass
+def iso_harmonic_ivar_none(alm, sqrt_cov_ell=None, ainfo=None, lmax=None,
+                           **kwargs):
+    if lmax is None:
+        lmax = sqrt_cov_ell.shape[-1] - 1
+    return utils.ell_filter_correlated(
+        alm, 'harmonic', sqrt_cov_ell, ainfo=ainfo, lmax=lmax, inplace=True
+    )
 
 def iso_harmonic_ivar_basic(self, imap, lmax, mask_obs, mask_est,
                                     ivar, verbose, forward=False,

@@ -122,6 +122,15 @@ class FDWKernels:
             Wavelet map dictionary, indexed by (radial index, azimuthal index)
             tuple.
         """
+        # this is because individual Kernels don't know the full_shape of the kmap
+        # from which they extract kernel region, particularly in case that the 
+        # extraction sels are just Ellipsis, which would otherwise grab the full
+        # kmap. this would be caught when multiplying extracted kmap by kernel,
+        # but this allows earlier and verbose catch.
+        assert kmap.shape[-2:] == self._real_shape, \
+            f'kmap shape must match fdw_kernels real shape; got ' + \
+            f'{kmap.shape[-2:]} and expected {self._real_shape}'
+
         wavs = {}
         for kern_key, kernel in self._kernels.items():
             wavs[kern_key] = kernel.k2wav(kmap, from_full=True, nthread=nthread)
@@ -856,9 +865,7 @@ def get_az_func(n, p, j):
             return 1+0j
     return w_phi
 
-def get_fdw_noise_covsqrt(fdw_kernels, imap, lmax, mask_obs=1, mask_est=1, 
-                          fwhm_fact=2, rad_filt=True, post_filt_rel_downgrade=1,
-                          post_filt_downgrade_wcs=None, nthread=0, verbose=True):
+def get_fdw_noise_covsqrt(kmap, fdw_kernels, fwhm_fact=2, nthread=0, verbose=True):
     """Generate square-root covariance information for the signal in imap.
     The covariance matrix is assumed to be block-diagonal in wavelet kernels,
     neglecting correlations due to their overlap. Kernels are managed by 
@@ -866,39 +873,20 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, lmax, mask_obs=1, mask_est=1,
 
     Parameters
     ----------
+    kmap : (..., ky, kx) enmap.ndmap
+        Input signal Fourier transforms. The outer product of this object with
+        itself will be taken in the wavelet map basis to create the covariance
+        matrix.
     fdw_kernels : FDWKernels
         A set of Fourier steerable anisotropic wavelets, allowing users to
         analyze/synthesize maps by simultaneous scale-, direction-, and 
         location-dependence of information.
-    imap : (..., ny, nx) enmap.ndmap
-        Input signal maps. The outer product of this map with itself will
-        be taken in the wavelet basis to create the covariance matrix.
-    lmax : int
-        If rad_filt, the bandlimit for output noise covariance.
-    mask_obs : array-like, optional
-        A mask of observed pixels, by default 1. This mask will be applied
-        to imap before taking the initial Fourier transform.
-    mask_est : array-like, optional
-        An analysis mask in which to measure the power spectrum of imap,
-        by default 1.
     fwhm_fact : scalar or callable, optional
         Factor determining smoothing scale at each wavelet scale:
         FWHM = fact * pi / lmax, where lmax is the max wavelet ell., 
         by default 2. Can also be a function specifying this factor
         for a given ell. Function must accept a single scalar ell
         value and return one.
-    rad_filt : bool, optional
-        Whether to measure and apply a radial (harmonic) filter to map prior
-        to wavelet transform, by default True.
-    post_filt_rel_downgrade : int, optional
-        If rad_filt, downgrade the input data after filtering by this factor.
-        Also, mask_obs and mask_est must broadcast with imap before filtering
-        By default 1.
-    post_filt_downgrade_wcs : astropy.wcs.WCS, optional
-        If downgrading post-filtering, force the data to have this wcs. This
-        kwarg exists because if imap is already downgraded, downgrading a 
-        second time after filtering can erroneously result in a wcs that is 
-        shifted by 360 degrees.
     nthread : int, optional
         Number of concurrent threads, by default 0. If 0, the result
         of mnms.utils.get_cpu_count()., by default 0.
@@ -907,68 +895,26 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, lmax, mask_obs=1, mask_est=1,
 
     Returns
     -------
-    dict, [np.ndarray]
+    dict
         A dictionary holding wavelet maps of the square-root covariance, 
-        indexed by the wavelet key (radial index, azimuthal index). If
-        rad_filt, an array of the square root power spectrum in harmonic
-        space.
+        indexed by the wavelet key (radial index, azimuthal index).
 
     Notes
     -----
     All dimensions of imap preceding the last two (i.e. pixel) will be
     covaried against themselves. For example, if imap has axes corresponding
     to (arr, pol, y, x), the covariance will have axes corresponding to
-    (arr, pol, arr, pol, y, x) in each wavelet map. This is not exactly true:
-    the preceding axes will be flattened in the output.
+    (arr, pol, arr, pol, y, x) in each wavelet map. To be precise, the
+    preceding axes will be flattened in the output. In other words, the axes
+    will correspond to (arr*pol, arr*pol, y, x).
     """
-    mask_obs = np.asanyarray(mask_obs, dtype=imap.dtype)
-    mask_est = np.asanyarray(mask_est, dtype=imap.dtype)
-
-    imap = utils.atleast_nd(imap, 3)
-
-    if rad_filt:
-        # measure correlated pseudo spectra for filtering
-        alm = utils.map2alm(imap * mask_est, lmax=lmax)
-        sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', 0.5, mask_est=mask_est)
-        inv_sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', -0.5, mask_est=mask_est)
-
-        imap = utils.ell_filter_correlated(
-            imap * mask_obs, 'map', inv_sqrt_cov_ell, lmax=lmax
-            )
-
-        # this check probably not necessary but ok for now
-        assert float(post_filt_rel_downgrade).is_integer(), \
-            f'post_filt_rel_downgrade must be an int; got ' + \
-            f'{post_filt_rel_downgrade}'
-        post_filt_rel_downgrade = int(post_filt_rel_downgrade)
-
-        imap = utils.fourier_downgrade_cc_quad(imap, post_filt_rel_downgrade)
-            
-        # if imap is already downgraded, second downgrade may introduce
-        # 360-deg offset in RA, so we give option to overwrite wcs with
-        # right answer
-        if post_filt_downgrade_wcs is not None:
-            imap = enmap.ndmap(np.asarray(imap), post_filt_downgrade_wcs)
-
-        # we need to explicitly check the shape because some default fdw_kernels
-        # slicing is Ellipsis
-        assert imap.shape[-2:] == fdw_kernels.shape, \
-            f'If downgrading after filtering, result map shape must match' + \
-            f' fdw_kernels shape; got {imap.shape[-2:]} and expected {fdw_kernels.shape}'
-        
-        # also need to downgrade the measured power spectra!
-        sqrt_cov_ell = sqrt_cov_ell[..., :lmax//post_filt_rel_downgrade+1]
-
-        kmap = utils.rfft(imap, nthread=nthread)
-    else:
-        kmap = utils.rfft(imap * mask_obs, nthread=nthread)
+    kmap = utils.atleast_nd(kmap, 3)
 
     if verbose:
         print(
-            f'Map shape: {imap.shape}\n'
+            f'kmap shape: {kmap.shape}\n'
             f'Num kernels: {len(fdw_kernels.kernels)}\n'
             f'Smoothing factor: {fwhm_fact}\n'
-            f'Radial filtering: {rad_filt}'
             )
         
     wavs = fdw_kernels.k2wav(kmap, nthread=nthread)
@@ -1016,34 +962,24 @@ def get_fdw_noise_covsqrt(fdw_kernels, imap, lmax, mask_obs=1, mask_est=1,
             (*wmap2.shape[:-1], *wmap.shape[-2:])
             )
 
-    if rad_filt:
-        return sqrt_cov_wavs, sqrt_cov_ell
-    else:
-        return sqrt_cov_wavs
+    return {'sqrt_cov_mat': sqrt_cov_wavs}
 
-def get_fdw_noise_sim(fdw_kernels, sqrt_cov_wavs, preshape=None,
-                      sqrt_cov_ell=None, seed=None, nthread=0, verbose=True):
+def get_fdw_noise_sim(sqrt_cov_wavs, seed, fdw_kernels, nthread=0,
+                      verbose=True):
     """Draw a Guassian realization from the covariance corresponding to
     the square-root covariance wavelet maps in sqrt_cov_wavs.
 
     Parameters
     ----------
+    sqrt_cov_wavs : dict
+        A dictionary holding wavelet maps of the square-root covariance, 
+        indexed by the wavelet key (radial index, azimuthal index).
+    seed : iterable of ints
+        Seed for random draw.
     fdw_kernels : FDWKernels
         A set of Fourier steerable anisotropic wavelets, allowing users to
         analyze/synthesize maps by simultaneous scale-, direction-, and 
         location-dependence of information.
-    sqrt_cov_wavs : dict
-        A dictionary holding wavelet maps of the square-root covariance, 
-        indexed by the wavelet key (radial index, azimuthal index).
-    preshape : tuple, optional
-        Reshape preceding dimensions of the sim to preshape, by default None.
-        Preceding dimensions are those before the last two (the pixel axes).
-    sqrt_cov_ell : np.ndarray, optional
-        An array of the square root power spectrum in harmonic space,
-        by default None. If provided, will be used to filter the sim in
-        harmonic space before returning. 
-    seed : iterable of ints, optional
-        Seed for random draw, by default None.
     nthread : int, optional
         Number of concurrent threads, by default 0. If 0, the result
         of mnms.utils.get_cpu_count()., by default 0.
@@ -1058,7 +994,6 @@ def get_fdw_noise_sim(fdw_kernels, sqrt_cov_wavs, preshape=None,
     if verbose:
         print(
             f'Num kernels: {len(fdw_kernels.kernels)}\n'
-            f'Radial filtering: {sqrt_cov_ell is not None}\n'
             f'Seed: {seed}'
             )
 
@@ -1076,16 +1011,67 @@ def get_fdw_noise_sim(fdw_kernels, sqrt_cov_wavs, preshape=None,
         wavs_sim[idx] = wmap_sim
 
     kmap = fdw_kernels.wav2k(wavs_sim, nthread=nthread)
-    if preshape is not None:
-        kmap = kmap.reshape((*preshape, *kmap.shape[-2:]))
-    preshape = kmap.shape[:-2]
+
+    return kmap
 
     omap = utils.irfft(kmap, n=fdw_kernels.shape[-1], nthread=nthread)
-        
-    # filter kmap in harmonic space
+
+    # filter omap
+    filt_omap = 0
     if sqrt_cov_ell is not None:
-        lmax = sqrt_cov_ell.shape[-1] - 1
-        omap = utils.ell_filter_correlated(omap, 'map', sqrt_cov_ell, lmax=lmax)
+        if sqrt_ivars is not None:
+            if isinstance(ivar_filt, dict):
+                assert len(ivar_filt['ell_lows']) == len(sqrt_ivars) - 1
+
+                trans_profs = utils.get_ell_trans_profiles(
+                    ivar_filt['ell_lows'], ivar_filt['ell_highs'],
+                    profile=ivar_filt['profile'], dtype=omap.dtype
+                    )
+                
+                for i, trans_prof in trans_profs:
+                    prof_lmax = trans_prof.size - 1
+                    sqrt_ivar = sqrt_ivars[i]
+
+                    _filt_omap = utils.ell_filter_correlated(
+                        omap, 'map', sqrt_cov_ell[..., prof_lmax + 1]*trans_prof, lmax=prof_lmax
+                        )
+                    np.divide(1, sqrt_ivar, where=sqrt_ivar!=0, out=_filt_omap)
+                    filt_omap += _filt_omap
+
+            elif ivar_filt:
+                assert len(sqrt_ivars) == 0
+
+                lmax = sqrt_cov_ell.shape[-1] - 1
+                omap = utils.ell_filter_correlated(omap, 'map', sqrt_cov_ell, lmax=lmax)
+                np.divide(1, sqrt_ivars[0], where=sqrt_ivar!=0, out=_filt_omap)
+
+        else:
+            lmax = sqrt_cov_ell.shape[-1] - 1
+            omap = utils.ell_filter_correlated(omap, 'map', sqrt_cov_ell, lmax=lmax)
+
+    elif sqrt_ivars is not None:
+        if isinstance(ivar_filt, dict):
+            assert len(ivar_filt['ell_lows']) == len(sqrt_ivars) - 1
+
+            trans_profs = utils.get_ell_trans_profiles(
+                ivar_filt['ell_lows'], ivar_filt['ell_highs'],
+                profile=ivar_filt['profile'], dtype=omap.dtype
+                )
+            
+            for i, trans_prof in trans_profs:
+                prof_lmax = trans_prof.size - 1
+                sqrt_ivar = sqrt_ivars[i]
+
+                _filt_omap = utils.ell_filter_correlated(
+                    omap, 'map', trans_prof, lmax=prof_lmax
+                    )
+                np.divide(1, sqrt_ivar, where=sqrt_ivar!=0, out=_filt_omap)
+                filt_omap += _filt_omap
+
+        elif ivar_filt:
+            assert len(sqrt_ivars) == 0
+
+            np.divide(1, sqrt_ivars[0], where=sqrt_ivar!=0, out=_filt_omap)
 
     return omap
 

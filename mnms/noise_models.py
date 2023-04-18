@@ -1665,7 +1665,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         # transform to filter inbasis
         basis = 'map'
-        key = (basis, filter_inbasis)
+        key = (basis, filter_inbasis); print(key)
         transform_func = transforms.REGISTERED_TRANSFORMS[key]
         inp = transform_func(
             inp, adjoint=False, verbose=verbose, **filter_kwargs
@@ -1674,13 +1674,13 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         
         # filter, which possibly changes basis and returns measured quantities.
         # filters better be hermitian (don't need to pass adjoint)!
-        inp, out = filter_func(inp, verbose=verbose, **filter_kwargs)
+        inp, out = filter_func(inp, verbose=verbose, **filter_kwargs); print(filter_inbasis, filter_outbasis)
 
         model_inbasis = cls.operatingbasis()
 
         # transform to class operating basis
         basis = filter_outbasis
-        key = (basis, model_inbasis)
+        key = (basis, model_inbasis); print(key)
         transform_func = transforms.REGISTERED_TRANSFORMS[key]
         inp = transform_func(
             inp, adjoint=False, verbose=verbose, **filter_kwargs
@@ -1688,51 +1688,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         basis = model_inbasis
         
         return inp, out
-    
-    @classmethod
-    def filter(cls, inp, iso_filt_method=None, ivar_filt_method=None,
-               filter_kwargs=None, adjoint=False, verbose=False):
-        # get the filter function and its bases
-        key = frozenset(
-            dict(
-                iso_filt_method=iso_filt_method,
-                ivar_filt_method=ivar_filt_method,
-                model=False
-                ).items()
-            )
-        filter_func, filter_inbasis, filter_outbasis = filters.REGISTERED_FILTERS[key]
-
-        # transform to filter inbasis
-        if adjoint:
-            basis = 'map'
-        else:
-            basis = cls.operatingbasis()
-        key = (basis, filter_inbasis)
-        transform_func = transforms.REGISTERED_TRANSFORMS[key]
-        inp = transform_func(
-            inp, adjoint=adjoint, verbose=verbose, **filter_kwargs
-            )
-        basis = filter_inbasis
-        
-        # filter, which possibly changes basis but doesn't return measured quantities.
-        # filters better be hermitian (don't need to pass adjoint)!
-        inp = filter_func(inp, verbose=verbose, **filter_kwargs)
-
-        if adjoint:
-            final_basis = cls.operatingbasis()
-        else:
-            final_basis = 'map'
-
-        # transform to final basis
-        basis = filter_outbasis
-        key = (basis, final_basis)
-        transform_func = transforms.REGISTERED_TRANSFORMS[key]
-        inp = transform_func(
-            inp, adjoint=adjoint, verbose=verbose, **filter_kwargs
-            )
-        basis = final_basis
-        
-        return inp
     
     @classmethod
     @abstractmethod
@@ -1800,6 +1755,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             self._save_yaml_config(self._config_fn)
 
         downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax) 
+        shape, wcs = utils.downgrade_geometry_cc_quad(
+            self._full_shape, self._full_wcs, downgrade
+            )       
 
         assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
 
@@ -1847,17 +1805,34 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             ivar_from_cache = False
         ivar *= mask_obs
         
+        seed = self._get_seed(split_num, sim_num)
+
+        # update filter kwargs. note that adding model_dict grabs any filter
+        # info (e.g, sqrt_cov_ell) as well as the model itself
+        # (e.g., sqrt_cov_mat). this is ok since filters and transforms should
+        # harmlessly pass a sqrt_cov_mat through their kwargs, without making
+        # copies
+        filter_kwargs = dict(lmax=lmax, no_aliasing=True, shape=shape, wcs=wcs,
+                             n=shape[-1], nthread=0, normalize='ortho',
+                             mask_obs=mask_obs, ivar=ivar)
+        
+        assert len(filter_kwargs.keys() & self._filter_kwargs.keys()) == 0, \
+            'Instance filter_kwargs and get_model supplied filter_kwargs overlap'
+        filter_kwargs.update(self._filter_kwargs)
+
+        assert len(model_dict.keys() & filter_kwargs.keys()) == 0, \
+            'model_dict and filter_kwargs overlap'
+        filter_kwargs.update(model_dict)
+        
         # get the sim
         with bench.show(f'Generating noise sim for {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)}'):
-            seed = self._get_seed(split_num, sim_num)
+            sim = self._get_sim(
+                model_dict['sqrt_cov_mat'], seed, self._iso_filt_method,
+                self._ivar_filt_method, filter_kwargs, verbose
+                )
+            sim *= mask_obs
             if alm:
-                sim = self._get_sim_alm(
-                    model_dict, seed, lmax, mask_obs, ivar, verbose
-                    )
-            else:
-                sim = self._get_sim(
-                    model_dict, seed, lmax, mask_obs, ivar, verbose
-                    )
+                sim = utils.map2alm(sim, lmax=lmax)
 
         # keep, write data if requested
         if keep_model and not model_from_cache:
@@ -1936,14 +1911,62 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         return utils.get_seed(*(split_num, sim_num, self.name, *self._qids))
 
     @abstractmethod
-    def _get_sim(self, model_dict, seed, lmax, mask, ivar, verbose):
+    def _get_sim(self, sqrt_cov_mat, seed, iso_filt_method, ivar_filt_method,
+                 filter_kwargs, verbose):
         """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
         return enmap.ndmap
-
+    
+    @classmethod
     @abstractmethod
-    def _get_sim_alm(self, model_dict, seed, lmax, mask, ivar, verbose):
-        """Return a masked alm sim from model_dict, with seed <sequence of ints>"""
-        pass
+    def get_sim_static(cls, sqrt_cov_mat, seed, iso_filt_method=None,
+                       ivar_filt_method=None, filter_kwargs=None, verbose=False,
+                       **kwargs):
+        return enmap.ndmap
+
+    @classmethod
+    def filter(cls, inp, iso_filt_method=None, ivar_filt_method=None,
+               filter_kwargs=None, adjoint=False, verbose=False):
+        # get the filter function and its bases
+        key = frozenset(
+            dict(
+                iso_filt_method=iso_filt_method,
+                ivar_filt_method=ivar_filt_method,
+                model=False
+                ).items()
+            )
+        filter_func, filter_inbasis, filter_outbasis = filters.REGISTERED_FILTERS[key]
+
+        # transform to filter inbasis
+        if adjoint:
+            basis = 'map'
+        else:
+            basis = cls.operatingbasis()
+        key = (basis, filter_inbasis); print(key)
+        transform_func = transforms.REGISTERED_TRANSFORMS[key]
+        inp = transform_func(
+            inp, adjoint=adjoint, verbose=verbose, **filter_kwargs
+            )
+        basis = filter_inbasis
+        
+        # filter, which possibly changes basis but doesn't return measured quantities.
+        # filters better be hermitian (don't need to pass adjoint)!
+        inp = filter_func(inp, verbose=verbose, **filter_kwargs); print(filter_inbasis, filter_outbasis)
+
+        if adjoint:
+            final_basis = cls.operatingbasis()
+        else:
+            final_basis = 'map'
+
+        # transform to final basis
+        basis = filter_outbasis
+        key = (basis, final_basis); print(key)
+        transform_func = transforms.REGISTERED_TRANSFORMS[key]
+        inp = transform_func(
+            inp, adjoint=adjoint, verbose=verbose, **filter_kwargs
+            )
+        basis = final_basis
+        
+        return inp
 
 
 @register()
@@ -2413,10 +2436,12 @@ class FDWNoiseModel(BaseNoiseModel):
             ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
             verbose=verbose
             )
+        
         out = fdw_noise.get_fdw_noise_covsqrt(
             kmap, fdw_kernels, fwhm_fact=fwhm_fact, nthread=nthread,
             verbose=verbose
             )
+        
         assert len(filter_out.keys() & out.keys()) == 0, \
             'filter outputs and model outputs overlap'
         return out.update(filter_out)
@@ -2431,31 +2456,37 @@ class FDWNoiseModel(BaseNoiseModel):
             fn, sqrt_cov_mat, extra_datasets={'sqrt_cov_ell': sqrt_cov_ell}
         )
 
-    def _get_sim(self, model_dict, seed, lmax, mask, ivar, verbose):
+    def _get_sim(self, sqrt_cov_mat, seed, iso_filt_method, ivar_filt_method,
+                 filter_kwargs, verbose):
         """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
+        lmax = filter_kwargs['lmax']
+        
         if lmax not in self._fk_dict:
             print('Building and storing FDWKernels')
             self._fk_dict[lmax] = self._get_kernels(lmax)
         fk = self._fk_dict[lmax]
 
-        # Get noise model variables 
-        sqrt_cov_mat = model_dict['sqrt_cov_mat']
-        sqrt_cov_ell = model_dict['sqrt_cov_ell']
-
-        sim = fdw_noise.get_fdw_noise_sim(
-            fk, sqrt_cov_mat, preshape=(self._num_arrays, -1),
-            sqrt_cov_ell=sqrt_cov_ell, seed=seed, nthread=0, verbose=verbose
-        )
+        sim = self.__class__.get_sim_static(
+            sqrt_cov_mat, seed, fk, nthread=0, iso_filt_method=iso_filt_method,
+            ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
+            verbose=verbose
+            )
 
         # We always want shape (num_arrays, num_splits=1, num_pol, ny, nx).
-        assert sim.ndim == 4, 'Sim must have shape (num_arrays, num_pol, ny, nx)'
-        sim = sim.reshape(sim.shape[0], 1, *sim.shape[1:])
+        return sim.reshape(self._num_arrays, 1, -1, *sim.shape[-2:])
 
-        if mask is not None:
-            sim *= mask
+    @classmethod
+    def get_sim_static(cls, sqrt_cov_mat, seed, fdw_kernels, nthread=0, 
+                       iso_filt_method=None, ivar_filt_method=None,
+                       filter_kwargs=None, verbose=False):
+        sim = fdw_noise.get_fdw_noise_sim(
+            sqrt_cov_mat, seed, fdw_kernels, nthread=nthread, verbose=verbose
+        )
+
+        sim = cls.filter(
+            sim, iso_filt_method=iso_filt_method,
+            ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
+            adjoint=False, verbose=verbose
+        )
+
         return sim
-
-    def _get_sim_alm(self, model_dict, seed, lmax, mask, ivar, verbose):
-        """Return a masked alm sim from model_dict, with seed <sequence of ints>"""
-        sim = self._get_sim(model_dict, seed, lmax, mask, ivar, verbose)
-        return utils.map2alm(sim, lmax=lmax)
