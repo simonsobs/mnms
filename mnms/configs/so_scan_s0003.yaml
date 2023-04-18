@@ -6,13 +6,8 @@ BaseNoiseModel:
   dtype: f4
   enforce_equal_qid_kwargs:
   - num_splits
-  iso_filt:
-    method: harmonic
-    kwargs:
-      pre_filt_rel_upgrade: 2
-  ivar_filt:
-    method: scaledep
-    kwargs:
+  filter_kwargs:
+      post_filt_rel_downgrade: 2
       ell_lows:
         - 100
       ell_highs:
@@ -24,6 +19,8 @@ BaseNoiseModel:
         - null
         - 0.25
       profile: cosine
+  iso_filt_method: harmonic
+  ivar_filt_method: scaledep
   kfilt_lbounds: null
   mask_est_name: so_scan_s0003_mask.fits
   mask_obs_name: null

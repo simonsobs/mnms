@@ -771,7 +771,7 @@ def get_ps_mat(inp, outbasis, e, inbasis='harmonic', mask_est=None,
     return out
 
 def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic', 
-                          ainfo=None, lmax=None, nthread=0, tweak=False,
+                          ainfo=None, lmax=None, tweak=False, nthread=0,
                           inplace=False):
     """Multiply map data by correlation matrix in frequency space.
 
@@ -794,13 +794,13 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
     lmax : int, optional
         Bandlimit of alm's if inbasis is 'harmonic', by default None. Also used
         in SHT if inbasis is 'map' and 'map2basis' is 'harmonic'.
+    tweak : bool, optional
+        To pass to map2alm if inbasis is 'map' and map2basis is 'harmonic',
+        by default False.
     nthread : int, optional
         Number of threads to use in filtering if inbasis is 'fourier', by
         default 0. If 0, the number of available cores. Also used in rFFT
         if inbasis is 'map' and 'map2basis' is 'fourier'.
-    tweak : bool, optional
-        To pass to map2alm if inbasis is 'map' and map2basis is 'harmonic',
-        by default False.
     inplace : bool, optional
         Filter the input inplace, by default False. Only possible for harmonic
         filters. Fourier inplace filtering will raise a NotImplementedError.
@@ -843,7 +843,9 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
 
     elif inbasis == 'fourier':
         if inplace:
-            raise NotImplementedError()
+            raise NotImplementedError(
+                'Inplace filtering in Fourier space not yet implemented'
+                )
 
         inp = atleast_nd(inp, 3)
         preshape = inshape[:-2]
@@ -868,7 +870,8 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
         if map2basis == 'harmonic':
             alm_inp = map2alm(inp, ainfo=ainfo, lmax=lmax, tweak=tweak)
             filtered_alm = ell_filter_correlated(
-                alm_inp, 'harmonic', lfilter_mat, ainfo=ainfo, lmax=lmax
+                alm_inp, 'harmonic', lfilter_mat, ainfo=ainfo, lmax=lmax,
+                inplace=inplace
                 )
             out = alm2map(
                 filtered_alm, shape=inshape, wcs=inp.wcs, dtype=inp.dtype, ainfo=ainfo
@@ -878,7 +881,7 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
         elif map2basis == 'fourier':
             k_inp = rfft(inp, nthread=nthread)
             filtered_k = ell_filter_correlated(
-                k_inp, 'fourier', lfilter_mat, nthread=nthread
+                k_inp, 'fourier', lfilter_mat, nthread=nthread, inplace=inplace
             )
             out = irfft(filtered_k, n=inshape[-1], nthread=nthread)
         
@@ -1208,7 +1211,7 @@ def alm2cl(alm1, alm2=None, method='curvedsky'):
     return out
 
 def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, 
-            map2alm_adjoint=False, **kwargs):
+            no_aliasing=True, map2alm_adjoint=False, **kwargs):
     """A wrapper around pixell.curvedsky.alm2map that performs proper
     looping over array 'pre-dimensions'. Always performs a spin[0,2]
     transform if imap.ndim >= 3; therefore, 'pre-dimensions' are those
@@ -1232,6 +1235,9 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None,
         is None. If omap is None and dtype is None, will be set to alm.real.dtype.
     ainfo : sharp.alm_info, optional
         An alm_info object, by default None.
+    no_aliasing : bool, optional
+        Enforce that the lmax of the transform is not higher than that
+        permitted by the omap pixelization, by default True.
     map2alm_adjoint : bool, optional
         Perform adjoint transform, by default False.
     kwargs : dict, optional
@@ -1246,6 +1252,11 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None,
         if dtype is None:
             dtype = alm.real.dtype
         omap = enmap.empty((*alm.shape[:-1], *shape[-2:]), wcs=wcs, dtype=dtype)
+    if no_aliasing:
+        lmax = sharp.nalm2lmax(alm.shape[-1])
+        if lmax_from_wcs(omap.wcs) < lmax:
+            raise ValueError(f'Pixelization cdelt: {omap.wcs.wcs.cdelt} cannot'
+                             f' support SH transforms of requested lmax: {lmax}')
     for preidx in np.ndindex(alm.shape[:-2]):
         # map2alm, alm2map doesn't work well for other dims beyond pol component
         assert omap[preidx].ndim in [2, 3]
@@ -2176,7 +2187,7 @@ def chunked_eigpow(A, e, axes=[-2, -1], chunk_axis=0, target_gb=5, copy=False):
     return A
 
 # normalizations adapted from pixell.enmap
-def rfft(emap, omap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
+def rfft(emap, kmap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
     """Perform a 'real'-FFT: an FFT over a real-valued function, such
     that only half the usual frequency modes are required to recover
     the full information.
@@ -2185,7 +2196,7 @@ def rfft(emap, omap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
     ----------
     emap : (..., ny, nx) ndmap
         Map to transform.
-    omap : ndmap, optional
+    kmap : ndmap, optional
         Output buffer into which result is written, by default None.
     nthread : int, optional
         The number of threads, by default 0.
@@ -2204,7 +2215,7 @@ def rfft(emap, omap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
         function.
     """
     res  = enmap.samewcs(
-        enfft.rfft(emap, omap, axes=[-2, -1], nthread=nthread), emap
+        enfft.rfft(emap, kmap, axes=[-2, -1], nthread=nthread), emap
         )
 
     # array size norms

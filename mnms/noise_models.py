@@ -1,4 +1,4 @@
-from mnms import inpaint, utils, tiled_noise, wav_noise, fdw_noise
+from mnms import inpaint, utils, tiled_noise, wav_noise, fdw_noise, filters, transforms
 
 from sofind import DataModel, utils as s_utils
 from pixell import enmap, wcsutils
@@ -33,9 +33,10 @@ class DataManager:
 
     def __init__(self, *qids, data_model_name=None, subproduct='default',
                  possible_subproduct_kwargs=None, enforce_equal_qid_kwargs=None,
-                 calibrated=False, differenced=True, srcfree=True, mask_est_name=None,
-                 mask_obs_name=None, catalog_name=None, kfilt_lbounds=None, fwhm_ivar=None,
-                 dtype=np.float32, cache=None, **kwargs):
+                 calibrated=False, differenced=True, iso_filt_method=None, 
+                 ivar_filt_method=None, filter_kwargs=None, srcfree=True, 
+                 mask_est_name=None, mask_obs_name=None, catalog_name=None, 
+                 kfilt_lbounds=None, dtype=np.float32, cache=None, **kwargs):
         """Helper class for all BaseNoiseModel subclasses. Supports loading raw
         data necessary for all subclasses, such as masks and ivars. Also
         defines some class methods usable in subclasses.
@@ -78,9 +79,6 @@ class DataManager:
         kfilt_lbounds : size-2 iterable, optional
             The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
             If given, filter data before (possibly) downgrading it. 
-        fwhm_ivar : float, optional
-            FWHM in degrees of Gaussian smoothing applied to ivar maps. Not applied if ivar
-            maps are provided manually.
         dtype : np.dtype, optional
             The data type used in intermediate calculations and return types, by default 
             np.float32.
@@ -136,8 +134,19 @@ class DataManager:
         # other instance properties
         self._calibrated = calibrated
         self._differenced = differenced
+        self._dtype = dtype
         self._srcfree = srcfree
 
+        # prepare filters
+        if filter_kwargs is None:
+            filter_kwargs = {}
+        if 'post_filt_rel_downgrade' not in filter_kwargs:
+            filter_kwargs['post_filt_rel_downgrade'] = 1
+        self._filter_kwargs = filter_kwargs
+        self._iso_filt_method = iso_filt_method
+        self._ivar_filt_method = ivar_filt_method
+
+        # prepare named data
         if mask_est_name is not None:
             if not mask_est_name.endswith(('.fits', '.hdf5')):
                 mask_est_name += '.fits'
@@ -156,10 +165,8 @@ class DataManager:
         if kfilt_lbounds is not None:
             kfilt_lbounds = np.array(kfilt_lbounds).reshape(2)
         self._kfilt_lbounds = kfilt_lbounds
-        
-        self._fwhm_ivar = fwhm_ivar
-        self._dtype = dtype
 
+        # prepare cache
         if cache is None:
             self._cache_was_passed = False
             cache = {}
@@ -1269,20 +1276,22 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     def _base_param_dict(self):
         """Return a dictionary of model parameters for this BaseNoiseModel"""
         return dict(
-            data_model_name=self._data_model_name,
-            subproduct=self._subproduct,
-            possible_subproduct_kwargs=self._possible_subproduct_kwargs,
-            enforce_equal_qid_kwargs=self._enforce_equal_qid_kwargs,
             calibrated=self._calibrated,
+            catalog_name=self._catalog_name,
+            data_model_name=self._data_model_name,
             differenced=self._differenced,
-            srcfree=self._srcfree,
+            dtype=np.dtype(self._dtype).str[1:], # remove endianness
+            enforce_equal_qid_kwargs=self._enforce_equal_qid_kwargs,
+            filter_kwargs=self._filter_kwargs,
+            iso_filt_method=self._iso_filt_method,
+            ivar_filt_method=self._ivar_filt_method,
+            kfilt_lbounds=self._kfilt_lbounds,
             mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name ,
-            catalog_name=self._catalog_name,
-            kfilt_lbounds=self._kfilt_lbounds,
-            fwhm_ivar=self._fwhm_ivar,
-            dtype=np.dtype(self._dtype).str[1:], # remove endianness
-            qid_names_template=self._qid_names_template
+            possible_subproduct_kwargs=self._possible_subproduct_kwargs,
+            qid_names_template=self._qid_names_template,
+            srcfree=self._srcfree,
+            subproduct=self._subproduct
         )
 
     def _model_param_dict_updater(self, model_param_dict):
@@ -1440,8 +1449,13 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
         lmax_model = lmax
-        lmax *= self._pre_filt_rel_upgrade
-        downgrade //= self._pre_filt_rel_upgrade
+        shape, wcs = utils.downgrade_geometry_cc_quad(
+            self._full_shape, self._full_wcs, downgrade
+            )       
+
+        post_filt_rel_downgrade = self._filter_kwargs['post_filt_rel_downgrade']
+        lmax *= post_filt_rel_downgrade
+        downgrade //= post_filt_rel_downgrade
 
         if check_in_memory:
             try:
@@ -1524,12 +1538,22 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             dmap_from_cache = False
         dmap *= mask_obs
 
+        # update filter kwargs
+        filter_kwargs = dict(lmax=lmax, no_aliasing=True, shape=shape, wcs=wcs,
+                             n=shape[-1], nthread=0, normalize='ortho',
+                             mask_obs=mask_obs, mask_est=mask_est,
+                             post_filt_downgrade_wcs=wcs, ivar=ivar)
+        assert len(filter_kwargs.keys() & self._filter_kwargs.keys()) == 0, \
+            'Instance filter_kwargs and get_model supplied filter_kwargs overlap'
+        filter_kwargs.update(self._filter_kwargs)
+
         # get the model
         with bench.show(f'Generating noise model for {utils.kwargs_str(split_num=split_num, lmax=lmax_model, **subproduct_kwargs)}'):
             # in order to have load/keep operations in abstract get_model, need
             # to pass ivar and mask_obs here, rather than e.g. split_num
             model_dict = self._get_model(
-                dmap*cfact, lmax, mask_obs, mask_est, ivar, verbose
+                dmap*cfact, self._iso_filt_method, self._ivar_filt_method,
+                filter_kwargs, verbose
                 )
 
         # keep, write data if requested
@@ -1616,9 +1640,104 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         return {}
 
     @abstractmethod
-    def _get_model(self, dmap, verbose=False, **kwargs):
+    def _get_model(self, dmap, iso_filt_method, ivar_filt_method, filter_kwargs, verbose):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
         return {}
+
+    @classmethod
+    @abstractmethod
+    def get_model_static(cls, dmap, iso_filt_method=None, ivar_filt_method=None,
+                         filter_kwargs=None, verbose=False, **kwargs):
+        return {}
+    
+    @classmethod
+    def filter_model(cls, inp, iso_filt_method=None, ivar_filt_method=None,
+                     filter_kwargs=None, verbose=False):
+        # get the filter function and its bases
+        key = frozenset(
+            dict(
+                iso_filt_method=iso_filt_method,
+                ivar_filt_method=ivar_filt_method,
+                model=True
+                ).items()
+            )
+        filter_func, filter_inbasis, filter_outbasis = filters.REGISTERED_FILTERS[key]
+
+        # transform to filter inbasis
+        basis = 'map'
+        key = (basis, filter_inbasis)
+        transform_func = transforms.REGISTERED_TRANSFORMS[key]
+        inp = transform_func(
+            inp, adjoint=False, verbose=verbose, **filter_kwargs
+            )
+        basis = filter_inbasis
+        
+        # filter, which possibly changes basis and returns measured quantities.
+        # filters better be hermitian (don't need to pass adjoint)!
+        inp, out = filter_func(inp, verbose=verbose, **filter_kwargs)
+
+        model_inbasis = cls.operatingbasis()
+
+        # transform to class operating basis
+        basis = filter_outbasis
+        key = (basis, model_inbasis)
+        transform_func = transforms.REGISTERED_TRANSFORMS[key]
+        inp = transform_func(
+            inp, adjoint=False, verbose=verbose, **filter_kwargs
+            )
+        basis = model_inbasis
+        
+        return inp, out
+    
+    @classmethod
+    def filter(cls, inp, iso_filt_method=None, ivar_filt_method=None,
+               filter_kwargs=None, adjoint=False, verbose=False):
+        # get the filter function and its bases
+        key = frozenset(
+            dict(
+                iso_filt_method=iso_filt_method,
+                ivar_filt_method=ivar_filt_method,
+                model=False
+                ).items()
+            )
+        filter_func, filter_inbasis, filter_outbasis = filters.REGISTERED_FILTERS[key]
+
+        # transform to filter inbasis
+        if adjoint:
+            basis = 'map'
+        else:
+            basis = cls.operatingbasis()
+        key = (basis, filter_inbasis)
+        transform_func = transforms.REGISTERED_TRANSFORMS[key]
+        inp = transform_func(
+            inp, adjoint=adjoint, verbose=verbose, **filter_kwargs
+            )
+        basis = filter_inbasis
+        
+        # filter, which possibly changes basis but doesn't return measured quantities.
+        # filters better be hermitian (don't need to pass adjoint)!
+        inp = filter_func(inp, verbose=verbose, **filter_kwargs)
+
+        if adjoint:
+            final_basis = cls.operatingbasis()
+        else:
+            final_basis = 'map'
+
+        # transform to final basis
+        basis = filter_outbasis
+        key = (basis, final_basis)
+        transform_func = transforms.REGISTERED_TRANSFORMS[key]
+        inp = transform_func(
+            inp, adjoint=adjoint, verbose=verbose, **filter_kwargs
+            )
+        basis = final_basis
+        
+        return inp
+    
+    @classmethod
+    @abstractmethod
+    def operatingbasis():
+        return ''
 
     @abstractmethod
     def _write_model(self, fn, **kwargs):
@@ -1903,7 +2022,7 @@ class TiledNoiseModel(BaseNoiseModel):
 
     def _get_model(self, dmap, lmax, mask_obs, mask_est, ivar, verbose):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
-        lmax_model = lmax // self._pre_filt_rel_upgrade
+        lmax_model = lmax // self._post_filt_rel_downgrade
         downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax_model)
         _, wcs = utils.downgrade_geometry_cc_quad(
             self._full_shape, self._full_wcs, downgrade
@@ -1913,7 +2032,7 @@ class TiledNoiseModel(BaseNoiseModel):
             dmap, lmax, mask_obs=mask_obs, mask_est=mask_est, ivar=ivar,
             width_deg=self._width_deg, height_deg=self._height_deg,
             delta_ell_smooth=self._delta_ell_smooth,
-            post_filt_rel_downgrade=self._pre_filt_rel_upgrade,
+            post_filt_rel_downgrade=self._post_filt_rel_downgrade,
             post_filt_downgrade_wcs=wcs, nthread=0, verbose=verbose
         )
 
@@ -2267,30 +2386,44 @@ class FDWNoiseModel(BaseNoiseModel):
             'sqrt_cov_ell': sqrt_cov_ell
             }
 
-    def _get_model(self, dmap, lmax, mask_obs, mask_est, ivar, verbose):
+    def _get_model(self, dmap, iso_filt_method, ivar_filt_method,
+                   filter_kwargs, verbose):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
-        lmax_model = lmax // self._pre_filt_rel_upgrade
-        downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax_model)
-        _, wcs = utils.downgrade_geometry_cc_quad(
-            self._full_shape, self._full_wcs, downgrade
-            )        
+        lmax_model = filter_kwargs['lmax'] // filter_kwargs['post_filt_rel_downgrade']
         
         if lmax_model not in self._fk_dict:
             print('Building and storing FDWKernels')
             self._fk_dict[lmax_model] = self._get_kernels(lmax_model)
         fk = self._fk_dict[lmax_model]
-        
-        sqrt_cov_mat, sqrt_cov_ell = fdw_noise.get_fdw_noise_covsqrt(
-            fk, dmap, lmax, mask_obs=mask_obs, mask_est=mask_est,
-            fwhm_fact=self._fwhm_fact_func, 
-            post_filt_rel_downgrade=self._pre_filt_rel_upgrade,
-            post_filt_downgrade_wcs=wcs, nthread=0, verbose=verbose
-        )
 
-        return {
-            'sqrt_cov_mat': sqrt_cov_mat,
-            'sqrt_cov_ell': sqrt_cov_ell
-            }
+        out = self.__class__.get_model_static(
+            dmap, fk, fwhm_fact=self._fwhm_fact_func, nthread=0,
+            iso_filt_method=iso_filt_method, ivar_filt_method=ivar_filt_method,
+            filter_kwargs=filter_kwargs, verbose=verbose
+            )
+        
+        return out
+    
+    @classmethod
+    def get_model_static(cls, dmap, fdw_kernels, fwhm_fact=2, nthread=0, 
+                         iso_filt_method=None, ivar_filt_method=None,
+                         filter_kwargs=None, verbose=False):
+        kmap, filter_out = cls.filter_model(
+            dmap, iso_filt_method=iso_filt_method, 
+            ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
+            verbose=verbose
+            )
+        out = fdw_noise.get_fdw_noise_covsqrt(
+            kmap, fdw_kernels, fwhm_fact=fwhm_fact, nthread=nthread,
+            verbose=verbose
+            )
+        assert len(filter_out.keys() & out.keys()) == 0, \
+            'filter outputs and model outputs overlap'
+        return out.update(filter_out)
+    
+    @classmethod
+    def operatingbasis():
+        return 'fourier'
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
         """Write a dictionary of noise model variables to filename fn"""
