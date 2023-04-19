@@ -143,22 +143,9 @@ class DataManager:
         self._ivar_filt_method = ivar_filt_method
         if filter_kwargs is None:
             filter_kwargs = {}
-        filter_kwargs['dtype'] = self._dtype
-        if 'post_filt_rel_downgrade' not in filter_kwargs:
-            filter_kwargs['post_filt_rel_downgrade'] = 1
         self._filter_kwargs = filter_kwargs
 
         # not strictly for the filters, but to serve ivar for the filters
-        try:
-            iter(ivar_fwhms)
-        except TypeError:
-            ivar_fwhms = (ivar_fwhms,)
-        try:
-            iter(ivar_lmaxs)
-        except TypeError:
-            ivar_lmaxs = (ivar_lmaxs,)
-        assert len(ivar_fwhms) == len(ivar_lmaxs), \
-            'ivar_fwhms and ivar_lmaxs must have same length'
         self._ivar_fwhms = ivar_fwhms
         self._ivar_lmaxs = ivar_lmaxs
 
@@ -397,68 +384,91 @@ class DataManager:
 
         Returns
         -------
-        sqrt_ivar : (nmaps, nsplits=1, npol, ny, nx) enmap or list thereof
+        sqrt_ivar : (..., nmaps, nsplits=1, npol, ny, nx) enmap
             Inverse-variance maps, possibly downgraded.
 
         Notes
         -----
         A single map is returned if instance ivar_fwhms and ivar_lmaxs are
-        scalars. If they are iterable, then a list of maps is returned.
+        scalars. If they are iterable, then an additional dim is prepended.
         """
         shape, wcs = utils.downgrade_geometry_cc_quad(
             self._full_shape, self._full_wcs, downgrade
             )
 
-        out = []
-        for i in range(len(self._ivar_fwhms)):
-            ivar_fwhm = self._ivar_fwhms[i]
-            ivar_lmax = self._ivar_lmaxs[i]
+        # if scalars, make iterable
+        try:
+            iter(self._ivar_fwhms)
+            ivar_fwhms = self._ivar_fwhms
+        except TypeError:
+            ivar_fwhms = (self._ivar_fwhms,)
+        
+        try:
+            iter(self._ivar_lmaxs)
+            ivar_lmaxs = self._ivar_lmaxs
+        except TypeError:
+            ivar_lmaxs = (self._ivar_lmaxs,)
+        
+        assert len(ivar_fwhms) == len(ivar_lmaxs), \
+            'ivar_fwhms and ivar_lmaxs must have same length'
 
-            # allocate a buffer to accumulate all ivar maps in.
-            # this has shape (nmaps, nsplits=1, npol=1, ny, nx).
-            ivars = self._empty(shape, wcs, ivar=True, num_splits=1, **subproduct_kwargs)
+        nsmooth = len(ivar_fwhms)
 
-            for j, qid in enumerate(self._qids):
-                with bench.show('Generating sqrt_ivars'):
-                    if self._calibrated:
-                        mul = utils.get_mult_fact(self._data_model, qid, ivar=True)
-                    else:
-                        mul = 1
+        # to enable loading from disk a minimal number of times.
+        # allocate a buffer to accumulate all ivar maps in.
+        # this has shape (nmaps, nsplits=1, npol=1, ny, nx).
+        out = enmap.ndmap([
+            self._empty(
+                shape, wcs, ivar=True, num_splits=1, **subproduct_kwargs
+                ) for i in range(nsmooth)
+            ], wcs=wcs)
+        
+        # outer loop: qids, inner loop: scales (minimize i/o)
+        for i, qid in enumerate(self._qids):
+            with bench.show(f'Generating sqrt_ivars for qid {qid}'):
+                if self._calibrated:
+                    mul = utils.get_mult_fact(self._data_model, qid, ivar=True)
+                else:
+                    mul = 1
 
-                    # we want to do this split-by-split in case we can save
-                    # memory by downgrading one split at a time
-                    ivar = utils.read_map(
-                        self._data_model, qid, split_num=split_num, ivar=True,
-                        subproduct=self._subproduct, srcfree=self._srcfree,
-                        **subproduct_kwargs
+                # we want to do this split-by-split in case we can save
+                # memory by downgrading one split at a time
+                ivar = utils.read_map(
+                    self._data_model, qid, split_num=split_num, ivar=True,
+                    subproduct=self._subproduct, srcfree=self._srcfree,
+                    **subproduct_kwargs
+                    )
+                ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
+                ivar *= mul
+                
+                if downgrade != 1:
+                    # use harmonic instead of interpolated downgrade because it is 
+                    # 10x faster
+                    ivar = utils.fourier_downgrade_cc_quad(
+                        ivar, downgrade, area_pow=1
                         )
-                    ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
-                    ivar *= mul
-                    
-                    if downgrade != 1:
-                        # use harmonic instead of interpolated downgrade because it is 
-                        # 10x faster
-                        ivar = utils.fourier_downgrade_cc_quad(
-                            ivar, downgrade, area_pow=1
-                            )               
+
+                for j in range(nsmooth):
+                    ivar_fwhm = ivar_fwhms[j]
+                    ivar_lmax = ivar_lmaxs[j]               
                     
                     # this can happen after downgrading
+                    _ivar = ivar.copy()
                     if ivar_fwhm:
-                        ivar = self._apply_fwhm_ivar(ivar, ivar_fwhm)
-                    
+                        _ivar = self._apply_fwhm_ivar(_ivar, ivar_fwhm)
+
                     # if ivar_lmax is None, don't bandlimit it
                     if ivar_lmax:
-                        ivar = utils.alm2map(
-                            utils.map2alm(ivar, lmax=ivar_lmax), shape=ivar.shape, wcs=ivar.wcs
+                        _ivar = utils.alm2map(
+                            utils.map2alm(_ivar, lmax=ivar_lmax), shape=ivar.shape, wcs=ivar.wcs
                             )
 
                     # zero-out any numerical negative ivar
-                    ivar[ivar < 0] = 0     
+                    _ivar[_ivar < 0] = 0     
 
-                    ivars[j, 0] = np.sqrt(ivar)
-                    out.append(ivars)
-        
-        if len(self._ivar_fwhms) == 0:
+                    out[j][i, 0] = np.sqrt(_ivar)
+                    
+        if nsmooth == 0:
             return out[0]
         else:
             return out
@@ -1493,7 +1503,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             self._full_shape, self._full_wcs, downgrade
             )       
 
-        post_filt_rel_downgrade = self._filter_kwargs['post_filt_rel_downgrade']
+        post_filt_rel_downgrade = self._filter_kwargs.get(
+            'post_filt_rel_downgrade', 1
+            )
         lmax *= post_filt_rel_downgrade
         downgrade //= post_filt_rel_downgrade
 
@@ -1579,11 +1591,15 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         dmap *= mask_obs
 
         # update filter kwargs
-        filter_kwargs = dict(lmax=lmax, no_aliasing=True, shape=shape, wcs=wcs,
-                             n=shape[-1], nthread=0, normalize='ortho',
-                             mask_obs=mask_obs, mask_est=mask_est,
-                             post_filt_downgrade_wcs=wcs, sqrt_ivar=sqrt_ivar)
-        
+        filter_kwargs = dict(
+            lmax=lmax, no_aliasing=True, shape=shape, wcs=wcs,
+            dtype=self._dtype, n=shape[-1], nthread=0, normalize='ortho',
+            mask_obs=mask_obs, mask_est=mask_est, post_filt_downgrade_wcs=wcs,
+            sqrt_ivar=sqrt_ivar
+            )
+        if 'post_filt_rel_downgrade' not in self._filter_kwargs:
+            filter_kwargs[post_filt_rel_downgrade] = post_filt_rel_downgrade
+
         assert len(filter_kwargs.keys() & self._filter_kwargs.keys()) == 0, \
             'Instance filter_kwargs and get_model supplied filter_kwargs overlap'
         filter_kwargs.update(self._filter_kwargs)
@@ -1792,6 +1808,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         if self._dumpable:
             self._save_yaml_config(self._config_fn)
 
+        post_filt_rel_downgrade = self._filter_kwargs.get(
+            'post_filt_rel_downgrade', 1
+            )
         downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax) 
         shape, wcs = utils.downgrade_geometry_cc_quad(
             self._full_shape, self._full_wcs, downgrade
@@ -1850,10 +1869,14 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         # (e.g., sqrt_cov_mat). this is ok since filters and transforms should
         # harmlessly pass a sqrt_cov_mat through their kwargs, without making
         # copies
-        filter_kwargs = dict(lmax=lmax, no_aliasing=True, shape=shape, wcs=wcs,
-                             n=shape[-1], nthread=0, normalize='ortho',
-                             mask_obs=mask_obs, sqrt_ivar=sqrt_ivar, inplace=True)
-        
+        filter_kwargs = dict(
+            lmax=lmax, no_aliasing=True, shape=shape, wcs=wcs,
+            dtype=self._dtype, n=shape[-1], nthread=0, normalize='ortho',
+            mask_obs=mask_obs, sqrt_ivar=sqrt_ivar, inplace=True
+            )
+        if 'post_filt_rel_downgrade' not in self._filter_kwargs:
+            filter_kwargs[post_filt_rel_downgrade] = post_filt_rel_downgrade
+
         assert len(filter_kwargs.keys() & self._filter_kwargs.keys()) == 0, \
             'Instance filter_kwargs and get_model supplied filter_kwargs overlap'
         filter_kwargs.update(self._filter_kwargs)
