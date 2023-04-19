@@ -108,6 +108,7 @@ def get_mnms_fn(basename, pathtype, no_fn_collisions=True, to_write=False):
 
 def config_from_hdf5_file(filename, address='/'):
     """Return a dictionary of the attributes at hfile[address].attrs.
+
     Parameters
     ----------
     filename : h5py.Group or path-like
@@ -133,6 +134,13 @@ def config_from_hdf5_file(filename, address='/'):
 def kwargs_str(**kwargs):
     """For printing kwargs as a string"""
     return ', '.join([f'{k} {v}' for k, v in kwargs.items()])
+
+def None2str(s):
+    """Prints a string. If s is None, prints 'None'."""
+    if s is None:
+        return 'None'
+    else:
+        return s
 
 # copied from tilec.tiling.py (https://github.com/ACTCollaboration/tilec/blob/master/tilec/tiling.py),
 # want to avoid dependency on tilec

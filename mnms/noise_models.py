@@ -33,10 +33,11 @@ class DataManager:
 
     def __init__(self, *qids, data_model_name=None, subproduct='default',
                  possible_subproduct_kwargs=None, enforce_equal_qid_kwargs=None,
-                 calibrated=False, differenced=True, iso_filt_method=None, 
-                 ivar_filt_method=None, filter_kwargs=None, srcfree=True, 
-                 mask_est_name=None, mask_obs_name=None, catalog_name=None, 
-                 kfilt_lbounds=None, dtype=np.float32, cache=None, **kwargs):
+                 calibrated=False, differenced=True, srcfree=True,
+                 iso_filt_method=None, ivar_filt_method=None, filter_kwargs=None,
+                 ivar_fwhms=None, ivar_lmaxs=None, mask_est_name=None,
+                 mask_obs_name=None, catalog_name=None, kfilt_lbounds=None,
+                 dtype=np.float32, cache=None, **kwargs):
         """Helper class for all BaseNoiseModel subclasses. Supports loading raw
         data necessary for all subclasses, such as masks and ivars. Also
         defines some class methods usable in subclasses.
@@ -137,14 +138,29 @@ class DataManager:
         self._dtype = dtype
         self._srcfree = srcfree
 
-        # prepare filters
+        # prepare filter kwargs
+        self._iso_filt_method = iso_filt_method
+        self._ivar_filt_method = ivar_filt_method
         if filter_kwargs is None:
             filter_kwargs = {}
+        filter_kwargs['dtype'] = self._dtype
         if 'post_filt_rel_downgrade' not in filter_kwargs:
             filter_kwargs['post_filt_rel_downgrade'] = 1
         self._filter_kwargs = filter_kwargs
-        self._iso_filt_method = iso_filt_method
-        self._ivar_filt_method = ivar_filt_method
+
+        # not strictly for the filters, but to serve ivar for the filters
+        try:
+            iter(ivar_fwhms)
+        except TypeError:
+            ivar_fwhms = (ivar_fwhms,)
+        try:
+            iter(ivar_lmaxs)
+        except TypeError:
+            ivar_lmaxs = (ivar_lmaxs,)
+        assert len(ivar_fwhms) == len(ivar_lmaxs), \
+            'ivar_fwhms and ivar_lmaxs must have same length'
+        self._ivar_fwhms = ivar_fwhms
+        self._ivar_lmaxs = ivar_lmaxs
 
         # prepare named data
         if mask_est_name is not None:
@@ -173,7 +189,7 @@ class DataManager:
         else:
             self._cache_was_passed = True
         self._permissible_cache_keys = [
-            'mask_est', 'mask_obs', 'ivar', 'cfact', 'dmap', 'model'
+            'mask_est', 'mask_obs', 'sqrt_ivar', 'cfact', 'dmap', 'model'
             ]
         for k in self._permissible_cache_keys:
             if k not in cache:
@@ -367,8 +383,8 @@ class DataManager:
 
         return mask
 
-    def get_ivar(self, split_num, downgrade=1, **subproduct_kwargs):
-        """Load the inverse-variance maps according to instance attributes.
+    def get_sqrt_ivar(self, split_num, downgrade=1, **subproduct_kwargs):
+        """Load the sqrt inverse-variance maps according to instance attributes.
 
         Parameters
         ----------
@@ -381,53 +397,73 @@ class DataManager:
 
         Returns
         -------
-        ivar : (nmaps, nsplits=1, npol, ny, nx) enmap
+        sqrt_ivar : (nmaps, nsplits=1, npol, ny, nx) enmap or list thereof
             Inverse-variance maps, possibly downgraded.
+
+        Notes
+        -----
+        A single map is returned if instance ivar_fwhms and ivar_lmaxs are
+        scalars. If they are iterable, then a list of maps is returned.
         """
         shape, wcs = utils.downgrade_geometry_cc_quad(
             self._full_shape, self._full_wcs, downgrade
             )
 
-        # allocate a buffer to accumulate all ivar maps in.
-        # this has shape (nmaps, nsplits=1, npol=1, ny, nx).
-        ivars = self._empty(shape, wcs, ivar=True, num_splits=1, **subproduct_kwargs)
+        out = []
+        for i in range(len(self._ivar_fwhms)):
+            ivar_fwhm = self._ivar_fwhms[i]
+            ivar_lmax = self._ivar_lmaxs[i]
 
-        for i, qid in enumerate(self._qids):
-            with bench.show('Generating ivars'):
-                if self._calibrated:
-                    mul = utils.get_mult_fact(self._data_model, qid, ivar=True)
-                else:
-                    mul = 1
+            # allocate a buffer to accumulate all ivar maps in.
+            # this has shape (nmaps, nsplits=1, npol=1, ny, nx).
+            ivars = self._empty(shape, wcs, ivar=True, num_splits=1, **subproduct_kwargs)
 
-                # we want to do this split-by-split in case we can save
-                # memory by downgrading one split at a time
-                ivar = utils.read_map(
-                    self._data_model, qid, split_num=split_num, ivar=True,
-                    subproduct=self._subproduct, srcfree=self._srcfree,
-                    **subproduct_kwargs
-                    )
-                ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
-                ivar *= mul
-                
-                if downgrade != 1:
-                    # use harmonic instead of interpolated downgrade because it is 
-                    # 10x faster
-                    ivar = utils.fourier_downgrade_cc_quad(
-                        ivar, downgrade, area_pow=1
-                        )               
-                
-                # this can happen after downgrading
-                if self._fwhm_ivar:
-                    ivar = self._apply_fwhm_ivar(ivar)
+            for j, qid in enumerate(self._qids):
+                with bench.show('Generating sqrt_ivars'):
+                    if self._calibrated:
+                        mul = utils.get_mult_fact(self._data_model, qid, ivar=True)
+                    else:
+                        mul = 1
 
-                # zero-out any numerical negative ivar
-                ivar[ivar < 0] = 0     
+                    # we want to do this split-by-split in case we can save
+                    # memory by downgrading one split at a time
+                    ivar = utils.read_map(
+                        self._data_model, qid, split_num=split_num, ivar=True,
+                        subproduct=self._subproduct, srcfree=self._srcfree,
+                        **subproduct_kwargs
+                        )
+                    ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
+                    ivar *= mul
+                    
+                    if downgrade != 1:
+                        # use harmonic instead of interpolated downgrade because it is 
+                        # 10x faster
+                        ivar = utils.fourier_downgrade_cc_quad(
+                            ivar, downgrade, area_pow=1
+                            )               
+                    
+                    # this can happen after downgrading
+                    if ivar_fwhm:
+                        ivar = self._apply_fwhm_ivar(ivar, ivar_fwhm)
+                    
+                    # if ivar_lmax is None, don't bandlimit it
+                    if ivar_lmax:
+                        ivar = utils.alm2map(
+                            utils.map2alm(ivar, lmax=ivar_lmax), shape=ivar.shape, wcs=ivar.wcs
+                            )
 
-                ivars[i, 0] = ivar
+                    # zero-out any numerical negative ivar
+                    ivar[ivar < 0] = 0     
+
+                    ivars[j, 0] = np.sqrt(ivar)
+                    out.append(ivars)
         
-        return ivars
+        if len(self._ivar_fwhms) == 0:
+            return out[0]
+        else:
+            return out
 
-    def _apply_fwhm_ivar(self, ivar):
+    def _apply_fwhm_ivar(self, ivar, fwhm):
         """Smooth ivar maps inplace by the model fwhm_ivar scale. Smoothing
         occurs in harmonic space.
 
@@ -435,6 +471,8 @@ class DataManager:
         ----------
         ivar : (..., ny, nx) enmap.ndmap
             Ivar maps to smooth. 
+        fwhm: float
+            FWHM of smoothing in degrees.
 
         Returns
         -------
@@ -447,7 +485,7 @@ class DataManager:
         # flatten_axes = [0] because ivar is (1, ny, nx) (i.e., no way
         # to concurrent-ize this smoothing)
         utils.smooth_gauss(
-            ivar, np.radians(self._fwhm_ivar), inplace=True, 
+            ivar, np.radians(fwhm), inplace=True, 
             method='map', flatten_axes=[0], nthread=0,
             mode=['nearest', 'wrap']
             )
@@ -737,7 +775,7 @@ class DataManager:
         ----------
         cacheprod : str
             The "cache product", must be one of 'mask_est', 'mask_obs',
-            'ivar', 'cfact', 'dmap', or 'model'.
+            'sqrt_ivar', 'cfact', 'dmap', or 'model'.
         data : any
             Item to be stored.
         args : tuple, optional
@@ -762,7 +800,7 @@ class DataManager:
         ----------
         cacheprod : str
             The "cache product", must be one of 'mask_est', 'mask_obs',
-            'ivar', 'cfact', 'dmap', or 'model'.
+            'sqrt_ivar', 'cfact', 'dmap', or 'model'.
         data : any
             Item to be stored.
         args : tuple, optional
@@ -791,7 +829,7 @@ class DataManager:
         ----------
         args : tuple, optional
             If provided, the first arg must be the "cacheprod", i.e., one of
-            'mask_est', 'mask_obs', 'ivar', 'cfact', 'dmap', or 'model'. If 
+            'mask_est', 'mask_obs', 'sqrt_ivar', 'cfact', 'dmap', or 'model'. If 
             no subsequent args are provided (and no kwargs are provided), all
             data under that "cacheprod" is deleted. If provided, subsequent
             args are used with kwargs to form a key (*args, **kwargs), where
@@ -1285,6 +1323,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             filter_kwargs=self._filter_kwargs,
             iso_filt_method=self._iso_filt_method,
             ivar_filt_method=self._ivar_filt_method,
+            ivar_fwhms=self._ivar_fwhms,
+            ivar_lmaxs=self._ivar_lmaxs,
             kfilt_lbounds=self._kfilt_lbounds,
             mask_est_name=self._mask_est_name,
             mask_obs_name=self._mask_obs_name ,
@@ -1388,7 +1428,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
     def get_model(self, split_num, lmax, check_in_memory=True, check_on_disk=True,
                   generate=True, keep_model=False, keep_mask_est=False,
-                  keep_mask_obs=False, keep_ivar=False, keep_cfact=False, 
+                  keep_mask_obs=False, keep_sqrt_ivar=False, keep_cfact=False, 
                   keep_dmap=False, write=True, verbose=False, **subproduct_kwargs):
         """Load or generate a sqrt-covariance matrix from this NoiseModel. 
         Will load necessary products to disk if not yet stored in instance
@@ -1422,8 +1462,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         keep_mask_obs : bool, optional
             Store the loaded or generated mask_obs in the instance attributes, by 
             default False.
-        keep_ivar : bool, optional
-            Store the loaded or generated ivar in the instance attributes, by 
+        keep_sqrt_ivar : bool, optional
+            Store the loaded or generated sqrt_ivar in the instance attributes, by 
             default False.
         keep_cfact : bool, optional
             Store the loaded or generated cfact in the instance attributes, by 
@@ -1478,7 +1518,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             else: # generate == True
                 pass
         
-        # get the masks, ivar, cfact, dmap
+        # get the masks, sqrt_ivar, cfact, dmap
         try:
             mask_obs = self.get_from_cache(
                 'mask_obs', downgrade=downgrade, **subproduct_kwargs
@@ -1503,16 +1543,16 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         mask_est *= mask_obs
 
         try:
-            ivar = self.get_from_cache(
-                'ivar', split_num=split_num, downgrade=downgrade, **subproduct_kwargs
+            sqrt_ivar = self.get_from_cache(
+                'sqrt_ivar', split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
-            ivar_from_cache = True
+            sqrt_ivar_from_cache = True
         except KeyError:
-            ivar = self.get_ivar(
+            sqrt_ivar = self.get_sqrt_ivar(
                 split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
-            ivar_from_cache = False
-        ivar *= mask_obs
+            sqrt_ivar_from_cache = False
+        sqrt_ivar *= mask_obs
 
         try:
             cfact = self.get_from_cache(
@@ -1542,15 +1582,14 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         filter_kwargs = dict(lmax=lmax, no_aliasing=True, shape=shape, wcs=wcs,
                              n=shape[-1], nthread=0, normalize='ortho',
                              mask_obs=mask_obs, mask_est=mask_est,
-                             post_filt_downgrade_wcs=wcs, ivar=ivar)
+                             post_filt_downgrade_wcs=wcs, sqrt_ivar=sqrt_ivar)
+        
         assert len(filter_kwargs.keys() & self._filter_kwargs.keys()) == 0, \
             'Instance filter_kwargs and get_model supplied filter_kwargs overlap'
         filter_kwargs.update(self._filter_kwargs)
 
         # get the model
         with bench.show(f'Generating noise model for {utils.kwargs_str(split_num=split_num, lmax=lmax_model, **subproduct_kwargs)}'):
-            # in order to have load/keep operations in abstract get_model, need
-            # to pass ivar and mask_obs here, rather than e.g. split_num
             model_dict = self._get_model(
                 dmap*cfact, self._iso_filt_method, self._ivar_filt_method,
                 filter_kwargs, verbose
@@ -1572,9 +1611,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                 'mask_obs', mask_obs, downgrade=downgrade, **subproduct_kwargs
                 )
 
-        if keep_ivar and not ivar_from_cache:
+        if keep_sqrt_ivar and not sqrt_ivar_from_cache:
             self.cache_data(
-                'ivar', ivar, split_num=split_num, downgrade=downgrade, **subproduct_kwargs
+                'sqrt_ivar', sqrt_ivar, split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
 
         if keep_cfact and not cfact_from_cache:
@@ -1673,8 +1712,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         basis = filter_inbasis
         
         # filter, which possibly changes basis and returns measured quantities.
-        # filters better be hermitian (don't need to pass adjoint)!
-        inp, out = filter_func(inp, verbose=verbose, **filter_kwargs); print(filter_inbasis, filter_outbasis)
+        inp, out = filter_func(inp, adjoint=False, verbose=verbose, **filter_kwargs); print(filter_inbasis, filter_outbasis)
 
         model_inbasis = cls.operatingbasis()
 
@@ -1701,7 +1739,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
     def get_sim(self, split_num, sim_num, lmax, alm=False, check_on_disk=True,
                 generate=True, keep_model=True, keep_mask_obs=True,
-                keep_ivar=True, write=False, verbose=False, **subproduct_kwargs):
+                keep_sqrt_ivar=True, write=False, verbose=False, **subproduct_kwargs):
         """Load or generate a sim from this NoiseModel. Will load necessary
         products to disk if not yet stored in instance attributes.
 
@@ -1734,8 +1772,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         keep_mask_obs : bool, optional
             Store the loaded or generated mask_obs in the instance attributes, by 
             default True.
-        keep_ivar : bool, optional
-            Store the loaded, possibly downgraded, ivar in the instance
+        keep_sqrt_ivar : bool, optional
+            Store the loaded, possibly downgraded, sqrt_ivar in the instance
             attributes, by default True.
         write : bool, optional
             Save a generated sim to disk, by default False.
@@ -1770,7 +1808,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             else: # generate == True
                 pass
 
-        # get the model, mask, ivar
+        # get the model, mask, sqrt_ivar
         try:
             model_dict = self.get_from_cache(
                 'model', split_num=split_num, lmax=lmax, **subproduct_kwargs
@@ -1794,16 +1832,16 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             mask_obs_from_cache = False
 
         try:
-            ivar = self.get_from_cache(
-                'ivar', split_num=split_num, downgrade=downgrade, **subproduct_kwargs
+            sqrt_ivar = self.get_from_cache(
+                'sqrt_ivar', split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
-            ivar_from_cache = True
+            sqrt_ivar_from_cache = True
         except KeyError:
-            ivar = self.get_ivar(
+            sqrt_ivar = self.get_sqrt_ivar(
                 split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
-            ivar_from_cache = False
-        ivar *= mask_obs
+            sqrt_ivar_from_cache = False
+        sqrt_ivar *= mask_obs
         
         seed = self._get_seed(split_num, sim_num)
 
@@ -1814,7 +1852,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         # copies
         filter_kwargs = dict(lmax=lmax, no_aliasing=True, shape=shape, wcs=wcs,
                              n=shape[-1], nthread=0, normalize='ortho',
-                             mask_obs=mask_obs, ivar=ivar)
+                             mask_obs=mask_obs, sqrt_ivar=sqrt_ivar, inplace=True)
         
         assert len(filter_kwargs.keys() & self._filter_kwargs.keys()) == 0, \
             'Instance filter_kwargs and get_model supplied filter_kwargs overlap'
@@ -1845,9 +1883,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                 'mask_obs', mask_obs, downgrade=downgrade, **subproduct_kwargs
                 )
 
-        if keep_ivar and not ivar_from_cache:
+        if keep_sqrt_ivar and not sqrt_ivar_from_cache:
             self.cache_data(
-                'ivar', ivar, split_num=split_num, downgrade=downgrade, **subproduct_kwargs
+                'sqrt_ivar', sqrt_ivar, split_num=split_num, downgrade=downgrade, **subproduct_kwargs
                 )
         
         if write:
@@ -1949,8 +1987,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         basis = filter_inbasis
         
         # filter, which possibly changes basis but doesn't return measured quantities.
-        # filters better be hermitian (don't need to pass adjoint)!
-        inp = filter_func(inp, verbose=verbose, **filter_kwargs); print(filter_inbasis, filter_outbasis)
+        inp = filter_func(inp, adjoint=adjoint, verbose=verbose, **filter_kwargs); print(filter_inbasis, filter_outbasis)
 
         if adjoint:
             final_basis = cls.operatingbasis()

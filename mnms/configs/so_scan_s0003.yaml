@@ -12,15 +12,15 @@ BaseNoiseModel:
         - 100
       ell_highs:
         - 200
-      ivar_lmaxs:
-        - 100
-        - null
-      ivar_fwhms:
-        - null
-        - 0.25
       profile: cosine
   iso_filt_method: harmonic
   ivar_filt_method: scaledep
+  ivar_fwhms:
+    - 0.25
+    - 0.25
+  ivar_lmaxs:
+    - 100
+    - null
   kfilt_lbounds: null
   mask_est_name: so_scan_s0003_mask.fits
   mask_obs_name: null
