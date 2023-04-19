@@ -1745,7 +1745,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     
     @classmethod
     @abstractmethod
-    def operatingbasis():
+    def operatingbasis(cls):
         return ''
 
     @abstractmethod
@@ -2504,10 +2504,12 @@ class FDWNoiseModel(BaseNoiseModel):
         
         assert len(filter_out.keys() & out.keys()) == 0, \
             'filter outputs and model outputs overlap'
-        return out.update(filter_out)
+        out.update(filter_out)
+        
+        return out
     
     @classmethod
-    def operatingbasis():
+    def operatingbasis(cls):
         return 'fourier'
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):

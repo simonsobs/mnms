@@ -1,6 +1,6 @@
 from mnms import utils, transforms
 
-from pixell import enmap 
+from pixell import enmap, sharp
 
 import numpy as np
 
@@ -101,7 +101,7 @@ def iso_harmonic_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
     return iso_harmonic_ivar_none_model(
         filt_imap, mask_est=mask_est, ainfo=ainfo, lmax=lmax,
         post_filt_rel_downgrade=post_filt_rel_downgrade, 
-        post_filt_downgrade_wcs=post_filt_downgrade_wcs, **kwargs
+        post_filt_downgrade_wcs=post_filt_downgrade_wcs
         )
 
 @register('harmonic', 'map', iso_filt_method='harmonic', ivar_filt_method='basic')
@@ -149,9 +149,10 @@ def iso_harmonic_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
     return iso_harmonic_ivar_none_model(
         filt_imap, mask_est=mask_est, ainfo=ainfo, lmax=lmax,
         post_filt_rel_downgrade=post_filt_rel_downgrade, 
-        post_filt_downgrade_wcs=post_filt_downgrade_wcs, **kwargs
+        post_filt_downgrade_wcs=post_filt_downgrade_wcs
         )
 
+@register('harmonic', 'map', iso_filt_method='harmonic', ivar_filt_method='scaledep')
 def iso_harmonic_ivar_scaledep(alm, sqrt_cov_ell=None, sqrt_ivar=1,
                                ell_lows=None, ell_highs=None, profile='cosine',
                                dtype=np.float32, lmax=None, shape=None,
@@ -169,13 +170,24 @@ def iso_harmonic_ivar_scaledep(alm, sqrt_cov_ell=None, sqrt_ivar=1,
     # pass ainfo=None, inplace=False so that each filtered alm is bandlimited
     # only to the specified lmax
     filt_omap = 0
+    ainfo = sharp.alm_info(nalm=alm.shape[-1])
     for i, sq_iv in enumerate(sqrt_ivar):
         prof = trans_profs[i]
         lmaxi = prof.size - 1
+
+        # transfer alm to lower lmax if necessary
+        if lmaxi < lmax:
+            ainfoi = sharp.alm_info(lmax=lmaxi)
+            _alm = sharp.transfer_alm(ainfo, alm, ainfoi)
+        else:
+            _alm = alm
+
         filt_omap += iso_harmonic_ivar_basic(
-            alm, sqrt_ivar=sq_iv,
+            _alm, sqrt_ivar=sq_iv,
             sqrt_cov_ell=sqrt_cov_ell[..., :lmaxi + 1]*prof,
             ainfo=None, lmax=lmaxi, inplace=False, shape=shape, wcs=wcs,
             no_aliasing=no_aliasing, adjoint=adjoint,
-            post_filt_rel_downgrade=post_filt_rel_downgrade, **kwargs
+            post_filt_rel_downgrade=post_filt_rel_downgrade
         )
+        
+    return filt_omap

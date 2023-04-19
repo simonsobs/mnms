@@ -51,14 +51,14 @@ def fourier2map(kmap, n=None, nthread=0, normalize='ortho', adjoint=False,
 def alm2fourier(alm, shape=None, wcs=None, ainfo=None, no_aliasing=True,
                 nthread=0, normalize='ortho', adjoint=False, **kwargs):
     _map = alm2map(alm, shape=shape, wcs=wcs, ainfo=ainfo,
-                   no_aliasing=no_aliasing, adjoint=adjoint, **kwargs)
+                   no_aliasing=no_aliasing, adjoint=adjoint)
     return map2fourier(_map, nthread=nthread, normalize=normalize,
-                       adjoint=adjoint, **kwargs) 
+                       adjoint=adjoint) 
 
 @register('fourier', 'harmonic')
 def fourier2alm(kmap, n=None, nthread=0, normalize='ortho', ainfo=None,
                 lmax=None, no_aliasing=True, adjoint=False, **kwargs):
     _map = fourier2map(kmap, n=n, nthread=nthread, normalize=normalize,
-                       adjoint=adjoint, **kwargs)
+                       adjoint=adjoint)
     return map2alm(_map, ainfo=ainfo, lmax=lmax, no_aliasing=no_aliasing,
-                   adjoint=adjoint, **kwargs)
+                   adjoint=adjoint)
