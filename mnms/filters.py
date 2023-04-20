@@ -29,7 +29,7 @@ def register(inbasis, outbasis, iso_filt_method=None, ivar_filt_method=None,
         def wrapper(*args, verbose=False, **kwargs):
             if verbose:
                 print(
-                    f'Filtering with iso_filt method {utils.None2str(iso_filt_method)}' + \
+                    f'Filtering with iso_filt_method {utils.None2str(iso_filt_method)}' + \
                     f', ivar_filt_method {utils.None2str(ivar_filt_method)}'
                     )
             return filter_func(*args, **kwargs)
@@ -117,9 +117,27 @@ def iso_harmonic_ivar_basic(alm, sqrt_ivar=1, sqrt_cov_ell=None, ainfo=None,
         alm, shape=shape, wcs=wcs, ainfo=ainfo, no_aliasing=no_aliasing,
         adjoint=adjoint
         )
-    return np.divide(
+    
+    # need to handle that preshapes may not be the same (though should reshape)
+    # into one other correctly. this is akin to what happens in
+    # utils.ell_filter_correlated
+    oshape = omap.shape
+    omap = utils.atleast_nd(omap, 3)
+    ncomp = np.prod(omap.shape[:-2], dtype=int)
+    omap = omap.reshape(ncomp, *omap.shape[-2:])
+
+    # sqrt_ivar might have different ncomp, but must broadcast (i.e., ncomp
+    # must be either same as ncomp above, or if not, one of the two must be
+    # 1). in fact, sqrt_ivar ncomp must be 1, so that omap/sqrt_ivar can
+    # still be written into omap
+    sqrt_ivar = utils.atleast_nd(sqrt_ivar, 3)
+    ncomp = np.prod(sqrt_ivar.shape[:-2], dtype=int)
+    sqrt_ivar = sqrt_ivar.reshape(ncomp, *sqrt_ivar.shape[-2:])
+
+    np.divide(
         omap, sqrt_ivar/post_filt_rel_downgrade, where=sqrt_ivar!=0, out=omap
         )
+    return omap.reshape(oshape)
 
 @register('map', 'map', iso_filt_method='harmonic', ivar_filt_method='scaledep', model=True)
 def iso_harmonic_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,

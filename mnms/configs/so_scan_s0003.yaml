@@ -7,12 +7,12 @@ BaseNoiseModel:
   enforce_equal_qid_kwargs:
   - num_splits
   filter_kwargs:
-      post_filt_rel_downgrade: 2
-      ell_lows:
-        - 100
-      ell_highs:
-        - 200
-      profile: cosine
+    post_filt_rel_downgrade: 2
+    ell_lows:
+      - 100
+    ell_highs:
+      - 200
+    profile: cosine
   iso_filt_method: harmonic
   ivar_filt_method: scaledep
   ivar_fwhms:

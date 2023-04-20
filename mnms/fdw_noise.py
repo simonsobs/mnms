@@ -914,7 +914,7 @@ def get_fdw_noise_covsqrt(kmap, fdw_kernels, fwhm_fact=2, nthread=0, verbose=Tru
         print(
             f'kmap shape: {kmap.shape}\n'
             f'Num kernels: {len(fdw_kernels.kernels)}\n'
-            f'Smoothing factor: {fwhm_fact}\n'
+            f'Smoothing factor: {fwhm_fact}'
             )
         
     wavs = fdw_kernels.k2wav(kmap, nthread=nthread)
@@ -1013,67 +1013,6 @@ def get_fdw_noise_sim(sqrt_cov_wavs, seed, fdw_kernels, nthread=0,
     kmap = fdw_kernels.wav2k(wavs_sim, nthread=nthread)
 
     return kmap
-
-    omap = utils.irfft(kmap, n=fdw_kernels.shape[-1], nthread=nthread)
-
-    # filter omap
-    filt_omap = 0
-    if sqrt_cov_ell is not None:
-        if sqrt_ivars is not None:
-            if isinstance(ivar_filt, dict):
-                assert len(ivar_filt['ell_lows']) == len(sqrt_ivars) - 1
-
-                trans_profs = utils.get_ell_trans_profiles(
-                    ivar_filt['ell_lows'], ivar_filt['ell_highs'],
-                    profile=ivar_filt['profile'], dtype=omap.dtype
-                    )
-                
-                for i, trans_prof in trans_profs:
-                    prof_lmax = trans_prof.size - 1
-                    sqrt_ivar = sqrt_ivars[i]
-
-                    _filt_omap = utils.ell_filter_correlated(
-                        omap, 'map', sqrt_cov_ell[..., prof_lmax + 1]*trans_prof, lmax=prof_lmax
-                        )
-                    np.divide(1, sqrt_ivar, where=sqrt_ivar!=0, out=_filt_omap)
-                    filt_omap += _filt_omap
-
-            elif ivar_filt:
-                assert len(sqrt_ivars) == 0
-
-                lmax = sqrt_cov_ell.shape[-1] - 1
-                omap = utils.ell_filter_correlated(omap, 'map', sqrt_cov_ell, lmax=lmax)
-                np.divide(1, sqrt_ivars[0], where=sqrt_ivar!=0, out=_filt_omap)
-
-        else:
-            lmax = sqrt_cov_ell.shape[-1] - 1
-            omap = utils.ell_filter_correlated(omap, 'map', sqrt_cov_ell, lmax=lmax)
-
-    elif sqrt_ivars is not None:
-        if isinstance(ivar_filt, dict):
-            assert len(ivar_filt['ell_lows']) == len(sqrt_ivars) - 1
-
-            trans_profs = utils.get_ell_trans_profiles(
-                ivar_filt['ell_lows'], ivar_filt['ell_highs'],
-                profile=ivar_filt['profile'], dtype=omap.dtype
-                )
-            
-            for i, trans_prof in trans_profs:
-                prof_lmax = trans_prof.size - 1
-                sqrt_ivar = sqrt_ivars[i]
-
-                _filt_omap = utils.ell_filter_correlated(
-                    omap, 'map', trans_prof, lmax=prof_lmax
-                    )
-                np.divide(1, sqrt_ivar, where=sqrt_ivar!=0, out=_filt_omap)
-                filt_omap += _filt_omap
-
-        elif ivar_filt:
-            assert len(sqrt_ivars) == 0
-
-            np.divide(1, sqrt_ivars[0], where=sqrt_ivar!=0, out=_filt_omap)
-
-    return omap
 
 # follows pixell.enmap.write_hdf recipe for writing wcs information
 def write_wavs(fname, wavs, extra_attrs=None, extra_datasets=None):

@@ -61,4 +61,4 @@ for s in splits:
     for m in maps:
         model.get_sim(s, m, args.lmax, alm=args.alm, write=True, verbose=True)
     model.cache_clear('model')
-    model.cache_clear('ivar')
+    model.cache_clear('sqrt_ivar')

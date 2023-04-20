@@ -1720,7 +1720,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         # transform to filter inbasis
         basis = 'map'
-        key = (basis, filter_inbasis); print(key)
+        key = (basis, filter_inbasis)
         transform_func = transforms.REGISTERED_TRANSFORMS[key]
         inp = transform_func(
             inp, adjoint=False, verbose=verbose, **filter_kwargs
@@ -1728,13 +1728,13 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         basis = filter_inbasis
         
         # filter, which possibly changes basis and returns measured quantities.
-        inp, out = filter_func(inp, adjoint=False, verbose=verbose, **filter_kwargs); print(filter_inbasis, filter_outbasis)
+        inp, out = filter_func(inp, adjoint=False, verbose=verbose, **filter_kwargs)
 
         model_inbasis = cls.operatingbasis()
 
         # transform to class operating basis
         basis = filter_outbasis
-        key = (basis, model_inbasis); print(key)
+        key = (basis, model_inbasis)
         transform_func = transforms.REGISTERED_TRANSFORMS[key]
         inp = transform_func(
             inp, adjoint=False, verbose=verbose, **filter_kwargs
@@ -2002,7 +2002,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             basis = 'map'
         else:
             basis = cls.operatingbasis()
-        key = (basis, filter_inbasis); print(key)
+        key = (basis, filter_inbasis)
         transform_func = transforms.REGISTERED_TRANSFORMS[key]
         inp = transform_func(
             inp, adjoint=adjoint, verbose=verbose, **filter_kwargs
@@ -2010,7 +2010,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         basis = filter_inbasis
         
         # filter, which possibly changes basis but doesn't return measured quantities.
-        inp = filter_func(inp, adjoint=adjoint, verbose=verbose, **filter_kwargs); print(filter_inbasis, filter_outbasis)
+        inp = filter_func(inp, adjoint=adjoint, verbose=verbose, **filter_kwargs)
 
         if adjoint:
             final_basis = cls.operatingbasis()
@@ -2019,7 +2019,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         # transform to final basis
         basis = filter_outbasis
-        key = (basis, final_basis); print(key)
+        key = (basis, final_basis)
         transform_func = transforms.REGISTERED_TRANSFORMS[key]
         inp = transform_func(
             inp, adjoint=adjoint, verbose=verbose, **filter_kwargs

@@ -831,7 +831,7 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
 
     if inbasis == 'harmonic':
         inp = atleast_nd(inp, 2)
-        preshape = inshape[:-1]
+        preshape = inp.shape[:-1]
         ncomp = np.prod(preshape, dtype=int)
         inp = inp.reshape(ncomp, -1)
 
@@ -856,7 +856,7 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
                 )
 
         inp = atleast_nd(inp, 3)
-        preshape = inshape[:-2]
+        preshape = inp.shape[:-2]
         ncomp = np.prod(preshape, dtype=int)
         inp = inp.reshape(ncomp, -1)
 
