@@ -19,19 +19,19 @@ def test_wav_admissibility():
     assert np.mean(np.abs(a-1) < 5e-7)
 
 def test_wav_reconstruction():
-    shape = (2, 700, 700)
-    _, wcs = enmap.geometry([0,0], shape=shape, res=np.pi/180/30)
-    fk = fdw_noise.FDWKernels(1.8, 10_000, 10, 5300, 36, 2, shape, wcs,
-                                nforw=[0, 12, 12, 12, 12, 24, 24, 24, 24],
-                                nback=[18],
-                                pforw=[0, 12, 9, 6, 3, 24, 18, 12, 6],
-                                dtype=np.float32)
+    for shape in ((2, 700, 700), (403, 1031)):
+        _, wcs = enmap.geometry([0,0], shape=shape, res=np.pi/180/30)
+        fk = fdw_noise.FDWKernels(1.8, 10_000, 10, 5300, 36, 2, shape, wcs,
+                                    nforw=[0, 12, 12, 12, 12, 24, 24, 24, 24],
+                                    nback=[18],
+                                    pforw=[0, 12, 9, 6, 3, 24, 18, 12, 6],
+                                    dtype=np.float32)
 
-    rng = np.random.default_rng(0)
-    a = rng.standard_normal(shape, dtype=np.float32)
-    fa = utils.rfft(a)
-    wavs = fk.k2wav(fa)
-    fa2 = fk.wav2k(wavs) 
-    a2 = utils.irfft(fa2.copy(), n=shape[-1])
-    assert np.max(np.abs(a2-a) < 5e-6)
-    assert np.mean(np.abs(a2-a) < 5e-7)
+        rng = np.random.default_rng(0)
+        a = rng.standard_normal(shape, dtype=np.float32)
+        fa = utils.rfft(a)
+        wavs = fk.k2wav(fa)
+        fa2 = fk.wav2k(wavs) 
+        a2 = utils.irfft(fa2.copy(), n=shape[-1])
+        assert np.max(np.abs(a2-a) < 5e-6)
+        assert np.mean(np.abs(a2-a) < 5e-7)
