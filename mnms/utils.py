@@ -5,6 +5,7 @@ from enlib import array_ops
 from optweight import alm_c_utils
 
 import numpy as np
+import ducc0
 import matplotlib.pyplot as plt 
 from matplotlib import ticker
 from matplotlib.colors import LinearSegmentedColormap
@@ -17,6 +18,7 @@ from astropy.io import fits
 import yaml
 import h5py
 
+from itertools import product
 from concurrent import futures
 import multiprocessing
 import os
@@ -2194,6 +2196,18 @@ def chunked_eigpow(A, e, axes=[-2, -1], chunk_axis=0, target_gb=5, copy=False):
 
     return A
 
+def get_good_fft_bounds(target, primes):
+    primes = np.asarray(primes, dtype=int)
+    assert np.all(primes > 0)
+    
+    out = np.array([1], dtype=int)
+    oldsize, newsize = 0, (out <= target).sum()
+    while newsize > oldsize:
+        oldsize = newsize
+        out = np.union1d(out, np.array([np.prod(i, dtype=int) for i in product(out, primes)]))
+        newsize = (out <= target).sum()
+    return out[out <= target]
+
 # normalizations adapted from pixell.enmap
 def rfft(emap, kmap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
     """Perform a 'real'-FFT: an FFT over a real-valued function, such
@@ -2210,9 +2224,10 @@ def rfft(emap, kmap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
         The number of threads, by default 0.
         If 0, use output of get_cpu_count().
     normalize : bool, optional
-        The FFT normalization, by default True. If True, normalize 
-        using pixel number. If in ['phy', 'phys', 'physical'],
-        normalize by sky area.
+        The FFT normalization, by default 'ortho'. If 'backward', no
+        normalization is applied. If 'ortho', 1/sqrt(npix) normalization
+        is applied. If 'forward', 1/npix normalization is applied. If in
+        ['phy', 'phys', 'physical'], normalize by both 'ortho' and sky area.
     adjoint_ifft : bool, optional
         Whether to perform the adjoint FFT, by default False.
 
@@ -2222,28 +2237,38 @@ def rfft(emap, kmap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
         Half of the full FFT, sufficient to recover a real-valued
         function.
     """
-    res  = enmap.samewcs(
-        enfft.rfft(emap, kmap, axes=[-2, -1], nthread=nthread), emap
-        )
+    if adjoint_ifft:
+        raise NotImplementedError()
 
-    # array size norms
-    if normalize == 'forward':
-        norm = 1/np.prod(emap.shape[-2:])
-    elif normalize in ['ortho', 'phy', 'phys', 'physical']:
-        norm = 1/np.prod(emap.shape[-2:])**0.5
+    # store wcs if imap is ndmap
+    if hasattr(emap, 'wcs'):
+        is_enmap = True
+        wcs = emap.wcs
+        emap = np.asarray(emap) # need to remove wcs for ducc0 for some reason
     else:
-        norm = 1
+        is_enmap = False
 
+    if normalize in ['phy', 'phys', 'physical']:
+        inorm = 1
+    else:
+        inorm = ['backward', 'ortho', 'forward'].index(normalize)
+
+    res = ducc0.fft.r2c(
+        emap, out=kmap, axes=[-2, -1], nthreads=nthread, inorm=inorm, forward=True,
+        )
+    
     # phys norms
-    if normalize in ["phy","phys","physical"]:
-        if adjoint_ifft: norm /= emap.pixsize()**0.5
-        else:            norm *= emap.pixsize()**0.5
+    if normalize in ['phy', 'phys', 'physical']:
+        if adjoint_ifft:
+            res /= emap.pixsize()**0.5
+        else:
+            res *= emap.pixsize()**0.5
+    
+    if is_enmap:
+        res = enmap.ndmap(res, wcs)
 
-    if norm != 1:
-        res *= norm
     return res
 
-# NOTE: irfft overwrites the emap buffer!
 # normalizations adapted from pixell.enmap
 def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=False):
     """Perform a 'real'-iFFT: an iFFT to recover a real-valued function, 
@@ -2263,9 +2288,10 @@ def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=Fal
         The number of threads, by default 0.
         If 0, use output of get_cpu_count().
     normalize : bool, optional
-        The FFT normalization, by default True. If True, normalize 
-        using pixel number. If in ['phy', 'phys', 'physical'],
-        normalize by sky area.
+        The FFT normalization, by default 'ortho'. If 'forward', no
+        normalization is applied. If 'ortho', 1/sqrt(npix) normalization
+        is applied. If 'backward', 1/npix normalization is applied. If in
+        ['phy', 'phys', 'physical'], normalize by both 'ortho' and sky area.
     adjoint_fft : bool, optional
         Whether to perform the adjoint iFFT, by default False.
 
@@ -2274,25 +2300,40 @@ def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=Fal
     (..., ny, nx) ndmap
         A real-valued real-space map.
     """
-    res  = enmap.samewcs(
-        enfft.irfft(emap, omap, n=n, axes=[-2, -1], nthread=nthread, normalize=False), emap
+    if adjoint_fft:
+        raise NotImplementedError()
+
+    # store wcs if imap is ndmap
+    if hasattr(emap, 'wcs'):
+        is_enmap = True
+        wcs = emap.wcs
+        emap = np.asarray(emap) # need to remove wcs for ducc0 for some reason
+    else:
+        is_enmap = False
+
+    if normalize in ['phy', 'phys', 'physical']:
+        inorm = 1
+    else:
+        inorm = ['forward', 'ortho', 'backward'].index(normalize)
+
+    if n is None:
+        n = 2*(emap.shape[-1] - 1)    
+
+    res = ducc0.fft.c2r(
+        emap, out=omap, axes=[-2, -1], nthreads=nthread, inorm=inorm, forward=False,
+        lastsize=n
         )
     
-    # array size norms
-    if normalize == 'backward':
-        norm = 1/np.prod(res.shape[-2:])
-    elif normalize in ['ortho', 'phy', 'phys', 'physical']:
-        norm = 1/np.prod(res.shape[-2:])**0.5
-    else:
-        norm = 1
-
     # phys norms
-    if normalize in ["phy","phys","physical"]:
-        if adjoint_fft: norm *= emap.pixsize()**0.5
-        else:           norm /= emap.pixsize()**0.5
+    if normalize in ['phy', 'phys', 'physical']:
+        if adjoint_fft:
+            res /= emap.pixsize()**0.5
+        else:
+            res *= emap.pixsize()**0.5
+    
+    if is_enmap:
+        res = enmap.ndmap(res, wcs)
 
-    if norm != 1:
-        res *= norm
     return res
 
 def read_map(data_model, qid, split_num=0, coadd=False, ivar=False,
