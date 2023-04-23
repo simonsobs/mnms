@@ -2244,9 +2244,13 @@ def rfft(emap, kmap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
     if hasattr(emap, 'wcs'):
         is_enmap = True
         wcs = emap.wcs
-        emap = np.asarray(emap) # need to remove wcs for ducc0 for some reason
     else:
         is_enmap = False
+
+    # need to remove wcs for ducc0 for some reason
+    if kmap is not None:
+        kmap = np.asarray(kmap)
+    emap = np.asarray(emap)
 
     if normalize in ['phy', 'phys', 'physical']:
         inorm = 1
@@ -2257,15 +2261,15 @@ def rfft(emap, kmap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
         emap, out=kmap, axes=[-2, -1], nthreads=nthread, inorm=inorm, forward=True,
         )
     
+    if is_enmap:
+        res = enmap.ndmap(res, wcs)
+        
     # phys norms
     if normalize in ['phy', 'phys', 'physical']:
         if adjoint_ifft:
             res /= emap.pixsize()**0.5
         else:
             res *= emap.pixsize()**0.5
-    
-    if is_enmap:
-        res = enmap.ndmap(res, wcs)
 
     return res
 
@@ -2307,9 +2311,13 @@ def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=Fal
     if hasattr(emap, 'wcs'):
         is_enmap = True
         wcs = emap.wcs
-        emap = np.asarray(emap) # need to remove wcs for ducc0 for some reason
     else:
         is_enmap = False
+
+    # need to remove wcs for ducc0 for some reason
+    if omap is not None:
+        omap = np.asarray(omap)
+    emap = np.asarray(emap)
 
     if normalize in ['phy', 'phys', 'physical']:
         inorm = 1
@@ -2324,15 +2332,15 @@ def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=Fal
         lastsize=n
         )
     
+    if is_enmap:
+        res = enmap.ndmap(res, wcs)
+    
     # phys norms
     if normalize in ['phy', 'phys', 'physical']:
         if adjoint_fft:
             res /= emap.pixsize()**0.5
         else:
             res *= emap.pixsize()**0.5
-    
-    if is_enmap:
-        res = enmap.ndmap(res, wcs)
 
     return res
 
