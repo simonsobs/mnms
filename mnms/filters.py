@@ -118,21 +118,29 @@ def iso_harmonic_ivar_basic(alm, sqrt_ivar=1, sqrt_cov_ell=None, ainfo=None,
         adjoint=adjoint
         )
     
-    # need to handle that preshapes may not be the same (though should reshape)
-    # into one other correctly. this is akin to what happens in
-    # utils.ell_filter_correlated
+    # need to handle that preshapes may not be the same. this is akin to what 
+    # happens in utils.ell_filter_correlated, but specialized for diagonal
+    # ivar, in particular where we haven't already fully broadcast the ivar. 
+    # here, ivar is assumed to have a special preshape: any pre-components are
+    # assumed to be block values, broadcast "diagonally" over all elements in
+    # a block. the omap preshape must therefore be reshapable to (nblock, nelem).
+    # finally, note that by writing (nblock, nelem), we are assuming a "block-
+    # major" order for pre-components of omap
     oshape = omap.shape
+    omap = utils.atleast_nd(omap, 3)
     omap = utils.atleast_nd(omap, 3)
     ncomp = np.prod(omap.shape[:-2], dtype=int)
     omap = omap.reshape(ncomp, *omap.shape[-2:])
-
-    # sqrt_ivar might have different ncomp, but must broadcast (i.e., ncomp
-    # must be either same as ncomp above, or if not, one of the two must be
-    # 1). in fact, sqrt_ivar ncomp must be 1, so that omap/sqrt_ivar can
-    # still be written into omap
+    
     sqrt_ivar = utils.atleast_nd(sqrt_ivar, 3)
-    ncomp = np.prod(sqrt_ivar.shape[:-2], dtype=int)
-    sqrt_ivar = sqrt_ivar.reshape(ncomp, *sqrt_ivar.shape[-2:])
+    nblock = np.prod(sqrt_ivar.shape[:-2], dtype=int)
+    sqrt_ivar = sqrt_ivar.reshape(nblock, 1, *sqrt_ivar.shape[-2:])
+    
+    assert ncomp % nblock == 0, \
+        f'The ncomp of omap ({ncomp}) must evenly divide the nblock of' + \
+        f'sqrt_ivar ({nblock})'
+    
+    omap = omap.reshape(nblock, -1, *omap.shape[-2:])
 
     np.divide(
         omap, sqrt_ivar/post_filt_rel_downgrade, where=sqrt_ivar!=0, out=omap
