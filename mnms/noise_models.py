@@ -1590,7 +1590,13 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             dmap_from_cache = False
         dmap *= mask_obs
 
-        # update filter kwargs
+        # update filter kwargs. NOTE: we are passing lmax, mask_obs, mask_est,
+        # sqrt_ivar corresponding to pre_filt geometry, while shape, wcs, and
+        # n correspond to post_filt geometry. this implicitly assumes that any
+        # map-based or map2alm operations happen before any post_filt downgrading,
+        # while any alm2map or fourier2map operations happen after any post_filt
+        # downgrading. this may not be true in general for particular model+filter
+        # implementation combinations!
         filter_kwargs = dict(
             lmax=lmax, no_aliasing=True, shape=shape, wcs=wcs,
             dtype=self._dtype, n=shape[-1], nthread=0, normalize='ortho',
@@ -2092,67 +2098,125 @@ class TiledNoiseModel(BaseNoiseModel):
 
     def _read_model(self, fn):
         """Read a noise model with filename fn; return a dictionary of noise model variables"""
-        # read from disk
-        sqrt_cov_mat, _, extra_datasets = tiled_noise.read_tiled_ndmap(
-            fn, extra_datasets=['sqrt_cov_ell']
+        extra_datasets = ['sqrt_cov_ell'] if self._iso_filt_method else None
+
+        sqrt_cov_mat, _, extra_datasets_dict = tiled_noise.read_tiled_ndmap(
+            fn, extra_datasets=extra_datasets
         )
-        sqrt_cov_ell = extra_datasets['sqrt_cov_ell']
 
-        return {
-            'sqrt_cov_mat': sqrt_cov_mat,
-            'sqrt_cov_ell': sqrt_cov_ell
-            }
+        out = {'sqrt_cov_mat': sqrt_cov_mat}
 
-    def _get_model(self, dmap, lmax, mask_obs, mask_est, ivar, verbose):
+        if self._iso_filt_method:
+            sqrt_cov_ell = extra_datasets_dict['sqrt_cov_ell']
+            out.update({'sqrt_cov_ell': sqrt_cov_ell})
+
+        return out
+
+    def _get_model(self, dmap, iso_filt_method, ivar_filt_method,
+                   filter_kwargs, verbose):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
-        lmax_model = lmax // self._post_filt_rel_downgrade
-        downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax_model)
-        _, wcs = utils.downgrade_geometry_cc_quad(
-            self._full_shape, self._full_wcs, downgrade
+        mask_obs = filter_kwargs['mask_obs']
+        
+        out = self.__class__.get_model_static(
+            dmap, mask_obs=mask_obs, width_deg=self._width_deg, 
+            height_deg=self._height_deg, delta_ell_smooth=self._delta_ell_smooth,
+            nthread=0, iso_filt_method=iso_filt_method,
+            ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
+            verbose=verbose
             )
         
-        sqrt_cov_mat, sqrt_cov_ell = tiled_noise.get_tiled_noise_covsqrt(
-            dmap, lmax, mask_obs=mask_obs, mask_est=mask_est, ivar=ivar,
-            width_deg=self._width_deg, height_deg=self._height_deg,
-            delta_ell_smooth=self._delta_ell_smooth,
-            post_filt_rel_downgrade=self._post_filt_rel_downgrade,
-            post_filt_downgrade_wcs=wcs, nthread=0, verbose=verbose
-        )
+        return out
 
-        return {
-            'sqrt_cov_mat': sqrt_cov_mat,
-            'sqrt_cov_ell': sqrt_cov_ell
-            }
+    @classmethod
+    def get_model_static(cls, dmap, mask_obs=None, width_deg=4., height_deg=4.,
+                         delta_ell_smooth=400, nthread=0, iso_filt_method=None,
+                         ivar_filt_method=None, filter_kwargs=None,
+                         verbose=False):
+        dmap, filter_out = cls.filter_model(
+            dmap, iso_filt_method=iso_filt_method, 
+            ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
+            verbose=verbose
+            )
+        
+        # we can't assume that any mask_obs that had been applied to dmap
+        # persists after filtering, since e.g. an isotropic filter may smooth
+        # the map edge
+        if mask_obs is not None:
+            post_filt_rel_downgrade = filter_kwargs.get(
+                'post_filt_rel_downgrade', 1
+                )
+            mask_obs = utils.interpol_downgrade_cc_quad(
+                mask_obs, post_filt_rel_downgrade, dtype=dmap.dtype
+            )
+            mask_obs = utils.get_mask_bool(mask_obs, threshold=1.)
+
+            pix_deg_x, pix_deg_y = np.abs(dmap.wcs.wcs.cdelt)
+            
+            # the pixels per apodization width. need to instatiate tiled_ndmap
+            # just to get apod width
+            dmap = tiled_noise.tiled_ndmap(
+                dmap, width_deg=width_deg, height_deg=height_deg
+                )
+            pix_cross_x, pix_cross_y = dmap.pix_cross_x, dmap.pix_cross_y
+            dmap = dmap.to_ndmap()
+            width_deg_x, width_deg_y = pix_deg_x*pix_cross_x, pix_deg_y*pix_cross_y
+            width_deg_apod = np.sqrt((width_deg_x**2 + width_deg_y**2)/2)
+
+            # get apodized mask_obs
+            mask_obs = mask_obs.astype(bool, copy=False)
+            mask_obs = utils.cosine_apodize(mask_obs, width_deg_apod)
+            mask_obs = mask_obs.astype(dmap.dtype, copy=False)
+        
+        out = tiled_noise.get_tiled_noise_covsqrt(
+            dmap, mask_obs=mask_obs, width_deg=width_deg, height_deg=height_deg,
+            delta_ell_smooth=delta_ell_smooth, nthread=nthread, verbose=verbose
+            )
+        
+        assert len(filter_out.keys() & out.keys()) == 0, \
+            'filter outputs and model outputs overlap'
+        out.update(filter_out)
+        
+        return out
+    
+    @classmethod
+    def operatingbasis(cls):
+        return 'map'
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
         """Write a dictionary of noise model variables to filename fn"""
+        extra_datasets = {'sqrt_cov_ell': sqrt_cov_ell} if sqrt_cov_ell else None
+
         tiled_noise.write_tiled_ndmap(
-            fn, sqrt_cov_mat, extra_datasets={'sqrt_cov_ell': sqrt_cov_ell}
+            fn, sqrt_cov_mat, extra_datasets=extra_datasets
         )
 
-    def _get_sim(self, model_dict, seed, lmax, mask, ivar, verbose):
+    def _get_sim(self, sqrt_cov_mat, seed, iso_filt_method, ivar_filt_method,
+                 filter_kwargs, verbose):
         """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
-        # Get noise model variables 
-        sqrt_cov_mat = model_dict['sqrt_cov_mat']
-        sqrt_cov_ell = model_dict['sqrt_cov_ell']
-        
-        sim = tiled_noise.get_tiled_noise_sim(
-            sqrt_cov_mat, ivar=ivar, sqrt_cov_ell=sqrt_cov_ell, 
-            nthread=0, seed=seed, verbose=verbose
-        )
+        sim = self.__class__.get_sim_static(
+            sqrt_cov_mat, seed, nthread=0, iso_filt_method=iso_filt_method,
+            ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
+            verbose=verbose
+            )
         
         # We always want shape (num_arrays, num_splits=1, num_pol, ny, nx).
-        assert sim.ndim == 5, \
-            'Sim must have shape (num_arrays, num_splits=1, num_pol, ny, nx)'
+        return sim.reshape(self._num_arrays, 1, -1, *sim.shape[-2:])
 
-        if mask is not None:
-            sim *= mask
+    @classmethod
+    def get_sim_static(cls, sqrt_cov_mat, seed, nthread=0, 
+                       iso_filt_method=None, ivar_filt_method=None,
+                       filter_kwargs=None, verbose=False):
+        sim = tiled_noise.get_tiled_noise_sim(
+            sqrt_cov_mat, seed, nthread=nthread, verbose=verbose
+        )
+
+        sim = cls.filter(
+            sim, iso_filt_method=iso_filt_method,
+            ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
+            adjoint=False, verbose=verbose
+        )
+
         return sim
-
-    def _get_sim_alm(self, model_dict, seed, lmax, mask, ivar, verbose):
-        """Return a masked alm sim from model_dict, with seed <sequence of ints>"""
-        sim = self._get_sim(model_dict, seed, lmax, mask, ivar, verbose)
-        return utils.map2alm(sim, lmax=lmax)
 
 
 @register()
@@ -2459,15 +2523,19 @@ class FDWNoiseModel(BaseNoiseModel):
 
     def _read_model(self, fn):
         """Read a noise model with filename fn; return a dictionary of noise model variables"""
-        sqrt_cov_mat, _, extra_datasets = fdw_noise.read_wavs(
-            fn, extra_datasets=['sqrt_cov_ell']
+        extra_datasets = ['sqrt_cov_ell'] if self._iso_filt_method else None
+        
+        sqrt_cov_mat, _, extra_datasets_dict = fdw_noise.read_wavs(
+            fn, extra_datasets=extra_datasets
         )
-        sqrt_cov_ell = extra_datasets['sqrt_cov_ell']
 
-        return {
-            'sqrt_cov_mat': sqrt_cov_mat,
-            'sqrt_cov_ell': sqrt_cov_ell
-            }
+        out = {'sqrt_cov_mat': sqrt_cov_mat}
+
+        if self._iso_filt_method:
+            sqrt_cov_ell = extra_datasets_dict['sqrt_cov_ell']
+            out.update({'sqrt_cov_ell': sqrt_cov_ell})
+
+        return out
 
     def _get_model(self, dmap, iso_filt_method, ivar_filt_method,
                    filter_kwargs, verbose):
@@ -2514,9 +2582,9 @@ class FDWNoiseModel(BaseNoiseModel):
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
         """Write a dictionary of noise model variables to filename fn"""
-        fdw_noise.write_wavs(
-            fn, sqrt_cov_mat, extra_datasets={'sqrt_cov_ell': sqrt_cov_ell}
-        )
+        extra_datasets = {'sqrt_cov_ell': sqrt_cov_ell} if sqrt_cov_ell else None
+        
+        fdw_noise.write_wavs(fn, sqrt_cov_mat, extra_datasets=extra_datasets)
 
     def _get_sim(self, sqrt_cov_mat, seed, iso_filt_method, ivar_filt_method,
                  filter_kwargs, verbose):

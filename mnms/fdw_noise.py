@@ -896,13 +896,13 @@ def get_fdw_noise_covsqrt(kmap, fdw_kernels, fwhm_fact=2, nthread=0, verbose=Tru
     Returns
     -------
     dict
-        A dictionary holding wavelet maps of the square-root covariance, 
-        indexed by the wavelet key (radial index, azimuthal index).
+        A dictionary holding a dictionary of wavelet maps of the square-root
+        covariance, indexed by the wavelet key (radial index, azimuthal index).
 
     Notes
     -----
-    All dimensions of imap preceding the last two (i.e. pixel) will be
-    covaried against themselves. For example, if imap has axes corresponding
+    All dimensions of kmap preceding the last two (i.e. pixel) will be
+    covaried against themselves. For example, if kmap has axes corresponding
     to (arr, pol, y, x), the covariance will have axes corresponding to
     (arr, pol, arr, pol, y, x) in each wavelet map. To be precise, the
     preceding axes will be flattened in the output. In other words, the axes
