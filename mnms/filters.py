@@ -304,10 +304,9 @@ def iso_harmonic_ivar_basic(alm, sqrt_ivar=1, sqrt_cov_ell=None, ainfo=None,
         f'sqrt_ivar ({nblock})'
     
     omap = omap.reshape(nblock, -1, *omap.shape[-2:])
-
-    np.divide(
-        omap, sqrt_ivar/post_filt_rel_downgrade, where=sqrt_ivar!=0, out=omap
-        )
+    np.divide(omap, sqrt_ivar, where=sqrt_ivar!=0, out=omap)
+    if post_filt_rel_downgrade != 1:
+        omap *= post_filt_rel_downgrade
     return omap.reshape(oshape)
 
 @register('map', 'map', iso_filt_method='harmonic', ivar_filt_method='scaledep', model=True)
@@ -474,7 +473,10 @@ def iso_harmonic_ivar_scaledep(alm, sqrt_cov_ell=None, sqrt_ivar=1,
             sqrt_cov_ell=sqrt_cov_ell[..., :lmaxi + 1]*prof,
             ainfo=None, lmax=lmaxi, inplace=False, shape=shape, wcs=wcs,
             no_aliasing=no_aliasing, adjoint=adjoint,
-            post_filt_rel_downgrade=post_filt_rel_downgrade
+            post_filt_rel_downgrade=1 # one multiplication instead of many to speed up
         )
-        
+    
+    # one multiplication instead of many to speed up
+    if post_filt_rel_downgrade != 1:
+        filt_omap *= post_filt_rel_downgrade
     return filt_omap

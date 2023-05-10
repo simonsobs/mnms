@@ -1894,8 +1894,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         # get the sim
         with bench.show(f'Generating noise sim for {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)}'):
             sim = self._get_sim(
-                model_dict['sqrt_cov_mat'], seed, self._iso_filt_method,
-                self._ivar_filt_method, filter_kwargs, verbose
+                model_dict, seed, self._iso_filt_method, self._ivar_filt_method,
+                filter_kwargs, verbose
                 )
             sim *= mask_obs
             if alm:
@@ -1978,7 +1978,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         return utils.get_seed(*(split_num, sim_num, self.name, *self._qids))
 
     @abstractmethod
-    def _get_sim(self, sqrt_cov_mat, seed, iso_filt_method, ivar_filt_method,
+    def _get_sim(self, model_dict, seed, iso_filt_method, ivar_filt_method,
                  filter_kwargs, verbose):
         """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
         return enmap.ndmap
@@ -2190,9 +2190,11 @@ class TiledNoiseModel(BaseNoiseModel):
             fn, sqrt_cov_mat, extra_datasets=extra_datasets
         )
 
-    def _get_sim(self, sqrt_cov_mat, seed, iso_filt_method, ivar_filt_method,
+    def _get_sim(self, model_dict, seed, iso_filt_method, ivar_filt_method,
                  filter_kwargs, verbose):
         """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
+        sqrt_cov_mat = model_dict['sqrt_cov_mat']
+        
         sim = self.__class__.get_sim_static(
             sqrt_cov_mat, seed, nthread=0, iso_filt_method=iso_filt_method,
             ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
@@ -2223,8 +2225,8 @@ class TiledNoiseModel(BaseNoiseModel):
 class WaveletNoiseModel(BaseNoiseModel):
 
     def __init__(self, *qids, lamb=1.3, w_lmin=10, w_lmax_j=5300,
-                 smooth_loc=False, fwhm_fact_pt1=[1350, 10.],
-                 fwhm_fact_pt2=[5400, 16.], **kwargs):
+                 fwhm_fact_pt1=[1350, 10.], fwhm_fact_pt2=[5400, 16.],
+                 **kwargs):
         """A WaveletNoiseModel object supports drawing simulations which capture scale-dependent, 
         spatially-varying map depth. They also capture the total noise power spectrum, and 
         array-array correlations.
@@ -2237,9 +2239,6 @@ class WaveletNoiseModel(BaseNoiseModel):
             Scale at which Phi (scaling) wavelet terminates.
         w_lmax_j: int, optional
             Scale at which Omega (high-ell) wavelet begins.
-        smooth_loc : bool, optional
-            If passed, use smoothing kernel that varies over the map, smaller along edge of 
-            mask, by default False.
         fwhm_fact_pt1 : (int, float), optional
             First point in building piecewise linear function of ell. Function gives factor
             determining smoothing scale at each wavelet scale: FWHM = fact * pi / lmax,
@@ -2273,7 +2272,6 @@ class WaveletNoiseModel(BaseNoiseModel):
         self._lamb = lamb
         self._w_lmin = w_lmin
         self._w_lmax_j = w_lmax_j
-        self._smooth_loc = smooth_loc
         self._fwhm_fact_pt1 = list(fwhm_fact_pt1)
         self._fwhm_fact_pt2 = list(fwhm_fact_pt2)
         self._fwhm_fact_func = utils.get_fwhm_fact_func_from_pts(
@@ -2284,6 +2282,8 @@ class WaveletNoiseModel(BaseNoiseModel):
         # accesses this subclass's _model_param_dict which requires those
         # attributes to exist
         super().__init__(*qids, **kwargs)
+
+        self._w_ell_dict = {}
 
     @property
     def name(self):
@@ -2297,85 +2297,130 @@ class WaveletNoiseModel(BaseNoiseModel):
             lamb=self._lamb,
             w_lmin=self._w_lmin,
             w_lmax_j=self._w_lmax_j,
-            smooth_loc=self._smooth_loc,
             fwhm_fact_pt1=self._fwhm_fact_pt1,
             fwhm_fact_pt2=self._fwhm_fact_pt2
         )
 
+    def _get_kernels(self, lmax):
+        """Build the kernels. These are passed to various methods for a given
+        lmax and so we only call it in the first call to _get_model or
+        _get_sim."""
+        # If lmax <= 5400, lmax_j will usually be lmax-100; else, capped at 5300
+        # so that white noise floor is described by a single (omega) wavelet
+        w_lmax_j = min(max(lmax - 100, self._w_lmin), self._w_lmax_j)
+        w_ell, _ = wav_noise.wlm_utils.get_sd_kernels(
+            self._lamb, lmax, lmin=self._w_lmin, lmax_j=w_lmax_j
+            )
+        return w_ell
+
     def _read_model(self, fn):
         """Read a noise model with filename fn; return a dictionary of noise model variables"""
-        # read from disk
+        extra_datasets = ['sqrt_cov_ell'] if self._iso_filt_method else None
+
         sqrt_cov_mat, model_dict = wavtrans.read_wav(
-            fn, extra=['sqrt_cov_ell', 'w_ell']
+            fn, extra=extra_datasets
         )
+
         model_dict['sqrt_cov_mat'] = sqrt_cov_mat
         
         return model_dict
 
-    def _get_model(self, dmap, lmax, mask_obs, mask_est, ivar, verbose):
-        """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
-        # method assumes 4d dmap
-        sqrt_cov_mat, sqrt_cov_ell, w_ell = wav_noise.estimate_sqrt_cov_wav_from_enmap(
-            dmap.squeeze(axis=-4), lmax, mask_obs, mask_est, lamb=self._lamb, 
-            w_lmin=self._w_lmin, w_lmax_j=self._w_lmax_j,
-            smooth_loc=self._smooth_loc, fwhm_fact=self._fwhm_fact_func
+    def _get_model(self, dmap, iso_filt_method, ivar_filt_method,
+                   filter_kwargs, verbose):
+        """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""        
+        lmax_model = filter_kwargs['lmax'] // filter_kwargs['post_filt_rel_downgrade']
+        
+        if lmax_model not in self._w_ell_dict:
+            print('Building and storing wavelet kernels')
+            self._w_ell_dict[lmax_model] = self._get_kernels(lmax_model)
+        w_ell = self._w_ell_dict[lmax_model]
+        
+        out = self.__class__.get_model_static(
+            dmap, w_ell, fwhm_fact=self._fwhm_fact_func,
+            iso_filt_method=iso_filt_method, ivar_filt_method=ivar_filt_method,
+            filter_kwargs=filter_kwargs, verbose=verbose
         )
 
-        return {
-            'sqrt_cov_mat': sqrt_cov_mat,
-            'sqrt_cov_ell': sqrt_cov_ell,
-            'w_ell': w_ell
-            }
+        return out
 
-    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, w_ell=None, **kwargs):
+    @classmethod
+    def get_model_static(cls, dmap, w_ell, fwhm_fact=2, iso_filt_method=None,
+                         ivar_filt_method=None, filter_kwargs=None,
+                         verbose=False):
+        assert filter_kwargs.get('post_filt_rel_downgrade', 1) == 1, \
+            f"post_filt_rel_downgrade must be 1, got {filter_kwargs['post_filt_rel_downgrade']}"
+
+        alm, filter_out = cls.filter_model(
+            dmap, iso_filt_method=iso_filt_method, 
+            ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
+            verbose=verbose
+            )
+
+        # squeeze alm dims, alm.ndim must be <= 3 after doing this, see
+        # wav_noise.estimate_sqrt_cov_wav_from_enmap
+        out = wav_noise.estimate_sqrt_cov_wav_from_enmap(
+            alm.squeeze(), w_ell, dmap.shape, dmap.wcs, fwhm_fact=fwhm_fact, 
+            verbose=verbose
+            )
+        
+        assert len(filter_out.keys() & out.keys()) == 0, \
+            'filter outputs and model outputs overlap'
+        out.update(filter_out)
+        
+        return out
+
+    @classmethod
+    def operatingbasis(cls):
+        return 'harmonic'
+
+    def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
         """Write a dictionary of noise model variables to filename fn"""
+        extra_datasets = {'sqrt_cov_ell': sqrt_cov_ell} if sqrt_cov_ell else None
+        
         wavtrans.write_wav(
             fn, sqrt_cov_mat, symm_axes=[[0, 1], [2, 3]],
-            extra={'sqrt_cov_ell': sqrt_cov_ell, 'w_ell': w_ell}
+            extra=extra_datasets
         )
 
-    def _get_sim(self, model_dict, seed, lmax, mask, ivar, verbose):
+    def _get_sim(self, model_dict, seed, iso_filt_method, ivar_filt_method,
+                 filter_kwargs, verbose):
         """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
-        downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
-        shape, wcs = utils.downgrade_geometry_cc_quad(
-            self._full_shape, self._full_wcs, downgrade
-            )
-        
-        # pass mask = None first to strictly generate alm, only mask if necessary
-        alm = self._get_sim_alm(model_dict, seed, lmax, None, ivar, verbose)
-        sim = utils.alm2map(alm, shape=shape, wcs=wcs, dtype=self._dtype)
-        if mask is not None:
-            sim *= mask
-        return sim
-
-    def _get_sim_alm(self, model_dict, seed, lmax, mask, ivar, verbose):
-        """Return a masked alm sim from model_dict, with seed <sequence of ints>"""
-        # Get noise model variables. 
         sqrt_cov_mat = model_dict['sqrt_cov_mat']
-        sqrt_cov_ell = model_dict['sqrt_cov_ell']
-        w_ell = model_dict['w_ell']
+        lmax = filter_kwargs['lmax']
 
-        alm, ainfo = wav_noise.rand_alm_from_sqrt_cov_wav(
-            sqrt_cov_mat, sqrt_cov_ell, lmax, w_ell,
-            dtype=np.result_type(1j, self._dtype), seed=seed,
-            nthread=0
+        if lmax not in self._w_ell_dict:
+            print('Building and storing wavelet kernels')
+            self._w_ell_dict[lmax] = self._get_kernels(lmax)
+        w_ell = self._w_ell_dict[lmax]
+
+        sim = self.__class__.get_sim_static(
+            sqrt_cov_mat, seed, w_ell, nthread=0, iso_filt_method=iso_filt_method,
+            ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
+            verbose=verbose
             )
 
-        # We always want shape (num_arrays, num_splits=1, num_pol, nelem).
-        assert alm.ndim == 3, 'Alm must have shape (num_arrays, num_pol, nelem)'
-        alm = alm.reshape(alm.shape[0], 1, *alm.shape[1:])
+        # We always want shape (num_arrays, num_splits=1, num_pol, ny, nx).
+        return sim.reshape(self._num_arrays, 1, -1, *sim.shape[-2:]) 
 
-        if mask is not None:
-            downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
-            shape, wcs = utils.downgrade_geometry_cc_quad(
-                self._full_shape, self._full_wcs, downgrade
-                )
-            sim = utils.alm2map(alm, shape=shape, wcs=wcs, dtype=self._dtype)
-            sim *= mask
-            utils.map2alm(sim, alm=alm, ainfo=ainfo)
-        
-        return alm      
+    @classmethod
+    def get_sim_static(cls, sqrt_cov_mat, seed, w_ell, nthread=0, 
+                       iso_filt_method=None, ivar_filt_method=None,
+                       filter_kwargs=None, verbose=False):
+        assert filter_kwargs.get('post_filt_rel_downgrade', 1) == 1, \
+            f"post_filt_rel_downgrade must be 1, got {filter_kwargs['post_filt_rel_downgrade']}"
 
+        sim = wav_noise.rand_alm_from_sqrt_cov_wav(
+            sqrt_cov_mat, seed, w_ell, nthread=nthread, verbose=verbose
+            )
+
+        sim = cls.filter(
+            sim, iso_filt_method=iso_filt_method,
+            ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
+            adjoint=False, verbose=verbose
+        )
+
+        return sim
+    
 
 @register()
 class FDWNoiseModel(BaseNoiseModel):
@@ -2586,9 +2631,10 @@ class FDWNoiseModel(BaseNoiseModel):
         
         fdw_noise.write_wavs(fn, sqrt_cov_mat, extra_datasets=extra_datasets)
 
-    def _get_sim(self, sqrt_cov_mat, seed, iso_filt_method, ivar_filt_method,
+    def _get_sim(self, model_dict, seed, iso_filt_method, ivar_filt_method,
                  filter_kwargs, verbose):
         """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
+        sqrt_cov_mat = model_dict['sqrt_cov_mat']
         lmax = filter_kwargs['lmax']
         
         if lmax not in self._fk_dict:

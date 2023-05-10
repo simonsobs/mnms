@@ -717,6 +717,7 @@ def get_ps_mat(inp, outbasis, e, inbasis='harmonic', mask_est=None,
                         continue
                     seen_pairs.append((preidx1, preidx2))
 
+                    # technically this paints E, B over Q, U
                     ell_func = interp1d(
                         np.arange(lmax+1), mat[(*preidx1, *preidx2)], bounds_error=False, 
                         fill_value=(0, mat[(*preidx1, *preidx2, -1)])
