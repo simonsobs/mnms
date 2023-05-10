@@ -1709,11 +1709,43 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     @abstractmethod
     def get_model_static(cls, dmap, iso_filt_method=None, ivar_filt_method=None,
                          filter_kwargs=None, verbose=False, **kwargs):
+        """Get the square-root covariance in the operating basis given an input
+        mean-0 map. Allows filtering the input map prior to tiling transform."""
         return {}
     
     @classmethod
     def filter_model(cls, inp, iso_filt_method=None, ivar_filt_method=None,
                      filter_kwargs=None, verbose=False):
+        """Filters input in preparation for model-measuring. First transforms
+        from map to filter basis, applies the filter, and then transforms 
+        from filter to operating basis of the NoiseModel.
+
+        Parameters
+        ----------
+        inp : (..., ny, nx) enmap.ndmap
+            Input map to be filtered.
+        iso_filt_method : str, optional
+            The isotropic scale-dependent filtering method, by default None.
+            Together with ivar_filt_method, selects the filter applied to input.
+            See the registered functions in filters.py.
+        ivar_filt_method : str, optional
+            The position-dependent filtering method, by default None. Together
+            with iso_filt_method, selects the filter applied to input. See the
+            registered functions in filters.py.
+        filter_kwargs : dict, optional
+            Additional kwargs passed to the transforms and filter, by default
+            None. Which arguments, and their effects, depend on the transform
+            and filter function.
+        verbose : bool, optional
+            Print possibly helpful messages, by default False.
+
+        Returns
+        -------
+        array-like, dict
+            The filtered input in the operating basis of the NoiseModel. A 
+            dictionary holding any quantities measured from the data during
+            the filtering.
+        """
         # get the filter function and its bases
         key = frozenset(
             dict(
@@ -1752,6 +1784,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     @classmethod
     @abstractmethod
     def operatingbasis(cls):
+        """The basis in which the tiling transform takes place."""
         return ''
 
     @abstractmethod
@@ -1988,11 +2021,44 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     def get_sim_static(cls, sqrt_cov_mat, seed, iso_filt_method=None,
                        ivar_filt_method=None, filter_kwargs=None, verbose=False,
                        **kwargs):
+        """Draw a realization from the square-root covariance in the operating
+        basis. Allows filtering the output map after the tiling transform."""
         return enmap.ndmap
 
     @classmethod
     def filter(cls, inp, iso_filt_method=None, ivar_filt_method=None,
                filter_kwargs=None, adjoint=False, verbose=False):
+        """Filters input as finalization in drawing sims. First transforms
+        from operating to filter basis, applies the filter, and then
+        transforms from filter to map basis.
+
+        Parameters
+        ----------
+        inp : array-like
+            The input in the operating basis of the NoiseModel.
+        iso_filt_method : str, optional
+            The isotropic scale-dependent filtering method, by default None.
+            Together with ivar_filt_method, selects the filter applied to input.
+            See the registered functions in filters.py.
+        ivar_filt_method : str, optional
+            The position-dependent filtering method, by default None. Together
+            with iso_filt_method, selects the filter applied to input. See the
+            registered functions in filters.py.
+        filter_kwargs : dict, optional
+            Additional kwargs passed to the transforms and filter, by default
+            None. Which arguments, and their effects, depend on the transform
+            and filter function.
+        adjoint : bool, optional
+            Whether to apply adjoint transforms, by default False.
+        verbose : bool, optional
+            Print possibly helpful messages, by default False.
+
+        Returns
+        -------
+        (..., ny, nx) enmap.ndmap
+            The simulation. Geometry information is necessarily provided in
+            filter_kwargs.
+        """
         # get the filter function and its bases
         key = frozenset(
             dict(
@@ -2132,6 +2198,50 @@ class TiledNoiseModel(BaseNoiseModel):
                          delta_ell_smooth=400, nthread=0, iso_filt_method=None,
                          ivar_filt_method=None, filter_kwargs=None,
                          verbose=False):
+        """Get the square-root covariance in the tiled basis given an input
+        mean-0 map. Allows filtering the input map prior to tiling transform.
+
+        Parameters
+        ----------
+        dmap : (*preshape, ny, nx) enmap.ndmap
+            Input mean-0 map.
+        mask_obs : (ny, nx) enmap.ndmap, optional
+            The observed pixels in dmap, by default None. If passed, its edges
+            will be apodized by the tile apodization before being reapplied to
+            dmap.
+        width_deg : scalar, optional
+            The characteristic tile width in degrees, by default 4.
+        height_deg : scalar, optional
+            The characteristic tile height in degrees, by default 4.
+        delta_ell_smooth : int, optional
+            The smoothing scale in Fourier space, by default 400.
+        nthread : int, optional
+            Number of concurrent threads to use in the tiling transform, by
+            default 0. If 0, the result of utils.get_cpu_count(). Note, this is
+            distinct from the parameter of the same name that may be passed as
+            a filter_kwarg, which is only used in filtering.
+        iso_filt_method : str, optional
+            The isotropic scale-dependent filtering method, by default None.
+            Together with ivar_filt_method, selects the filter applied to dmap
+            prior to the tiling transform. See the registered functions in
+            filters.py.
+        ivar_filt_method : str, optional
+            The position-dependent filtering method, by default None. Together
+            with iso_filt_method, selects the filter applied to dmap prior to
+            the tiling transform. See the registered functions in filters.py.
+        filter_kwargs : dict, optional
+            Additional kwargs passed to the transforms and filter, by default
+            None. Which arguments, and their effects, depend on the transform
+            and filter function.
+        verbose : bool, optional
+            Print possibly helpful messages, by default False.
+
+        Returns
+        -------
+        dict
+            A dictionary holding the tiled square-root covariance in addition
+            to any other quantities measured during filtering.
+        """
         dmap, filter_out = cls.filter_model(
             dmap, iso_filt_method=iso_filt_method, 
             ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
@@ -2180,6 +2290,7 @@ class TiledNoiseModel(BaseNoiseModel):
     
     @classmethod
     def operatingbasis(cls):
+        """The basis in which the tiling transform takes place."""
         return 'map'
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
@@ -2208,6 +2319,42 @@ class TiledNoiseModel(BaseNoiseModel):
     def get_sim_static(cls, sqrt_cov_mat, seed, nthread=0, 
                        iso_filt_method=None, ivar_filt_method=None,
                        filter_kwargs=None, verbose=False):
+        """Draw a realization from the square-root covariance in the tiled
+        basis. Allows filtering the output map after the tiling transform.
+
+        Parameters
+        ----------
+        sqrt_cov_mat : (*preshape, *preshape, nky, nkx) tiled_noise.tiled_ndmap
+            The tiled Fourier square-root covariance matrix.
+        seed : iterable of ints
+            Seed for random draw.
+        nthread : int, optional
+            Number of concurrent threads to use in the tiling transform, by
+            default 0. If 0, the result of utils.get_cpu_count(). Note, this is
+            distinct from the parameter of the same name that may be passed as
+            a filter_kwarg, which is only used in filtering.
+        iso_filt_method : str, optional
+            The isotropic scale-dependent filtering method, by default None.
+            Together with ivar_filt_method, selects the filter applied to sim
+            after the tiling transform. See the registered functions in
+            filters.py.
+        ivar_filt_method : str, optional
+            The position-dependent filtering method, by default None. Together
+            with iso_filt_method, selects the filter applied to sim after
+            the tiling transform. See the registered functions in filters.py.
+        filter_kwargs : dict, optional
+            Additional kwargs passed to the transforms and filter, by default
+            None. Which arguments, and their effects, depend on the transform
+            and filter function.
+        verbose : bool, optional
+            Print possibly helpful messages, by default False.
+
+        Returns
+        -------
+        (*preshape, nky, 2*(nkx - 1)) enmap.ndmap
+            The simulation. Geometry information is necessarily provided in
+            filter_kwargs.
+        """
         sim = tiled_noise.get_tiled_noise_sim(
             sqrt_cov_mat, seed, nthread=nthread, verbose=verbose
         )
@@ -2347,6 +2494,51 @@ class WaveletNoiseModel(BaseNoiseModel):
     def get_model_static(cls, dmap, w_ell, fwhm_fact=2, iso_filt_method=None,
                          ivar_filt_method=None, filter_kwargs=None,
                          verbose=False):
+        """Get the square-root covariance in the isotropic wavelet basis given
+        an input mean-0 map. Allows filtering the input map prior to tiling
+        transform.
+
+        Parameters
+        ----------
+        dmap : (*preshape, ny, nx) enmap.ndmap
+            Input mean-0 map.
+        w_ell : (nwav, nell) array-like
+            Wavelet kernels defined over ell. If lmax or ainfo is provided as
+            a filter_kwarg, it must match nell-1.
+        fwhm_fact : scalar or callable, optional
+            Factor determining smoothing scale at each wavelet scale:
+            FWHM = fact * pi / lmax, where lmax is the max wavelet ell., 
+            by default 2. Can also be a function specifying this factor
+            for a given ell. Function must accept a single scalar ell
+            value and return one.
+        iso_filt_method : str, optional
+            The isotropic scale-dependent filtering method, by default None.
+            Together with ivar_filt_method, selects the filter applied to dmap
+            prior to the tiling transform. See the registered functions in
+            filters.py.
+        ivar_filt_method : str, optional
+            The position-dependent filtering method, by default None. Together
+            with iso_filt_method, selects the filter applied to dmap prior to
+            the tiling transform. See the registered functions in filters.py.
+        filter_kwargs : dict, optional
+            Additional kwargs passed to the transforms and filter, by default
+            None. Which arguments, and their effects, depend on the transform
+            and filter function.
+        verbose : bool, optional
+            Print possibly helpful messages, by default False.
+
+        Returns
+        -------
+        dict
+            A dictionary holding the wavelet square-root covariance in addition
+            to any other quantities measured during filtering.
+
+        Notes
+        -----
+        Any singleton dimensions are squeezed out of the preshape. Thereafter,
+        the preshape is always padded with ones as necessary to be two elements
+        long.
+        """
         assert filter_kwargs.get('post_filt_rel_downgrade', 1) == 1, \
             f"post_filt_rel_downgrade must be 1, got {filter_kwargs['post_filt_rel_downgrade']}"
 
@@ -2371,6 +2563,7 @@ class WaveletNoiseModel(BaseNoiseModel):
 
     @classmethod
     def operatingbasis(cls):
+        """The basis in which the tiling transform takes place."""
         return 'harmonic'
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
@@ -2406,6 +2599,46 @@ class WaveletNoiseModel(BaseNoiseModel):
     def get_sim_static(cls, sqrt_cov_mat, seed, w_ell, nthread=0, 
                        iso_filt_method=None, ivar_filt_method=None,
                        filter_kwargs=None, verbose=False):
+        """Draw a realization from the square-root covariance in the isotropic
+        wavelet basis. Allows filtering the output map after the tiling
+        transform.
+
+        Parameters
+        ----------
+        sqrt_cov_mat : (nwav, nwav) wavtrans.Wav
+            Diagonal block square-root covariance matrix of flattened noise. 
+        seed : iterable of ints
+            Seed for random draw.
+        w_ell : (nwav, nell) array-like
+            Wavelet kernels defined over ell. If lmax or ainfo is provided as
+            a filter_kwarg, it must match nell-1.
+        nthread : int, optional
+            Number of concurrent threads to use in drawing random numbers, by
+            default 0. If 0, the result of utils.get_cpu_count(). Note, this is
+            distinct from the parameter of the same name that may be passed as
+            a filter_kwarg, which is only used in filtering.
+        iso_filt_method : str, optional
+            The isotropic scale-dependent filtering method, by default None.
+            Together with ivar_filt_method, selects the filter applied to dmap
+            prior to the tiling transform. See the registered functions in
+            filters.py.
+        ivar_filt_method : str, optional
+            The position-dependent filtering method, by default None. Together
+            with iso_filt_method, selects the filter applied to dmap prior to
+            the tiling transform. See the registered functions in filters.py.
+        filter_kwargs : dict, optional
+            Additional kwargs passed to the transforms and filter, by default
+            None. Which arguments, and their effects, depend on the transform
+            and filter function.
+        verbose : bool, optional
+            Print possibly helpful messages, by default False.
+
+        Returns
+        -------
+        (*preshape, ny, nx) enmap.ndmap
+            The simulation. Geometry information is necessarily provided in
+            filter_kwargs.
+        """
         assert filter_kwargs.get('post_filt_rel_downgrade', 1) == 1, \
             f"post_filt_rel_downgrade must be 1, got {filter_kwargs['post_filt_rel_downgrade']}"
 
@@ -2604,6 +2837,51 @@ class FDWNoiseModel(BaseNoiseModel):
     def get_model_static(cls, dmap, fdw_kernels, fwhm_fact=2, nthread=0, 
                          iso_filt_method=None, ivar_filt_method=None,
                          filter_kwargs=None, verbose=False):
+        """Get the square-root covariance in the directional wavelet basis given
+        an input mean-0 map. Allows filtering the input map prior to tiling
+        transform.
+
+        Parameters
+        ----------
+        dmap : (*preshape, ny, nx) enmap.ndmap
+            Input mean-0 map.
+        fdw_kernels : fdw_noise.FDWKernels
+            A set of Fourier steerable anisotropic wavelets, allowing users to
+            analyze/synthesize maps by simultaneous scale-, direction-, and 
+            location-dependence of information.
+        fwhm_fact : scalar or callable, optional
+            Factor determining smoothing scale at each wavelet scale:
+            FWHM = fact * pi / lmax, where lmax is the max wavelet ell., 
+            by default 2. Can also be a function specifying this factor
+            for a given ell. Function must accept a single scalar ell
+            value and return one.
+        nthread : int, optional
+            Number of concurrent threads to use in the tiling transform, by
+            default 0. If 0, the result of utils.get_cpu_count(). Note, this is
+            distinct from the parameter of the same name that may be passed as
+            a filter_kwarg, which is only used in filtering.
+        iso_filt_method : str, optional
+            The isotropic scale-dependent filtering method, by default None.
+            Together with ivar_filt_method, selects the filter applied to dmap
+            prior to the tiling transform. See the registered functions in
+            filters.py.
+        ivar_filt_method : str, optional
+            The position-dependent filtering method, by default None. Together
+            with iso_filt_method, selects the filter applied to dmap prior to
+            the tiling transform. See the registered functions in filters.py.
+        filter_kwargs : dict, optional
+            Additional kwargs passed to the transforms and filter, by default
+            None. Which arguments, and their effects, depend on the transform
+            and filter function.
+        verbose : bool, optional
+            Print possibly helpful messages, by default False.
+
+        Returns
+        -------
+        dict
+            A dictionary holding the wavelet square-root covariance in addition
+            to any other quantities measured during filtering.
+        """
         kmap, filter_out = cls.filter_model(
             dmap, iso_filt_method=iso_filt_method, 
             ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
@@ -2623,6 +2901,7 @@ class FDWNoiseModel(BaseNoiseModel):
     
     @classmethod
     def operatingbasis(cls):
+        """The basis in which the tiling transform takes place."""
         return 'fourier'
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
@@ -2655,6 +2934,46 @@ class FDWNoiseModel(BaseNoiseModel):
     def get_sim_static(cls, sqrt_cov_mat, seed, fdw_kernels, nthread=0, 
                        iso_filt_method=None, ivar_filt_method=None,
                        filter_kwargs=None, verbose=False):
+        """Draw a realization from the square-root covariance in the directional
+        wavelet basis. Allows filtering the output map after the tiling
+        transform.
+
+        Parameters
+        ----------
+        sqrt_cov_wavs : dict
+            A dictionary holding wavelet maps of the square-root covariance, 
+            indexed by the wavelet key (radial index, azimuthal index).
+        fdw_kernels : FDWKernels
+            A set of Fourier steerable anisotropic wavelets, allowing users to
+            analyze/synthesize maps by simultaneous scale-, direction-, and 
+            location-dependence of information.
+        nthread : int, optional
+            Number of concurrent threads to use in the tiling transform, by
+            default 0. If 0, the result of utils.get_cpu_count(). Note, this is
+            distinct from the parameter of the same name that may be passed as
+            a filter_kwarg, which is only used in filtering.
+        iso_filt_method : str, optional
+            The isotropic scale-dependent filtering method, by default None.
+            Together with ivar_filt_method, selects the filter applied to sim
+            after the tiling transform. See the registered functions in
+            filters.py.
+        ivar_filt_method : str, optional
+            The position-dependent filtering method, by default None. Together
+            with iso_filt_method, selects the filter applied to sim after
+            the tiling transform. See the registered functions in filters.py.
+        filter_kwargs : dict, optional
+            Additional kwargs passed to the transforms and filter, by default
+            None. Which arguments, and their effects, depend on the transform
+            and filter function.
+        verbose : bool, optional
+            Print possibly helpful messages, by default False.
+
+        Returns
+        -------
+        (*preshape, ny, nx) enmap.ndmap
+            The simulation. Geometry information is necessarily provided in
+            filter_kwargs.
+        """
         sim = fdw_noise.get_fdw_noise_sim(
             sqrt_cov_mat, seed, fdw_kernels, nthread=nthread, verbose=verbose
         )

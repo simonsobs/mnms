@@ -136,8 +136,7 @@ def unit_var_wav(minfos, preshape, dtype, seed=None, nthread=0):
         Seed for np.random.seed.
     nthread : int, optional
         Number of concurrent threads, by default 0. If 0, the result
-        of mnms.utils.get_cpu_count()., by default 0. Only used in
-        drawing random numbers.
+        of mnms.utils.get_cpu_count(). Only used in drawing random numbers.
 
     Returns
     -------

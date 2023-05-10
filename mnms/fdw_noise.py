@@ -889,7 +889,7 @@ def get_fdw_noise_covsqrt(kmap, fdw_kernels, fwhm_fact=2, nthread=0, verbose=Tru
         value and return one.
     nthread : int, optional
         Number of concurrent threads, by default 0. If 0, the result
-        of mnms.utils.get_cpu_count()., by default 0.
+        of mnms.utils.get_cpu_count().
     verbose : bool, optional
         Print possibly helpful messages, by default True.
 
@@ -982,7 +982,7 @@ def get_fdw_noise_sim(sqrt_cov_wavs, seed, fdw_kernels, nthread=0,
         location-dependence of information.
     nthread : int, optional
         Number of concurrent threads, by default 0. If 0, the result
-        of mnms.utils.get_cpu_count()., by default 0.
+        of mnms.utils.get_cpu_count().
     verbose : bool, optional
         Print possibly helpful messages, by default True.
 

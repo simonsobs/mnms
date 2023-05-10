@@ -363,7 +363,7 @@ def get_tiled_noise_covsqrt(imap, mask_obs=None, width_deg=4., height_deg=4.,
         from a small number of data splits, by default 400.
     nthread : int, optional
         Number of concurrent threads, by default 0. If 0, the result
-        of mnms.utils.get_cpu_count()., by default 0.
+        of mnms.utils.get_cpu_count().
     verbose : bool, optional
         Print possibly helpful messages, by default False.
 
@@ -491,7 +491,7 @@ def get_tiled_noise_sim(covsqrt, seed, nthread=0, verbose=True):
         Seed for random draw.
     nthread : int, optional
         Number of concurrent threads, by default 0. If 0, the result
-        of mnms.utils.get_cpu_count()., by default 0.
+        of mnms.utils.get_cpu_count().
     verbose : bool, optional
         Print possibly helpful messages, by default False.
 
