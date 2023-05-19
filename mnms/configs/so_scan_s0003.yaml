@@ -16,8 +16,8 @@ BaseNoiseModel:
   iso_filt_method: harmonic
   ivar_filt_method: scaledep
   ivar_fwhms:
-    - 0.25
-    - 0.25
+    - 15
+    - 15
   ivar_lmaxs:
     - 100
     - null

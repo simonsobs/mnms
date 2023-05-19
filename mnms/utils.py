@@ -2268,9 +2268,9 @@ def rfft(emap, kmap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
     # phys norms
     if normalize in ['phy', 'phys', 'physical']:
         if adjoint_ifft:
-            res /= emap.pixsize()**0.5
+            res /= res.pixsize()**0.5
         else:
-            res *= emap.pixsize()**0.5
+            res *= res.pixsize()**0.5
 
     return res
 
@@ -2339,9 +2339,9 @@ def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=Fal
     # phys norms
     if normalize in ['phy', 'phys', 'physical']:
         if adjoint_fft:
-            res /= emap.pixsize()**0.5
+            res *= res.pixsize()**0.5
         else:
-            res *= emap.pixsize()**0.5
+            res /= res.pixsize()**0.5
 
     return res
 

@@ -403,17 +403,19 @@ def get_tiled_noise_covsqrt(imap, mask_obs=None, width_deg=4., height_deg=4.,
     imap = imap.to_tiled()
     apod = imap.apod()
     mask_obs=None
+
+    if verbose:
+        print(
+            f'imap shape: {(*imap.shape[1:-2], *imap.ishape)}\n'
+            f'Number of Unmasked Tiles: {imap.num_tiles}\n' + \
+            f'Tile shape: {imap.shape[-2:]}\n' + \
+            f'Smoothing factor: {delta_ell_smooth}'
+            )
     
     # get component shapes
     ncomp = np.prod(imap.shape[1:-2], dtype=int)
     imap = imap.reshape((-1, ncomp, *imap.shape[-2:]))
     nspec = utils.triangular(ncomp)
-    if verbose:
-        print(
-            f'Number of Unmasked Tiles: {len(imap.unmasked_tiles)}\n' + \
-            f'Number of Components: {ncomp}\n' + \
-            f'Tile shape: {imap.shape[-2:]}'
-            )
 
     # get all the 2D power spectra for this split; note kmap 
     # has shape (num_tiles, ncomp, ny, nx)
@@ -511,15 +513,12 @@ def get_tiled_noise_sim(covsqrt, seed, nthread=0, verbose=True):
     if verbose:
         print(
             f'Number of Unmasked Tiles: {num_unmasked_tiles}\n' + \
-            f'Number of Components: {ncomp}\n' + \
-            f'Tile shape: {covsqrt.shape[-2:]}'
+            f'Seed: {seed}'
             )
 
     # get random numbers in the right shape. To make random draws independent of mask, we draw numbers into
     # the full number of tiles, and then slice the unmasked tiles (even though this is a little slower)
     rshape = (covsqrt.numy*covsqrt.numx, ncomp, *covsqrt.shape[-2:])
-    if verbose:
-        print(f'Seed: {seed}')
 
     # this is because both the real and imaginary parts are unit standard normal
     mult = 1/np.sqrt(2)

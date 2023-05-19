@@ -36,8 +36,8 @@ class DataManager:
                  calibrated=False, differenced=True, srcfree=True,
                  iso_filt_method=None, ivar_filt_method=None, filter_kwargs=None,
                  ivar_fwhms=None, ivar_lmaxs=None, mask_est_name=None,
-                 mask_obs_name=None, catalog_name=None, kfilt_lbounds=None,
-                 dtype=np.float32, cache=None, **kwargs):
+                 mask_obs_name=None, mask_obs_edgecut=0, catalog_name=None,
+                 kfilt_lbounds=None, dtype=np.float32, cache=None, **kwargs):
         """Helper class for all BaseNoiseModel subclasses. Supports loading raw
         data necessary for all subclasses, such as masks and ivars. Also
         defines some class methods usable in subclasses.
@@ -66,6 +66,25 @@ class DataManager:
             (e.g., a time-domain sim) that will not be differenced, by default True.
         srcfree : bool, optional
             Whether to load point-source subtracted maps or raw maps, by default True.
+        iso_filt_method : str, optional
+            The isotropic scale-dependent filtering method, by default None.
+            Together with ivar_filt_method, selects the filter applied to dmap
+            prior to the tiling transform. See the registered functions in
+            filters.py.
+        ivar_filt_method : str, optional
+            The position-dependent filtering method, by default None. Together
+            with iso_filt_method, selects the filter applied to dmap prior to
+            the tiling transform. See the registered functions in filters.py.
+        filter_kwargs : dict, optional
+            Additional kwargs passed to the transforms and filter, by default
+            None. Which arguments, and their effects, depend on the transform
+            and filter function.
+        ivar_fwhms : iterable of scalars, optional
+            Smooth the ivar maps by a Gaussian kernel of these fwhms in arcmin.
+            Used only in the get_sqrt_ivar method. 
+        ivar_lmaxs : iterable of ints, optional
+            Bandlimit the ivar maps to these lmaxs. Used only in the
+            get_sqrt_ivar method. 
         mask_est_name : str, optional
             Name of harmonic filter estimate mask file, by default None. This mask will
             be used as the mask_est (see above) if mask_est is None. Only allows fits
@@ -74,6 +93,9 @@ class DataManager:
             Name of observed mask file, by default None. This mask will be used as the
             mask_obs (see above) if mask_obs is None. Only allows fits or hdf5 files.
             If neither extension detected, assumed to be fits.
+        mask_obs_edgecut : scalar, optional
+            Cut this many pixels from within this many arcmin of the edge, prior
+            to applying any mask_obs from disk. See the get_mask_obs method.
         catalog_name : str, optional
             A source catalog, by default None. If given, inpaint data and ivar maps.
             Only allows csv or txt files. If neither extension detected, assumed to be csv.
@@ -159,7 +181,9 @@ class DataManager:
             if not mask_obs_name.endswith(('.fits', '.hdf5')):
                 mask_obs_name += '.fits'
         self._mask_obs_name = mask_obs_name
-        
+
+        self._mask_obs_edgecut = max(mask_obs_edgecut, 0)
+
         if catalog_name is not None:
             if not catalog_name.endswith(('.csv', '.txt')):
                 catalog_name += '.csv'
@@ -242,7 +266,7 @@ class DataManager:
             return None
 
     def get_mask_est(self, downgrade=1, min_threshold=1e-4, max_threshold=1.):
-        """Load the data mask from disk according to instance attributes.
+        """Load the spectra mask from disk according to instance attributes.
 
         Parameters
         ----------
@@ -261,7 +285,12 @@ class DataManager:
             Sky mask. Dowgraded if requested.
         """
         with bench.show('Generating harmonic-filter-estimate mask'):
-            mask_est = self._get_mask_from_disk('mask_est', mask_name=self._mask_est_name)                                 
+            if self._mask_est_name is not None:
+                mask_est = self._get_mask_from_disk(
+                    self._mask_est_name, dtype=self._dtype
+                    )
+            else:
+                mask_est = enmap.ones(self._full_shape, self._full_wcs, self._dtype)                                 
             
             if downgrade != 1:
                 mask_est = utils.interpol_downgrade_cc_quad(mask_est, downgrade)
@@ -275,8 +304,7 @@ class DataManager:
         return mask_est
 
     def get_mask_obs(self, downgrade=1, **subproduct_kwargs):
-        """Load the inverse-variance maps according to instance attributes,
-        and use them to construct an observed-by-all-splits pixel map.
+        """Load the data mask from disk according to instance attributes.
 
         Parameters
         ----------
@@ -289,9 +317,15 @@ class DataManager:
             Observed-pixel map map, possibly downgraded.
         subproduct_kwargs : dict, optional
             Any additional keyword arguments used to format the map filename.
+
+        Notes
+        -----
+        The mask is constructed in the following steps: first, from the
+        intersection over splits of observed pixels. Then from the removal of
+        this mask the pixels within mask_obs_edgecut arcmin of the edge. Then
+        the intersection of this mask with any mask_obs on disk. Then downgraded.
         """
-        # get the full-resolution mask_obs, whether from disk or all True
-        mask_obs = self._get_mask_from_disk('mask_obs', mask_name=self._mask_obs_name)
+        mask_obs = True
         mask_obs_dg = True
 
         with bench.show('Generating observed-pixels mask'):
@@ -319,6 +353,15 @@ class DataManager:
                                 )
                             mask_obs_dg *= ivar_dg > 0
 
+            # apply any edgecut to mask_obs
+            if self._mask_obs_edgecut > 0:
+                mask_obs = enmap.shrink_mask(mask_obs, np.deg2rad(self._mask_obs_edgecut / 60))
+
+            # apply mask_obs from disk
+            if self._mask_obs_name is not None:
+                mask_obs *= self._get_mask_from_disk(self._mask_obs_name, bool)
+
+            # downgrade the full resolution mask_obs
             mask_obs = utils.interpol_downgrade_cc_quad(
                 mask_obs, downgrade, dtype=self._dtype
                 )
@@ -328,45 +371,35 @@ class DataManager:
             # excluding pixels that may not actually have nonzero ivar or data
             mask_obs = utils.get_mask_bool(mask_obs, threshold=1.)
 
-            # finally, need to layer on any ivars that may still be 0 that aren't yet
-            # masked
+            # need to layer on any ivars that may still be 0 that aren't yet masked
             mask_obs *= mask_obs_dg
         
         return mask_obs
 
-    def _get_mask_from_disk(self, mask_type, mask_name=None):
+    def _get_mask_from_disk(self, mask_name, dtype=None):
         """Gets a mask from disk if mask_name is not None, otherwise gets True.
 
         Parameters
         ----------
-        mask_type: str
-            Either 'mask_est' or 'mask_obs'. Controls whether to cast to a 
-            boolean mask (mask_bool is boolean).
-        mask_name : str, optional
-            The name of a mask file to load, in the user's mask_path directory,
-            by default None. If None, then a mask of True's will be returned.
+        mask_name : str
+            The name of a mask file to load, in the user's mask_path directory.
+        dtype : np.dtype, optional
+            The data type used in intermediate calculations and return types, by default 
+            the type from disk.
 
         Returns
         -------
-        enmap.ndmap or bool
-            Mask, either read from disk, or array of True.
+        enmap.ndmap
+            Mask from disk.
         """
-        assert mask_type in ['mask_est', 'mask_obs'], \
-            'Only allowed mask_types are mask_est or mask_obs'
+        fn = utils.get_mnms_fn(mask_name, 'masks')
 
-        if mask_type == 'mask_est':
-            _dtype = self._dtype
-        else:
-            _dtype = bool
+        mask = enmap.read_map(fn)
+        if dtype is not None:
+            mask = mask.astype(dtype, copy=False)
 
-        if mask_name is not None:            
-            fn = utils.get_mnms_fn(mask_name, 'masks')
-
-            # Extract mask onto geometry specified by the ivar map.
-            mask = enmap.read_map(fn).astype(_dtype, copy=False)
-            mask = enmap.extract(mask, self._full_shape, self._full_wcs) 
-        else:
-            mask = enmap.ones(self._full_shape, self._full_wcs, dtype=_dtype)
+        # Extract mask onto geometry specified by the ivar map.
+        mask = enmap.extract(mask, self._full_shape, self._full_wcs) 
 
         return mask
 
@@ -389,8 +422,9 @@ class DataManager:
 
         Notes
         -----
-        A single map is returned if instance ivar_fwhms and ivar_lmaxs are
-        scalars. If they are iterable, then an additional dim is prepended.
+        A single map is returned if ivar_fwhms and ivar_lmaxs are scalars or
+        length-1 iterables. If they are >length-2 iterables, then an additional
+        dimension is prepended. They must be both scalar or the same length.
         """
         shape, wcs = utils.downgrade_geometry_cc_quad(
             self._full_shape, self._full_wcs, downgrade
@@ -468,21 +502,21 @@ class DataManager:
 
                     out[j][i, 0] = np.sqrt(_ivar)
                     
-        if nsmooth == 0:
+        if nsmooth == 1:
             return out[0]
         else:
             return out
 
     def _apply_fwhm_ivar(self, ivar, fwhm):
         """Smooth ivar maps inplace by the model fwhm_ivar scale. Smoothing
-        occurs in harmonic space.
+        occurs directly in map space.
 
         Parameters
         ----------
         ivar : (..., ny, nx) enmap.ndmap
             Ivar maps to smooth. 
         fwhm: float
-            FWHM of smoothing in degrees.
+            FWHM of smoothing in arcmin.
 
         Returns
         -------
@@ -495,7 +529,7 @@ class DataManager:
         # flatten_axes = [0] because ivar is (1, ny, nx) (i.e., no way
         # to concurrent-ize this smoothing)
         utils.smooth_gauss(
-            ivar, np.radians(fwhm), inplace=True, 
+            ivar, np.radians(fwhm/60), inplace=True, 
             method='map', flatten_axes=[0], nthread=0,
             mode=['nearest', 'wrap']
             )
@@ -593,6 +627,10 @@ class DataManager:
             not differenced (at initialization), there is no difference taken:
             the returned map is the raw loaded map (possibly inpainted,
             downgraded etc.)
+
+        Notes
+        -----
+        mask_obs is applied to dmap at full resolution before any downgrading.
         """
         shape, wcs = utils.downgrade_geometry_cc_quad(
             self._full_shape, self._full_wcs, downgrade
@@ -601,6 +639,10 @@ class DataManager:
         # allocate a buffer to accumulate all difference maps in.
         # this has shape (nmaps, nsplits=1, npol, ny, nx).
         dmaps = self._empty(shape, wcs, ivar=False, num_splits=1, **subproduct_kwargs)
+
+        # to mask before downgrading to prevent ringing from noisy edge
+        if downgrade != 1:
+            mask_obs = self.get_mask_obs(downgrade=1, **subproduct_kwargs)
 
         # all filtering operations use the same filter
         if self._kfilt_lbounds is not None:
@@ -683,7 +725,7 @@ class DataManager:
 
                 if downgrade != 1:
                     dmaps[i, 0] = utils.fourier_downgrade_cc_quad(
-                        dmap, downgrade
+                        mask_obs * dmap, downgrade
                     )
                 else:
                     dmaps[i, 0] = dmap
@@ -1337,7 +1379,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             ivar_lmaxs=self._ivar_lmaxs,
             kfilt_lbounds=self._kfilt_lbounds,
             mask_est_name=self._mask_est_name,
-            mask_obs_name=self._mask_obs_name ,
+            mask_obs_name=self._mask_obs_name,
+            mask_obs_edgecut=self._mask_obs_edgecut,
             possible_subproduct_kwargs=self._possible_subproduct_kwargs,
             qid_names_template=self._qid_names_template,
             srcfree=self._srcfree,
@@ -2295,7 +2338,7 @@ class TiledNoiseModel(BaseNoiseModel):
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
         """Write a dictionary of noise model variables to filename fn"""
-        extra_datasets = {'sqrt_cov_ell': sqrt_cov_ell} if sqrt_cov_ell else None
+        extra_datasets = {'sqrt_cov_ell': sqrt_cov_ell} if sqrt_cov_ell is not None else None
 
         tiled_noise.write_tiled_ndmap(
             fn, sqrt_cov_mat, extra_datasets=extra_datasets
@@ -2568,7 +2611,7 @@ class WaveletNoiseModel(BaseNoiseModel):
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
         """Write a dictionary of noise model variables to filename fn"""
-        extra_datasets = {'sqrt_cov_ell': sqrt_cov_ell} if sqrt_cov_ell else None
+        extra_datasets = {'sqrt_cov_ell': sqrt_cov_ell} if sqrt_cov_ell is not None else None
         
         wavtrans.write_wav(
             fn, sqrt_cov_mat, symm_axes=[[0, 1], [2, 3]],
@@ -2906,7 +2949,7 @@ class FDWNoiseModel(BaseNoiseModel):
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
         """Write a dictionary of noise model variables to filename fn"""
-        extra_datasets = {'sqrt_cov_ell': sqrt_cov_ell} if sqrt_cov_ell else None
+        extra_datasets = {'sqrt_cov_ell': sqrt_cov_ell} if sqrt_cov_ell is not None else None
         
         fdw_noise.write_wavs(fn, sqrt_cov_mat, extra_datasets=extra_datasets)
 
