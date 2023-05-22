@@ -28,6 +28,44 @@ def register(registry=REGISTERED_NOISE_MODELS):
         return noise_model_class
     return decorator
 
+def from_config(config_name, noise_model_name, *qids):
+    """Load a BaseNoiseModel subclass instance with model parameters
+    specified by existing config.
+
+    Parameters
+    ----------
+    config_name : str
+        Name of config from which to read parameters. First check user
+        config directory, then mnms package. Only allows yaml files.
+    noise_model_name : str, optional
+        The string name of this NoiseModel instance. This is the header
+        of the block in the config storing this NoiseModel's parameters.
+    qids : str
+        One or more array qids for this model.
+
+    Returns
+    -------
+    BaseNoiseModel
+        An instance of a BaseNoiseModel subclass.
+    """
+    if not config_name.endswith('.yaml'):
+        config_name += '.yaml'
+
+    # to_write=False since this won't be dumpable
+    config_fn = utils.get_mnms_fn(config_name, 'configs', to_write=False)
+    config_dict = s_utils.config_from_yaml_file(config_fn)
+
+    kwargs = config_dict[noise_model_name]
+    kwargs.update(dict(
+        config_name=config_name,
+        noise_model_name=noise_model_name,
+        dumpable=False
+        ))
+
+    noise_model_class = kwargs.pop('noise_model_class')
+    nm_cls = REGISTERED_NOISE_MODELS[noise_model_class]
+    return nm_cls(*qids, **kwargs)
+
 
 class DataManager:
 
@@ -928,9 +966,9 @@ class DataManager:
 
 class ConfigManager(ABC):
 
-    def __init__(self, config_name=None, dumpable=True, qid_names_template=None,
-                 model_file_template=None, sim_file_template=None,
-                 **kwargs):
+    def __init__(self, config_name=None, noise_model_name=None, dumpable=True,
+                 qid_names_template=None, model_file_template=None,
+                 sim_file_template=None, **kwargs):
         """Helper class for any object seeking to utilize a noise_model config
         to track parameters, filenames, etc. Also define some class methods
         usable in subclasses.
@@ -945,6 +983,9 @@ class ConfigManager(ABC):
             within file, and filename cannot be shared with a file shipped
             by the mnms package. Must be a yaml file. If dumpable is False,
             set to None and no compatibility checking occurs.
+        noise_model_name : str, optional
+            The string name of this NoiseModel instance. This becomes the header
+            of the block in the config storing this NoiseModel's parameters.
         dumpable: bool, optional
             Whether this instance will dump its parameters to a config. If False,
             user is responsible for covariance and sim filename management.
@@ -1007,22 +1048,26 @@ class ConfigManager(ABC):
         if config_name is None:
             config_name = self._get_default_config_name()
 
+        assert noise_model_name, \
+            'NoiseModel instance must have a name'
+
         if model_file_template is None:
             model_file_template = '{config_name}_{noise_model_name}_{qid_names}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
 
         if sim_file_template is None:
-            sim_file_template = '{config_name}_{noise_model_name}_{qid_names}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
-
-        self._qid_names_template = qid_names_template
-        self._model_file_template = model_file_template
-        self._sim_file_template = sim_file_template
-
-        # check availability, compatibility of config name.
+            sim_file_template = '{config_name}_{noise_model_name}_{qid_names}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num:04}'
+        
         # by adding yaml before splitext, allow config_name with periods
         if not config_name.endswith('.yaml'):
             config_name += '.yaml'
         self._config_name = os.path.splitext(config_name)[0]
 
+        self._noise_model_name = noise_model_name
+        self._qid_names_template = qid_names_template
+        self._model_file_template = model_file_template
+        self._sim_file_template = sim_file_template
+
+        # check availability, compatibility of config name.
         # helps distinguish the "from_config" case: this is already checked, so it will only
         # fail when self._dumpable=False if not from config and more than one such config
         # already exists (this is extra protection for filenames, not configs)
@@ -1039,29 +1084,33 @@ class ConfigManager(ABC):
     def _runtime_params(self):
         """Return bool if any runtime parameters passed to constructor"""
         pass
-
+    
     @property
     @abstractmethod
-    def _base_param_dict(self):
-        """Return a dictionary of model parameters for the BaseNoiseModel"""
-        pass
+    def _nm_param_dict(self):
+        """Return a dictionary of model parameters for this NoiseModel"""
+        return {}
 
     @property
-    @abstractmethod
-    def _model_param_dict(self):
-        """Return a dictionary of model parameters particular to this class"""
-        pass
+    def config_name(self):
+        """A name for this config"""
+        return self._config_name
 
-    @abstractmethod
-    def _model_param_dict_updater(self, model_param_dict):
-        """Add more entries to an instance's model_param_dict, e.g. file templates."""
-        pass
+    @property
+    def noise_model_name(self):
+        """A shorthand name for this model, e.g. for configs and filenames"""
+        return self._noise_model_name
 
-    @classmethod
-    @abstractmethod
-    def from_config(cls, config_name, *qids):
-        """Load an instance from an on-disk config."""
-        pass
+    @property
+    def param_dict(self):
+        """Return a dictionary of model parameters for this NoiseModel"""
+        param_dict = dict(
+            qid_names_template=self._qid_names_template,
+            model_file_template=self._model_file_template, 
+            sim_file_template=self._sim_file_template
+        )
+        param_dict.update(self._nm_param_dict)
+        return param_dict
 
     def _get_default_config_name(self):
         """Return a default config name based on the current time.
@@ -1073,64 +1122,46 @@ class ConfigManager(ABC):
         """
         t = time.gmtime()
         default_name = 'noise_models_'
-        default_name += f'{str(t.tm_year).zfill(4)}'
-        default_name += f'{str(t.tm_mon).zfill(2)}'
-        default_name += f'{str(t.tm_mday).zfill(2)}_'
-        default_name += f'{str(t.tm_hour).zfill(2)}'
-        default_name += f'{str(t.tm_min).zfill(2)}'
+        default_name += f'{str(t.tm_year):04}'
+        default_name += f'{str(t.tm_mon):02}'
+        default_name += f'{str(t.tm_mday):02}_'
+        default_name += f'{str(t.tm_hour):02}'
+        default_name += f'{str(t.tm_min):02}'
         return default_name
     
     def _check_config(self, config_dict, permit_absent_subclass=True):
         """Check a config dictionary for compatibility with this NoiseModel's
-        parameters. Config dictionary must have a BaseNoiseModel block
-        with parameters compatible with this model's BaseNoiseModel parameters.
-        Similar check performed on this model's NoiseModel subclass parameters
-        depending on permit_absent_cubclass.
+        parameters.
 
         Parameters
         ----------
         config_dict : dict
-            yaml-encoded dictionary.
+            Dictionary holding the parameters of the config.
         permit_absent_subclass : bool, optional
             If True, config is compatibile even if config_dict does not contain
-            entry for this model's subclass, by default True. Regardless of value,
-            if config_dict does contain entry for this model's subclass, that 
+            entry for this model's name, by default True. Regardless of value,
+            if config_dict does contain entry for this model's name, that 
             entry is always checked for compatibility.
 
         Raises
         ------
-        KeyError
-            If loaded config does not contain an entry under key 'BaseNoiseModel'.
-
-        AssertionError
-            If the value under key 'BaseNoiseModel' does not match this instance's
-            _base_param_dict attribute.
-
         KeyError
             If loaded config does not contain an entry under key 'XYZNoiseModel' and
             permit_absent_subclass is False.
 
         AssertionError
             If the value under key 'XYZNoiseModel' does not match this instance's
-            _model_param_dict attribute.
+            param_dict attribute.
         """
-        # raise KeyError if no BaseNoiseModel
-        test_base_param_dict = config_dict['BaseNoiseModel']
-        assert self._base_param_dict == test_base_param_dict, \
-            f'Internal BaseNoiseModel parameters do not match ' + \
-            f'supplied BaseNoiseModel parameters'
-        
         def _check_model_dict():
-            test_model_param_dict = config_dict[self.__class__.__name__]
-            model_param_dict = self._model_param_dict.copy()
-            self._model_param_dict_updater(model_param_dict)
-            assert model_param_dict == test_model_param_dict, \
-                f'Internal {self.__class__.__name__} parameters ' + \
-                f'do not match supplied {self.__class__.__name__} parameters'
+            test_param_dict = config_dict[self.noise_model_name]
+            assert test_param_dict == self.param_dict, \
+                'Internal parameters do not match supplied ' + \
+                f'{self.noise_model_name} parameters'
 
         if permit_absent_subclass:
             # don't raise KeyError if no XYZNoiseModel
-            if self.__class__.__name__ in config_dict:
+            if self.noise_model_name in config_dict:
                 _check_model_dict()
         else:
             # raise KeyError if no XYZNoiseModel
@@ -1138,11 +1169,7 @@ class ConfigManager(ABC):
             
     def _check_yaml_config(self, file, permit_absent_config=True, 
                            permit_absent_subclass=True):
-        """Check for compatibility of config saved in a yaml file. If file
-        exists, config dictionary must have a BaseNoiseModel block
-        with parameters compatible with this model's BaseNoiseModel parameters.
-        Similar check performed on this model's NoiseModel subclass parameters
-        depending on permit_absent_cubclass.
+        """Check for compatibility of config saved in a yaml file.
 
         Parameters
         ----------
@@ -1151,11 +1178,11 @@ class ConfigManager(ABC):
         permit_absent_config : bool
             If True, config is compatibile even if config file not on-disk, by 
             default True. Regardless of value, if config file does exist on-disk,
-            file is loaded and BaseNoiseModel is checked for compatibility.
+            config is loaded from file and checked for compatibility.
         permit_absent_subclass : bool, optional
             If True, config is compatibile even if config_dict does not contain
-            entry for this model's subclass, by default True. Regardless of value,
-            if config_dict does contain entry for this model's subclass, that 
+            entry for this model's name, by default True. Regardless of value,
+            if config_dict does contain entry for this model's name, that 
             entry is always checked for compatibility.
 
         Raises
@@ -1164,19 +1191,12 @@ class ConfigManager(ABC):
             If file does not exist and permit_absent_config is False.
 
         KeyError
-            If loaded config does not contain an entry under key 'BaseNoiseModel'.
-
-        AssertionError
-            If the value under key 'BaseNoiseModel' does not match this instance's
-            _base_param_dict attribute.
-
-        KeyError
             If loaded config does not contain an entry under key 'XYZNoiseModel' and
             permit_absent_subclass is False.
 
         AssertionError
             If the value under key 'XYZNoiseModel' does not match this instance's
-            _model_param_dict attribute.
+            param_dict attribute.
         """
         try:
             on_disk_dict = s_utils.config_from_yaml_file(file)
@@ -1190,8 +1210,7 @@ class ConfigManager(ABC):
 
     def _check_hdf5_config(self, file, address='/', permit_absent_config=True, 
                            permit_absent_subclass=True):
-        """Check for compatibility of config with this instance's
-        BaseNoiseModel parameters and noise model subclass parameters.
+        """Check for compatibility of config saved in a hdf5 file.
 
         Parameters
         ----------
@@ -1217,19 +1236,12 @@ class ConfigManager(ABC):
             permit_absent_config is False.
 
         KeyError
-            If loaded config does not contain an entry under key 'BaseNoiseModel'.
-
-        AssertionError
-            If the value under key 'BaseNoiseModel' does not match this instance's
-            _base_param_dict attribute.
-
-        KeyError
             If loaded config does not contain an entry under key 'XYZNoiseModel' and
             permit_absent_subclass is False.
 
         AssertionError
             If the value under key 'XYZNoiseModel' does not match this instance's
-            _model_param_dict attribute.
+            param_dict attribute.
         """
         try:
             on_disk_dict = utils.config_from_hdf5_file(file, address=address)
@@ -1251,37 +1263,34 @@ class ConfigManager(ABC):
         overwrite : bool, optional
             Write to file whether or not it already exists, by default False.
             If False, first check for compatibility permissively, then add
-            minimal information to config to be written (i.e., BaseNoiseModel
-            if none, else XYZNoiseModel if none).
+            the param_dict under this model name if not already in config.
 
         Raises
         ------
         AssertionError
             If this ConfigManager is not dumpable.
+
+        AssertionError
+            If not overwrite and if the value under key 'XYZNoiseModel' does not
+            match this instance's param_dict attribute.
         """
         assert self._dumpable, 'This instance is not dumpable'
 
-        # get things we might want to write
-        base_param_dict = self._base_param_dict
-        model_param_dict = self._model_param_dict.copy()
-        self._model_param_dict_updater(model_param_dict)
-
         if overwrite:
             with open(file, 'w') as f:
-                yaml.safe_dump({'BaseNoiseModel': base_param_dict}, f)
-                f.write('\n')
-                yaml.safe_dump({self.__class__.__name__: model_param_dict}, f) 
-
+                yaml.safe_dump({self.noise_model_name: self.param_dict}, f)
         else:
-            self._check_yaml_config(file)
+            self._check_yaml_config(
+                file, permit_absent_config=True, permit_absent_subclass=True
+                )
 
             try:
                 on_disk_dict = s_utils.config_from_yaml_file(file)
 
-                if self.__class__.__name__ not in on_disk_dict:
+                if self.noise_model_name not in on_disk_dict:
                     with open(file, 'a') as f:
                         f.write('\n')
-                        yaml.safe_dump({self.__class__.__name__: model_param_dict}, f)    
+                        yaml.safe_dump({self.noise_model_name: self.param_dict}, f)
 
             except FileNotFoundError:
                 self._save_yaml_config(file, overwrite=True)
@@ -1293,40 +1302,38 @@ class ConfigManager(ABC):
         ----------
         file : path-like
             Path to hdf5 file to be saved.
+        address : str, optional
+            The address path within the file to save config, by default the root.
         overwrite : bool, optional
             Write to file whether or not it already exists, by default False.
             If False, first check for compatibility permissively, then add
-            minimal information to config to be written (i.e., BaseNoiseModel
-            if none, else XYZNoiseModel if none).
+            the param_dict under this model name if not already in config.
 
         Raises
         ------
         AssertionError
-            If this ConfigManager is not dumpable.        
+            If this ConfigManager is not dumpable.  
+
+        AssertionError
+            If not overwrite and if the value under key 'XYZNoiseModel' does not
+            match this instance's param_dict attribute.      
         """
         assert self._dumpable, 'This instance is not dumpable'
-
-        # get things we might want to write
-        base_param_dict = self._base_param_dict
-        model_param_dict = self._model_param_dict.copy()
-        self._model_param_dict_updater(model_param_dict)
 
         if overwrite:
             with h5py.File(file, 'w') as f:
                 grp = f.require_group(address)
-                grp.attrs['BaseNoiseModel'] = yaml.safe_dump(base_param_dict)   
-                grp.attrs[self.__class__.__name__] = yaml.safe_dump(model_param_dict)   
-
+                grp.attrs[self.noise_model_name] = yaml.safe_dump(self.param_dict)   
         else:
             self._check_hdf5_config(file)
 
             try:
                 on_disk_dict = utils.config_from_hdf5_file(file, address=address)
 
-                if self.__class__.__name__ not in on_disk_dict:
+                if self.noise_model_name not in on_disk_dict:
                     with h5py.File(file, 'a') as f:
                         grp = f.require_group(address)
-                        grp.attrs[self.__class__.__name__] = yaml.safe_dump(model_param_dict)   
+                        grp.attrs[self.noise_model_name] = yaml.safe_dump(self.param_dict)   
 
             except FileNotFoundError:
                 self._save_hdf5_config(file, overwrite=True)
@@ -1346,6 +1353,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         """
         super().__init__(*qids, **kwargs)
 
+        # this is because the data_model is init'ed in the DataManager and the
+        # qid_names_template is init'ed in the ConfigManager
         qid_names = []
         for qid in self._qids:
             qid_kwargs = self._data_model.get_qid_kwargs_by_subproduct(qid, 'maps', self._subproduct)
@@ -1355,6 +1364,56 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                 qid_names.append(self._qid_names_template.format(**qid_kwargs))
         self._qid_names = '_'.join(qid_names)
 
+    @classmethod
+    @abstractmethod
+    def operatingbasis(cls):
+        """The basis in which the tiling transform takes place."""
+        return ''
+
+    @property
+    @abstractmethod
+    def _nm_subclass_param_dict(self):
+        """Return a dictionary of model parameters for this NoiseModel"""
+        return {}
+    
+    @abstractmethod
+    def _read_model(self, fn):
+        """Read a noise model with filename fn; return a dictionary of noise model variables"""
+        return {}
+
+    @abstractmethod
+    def _get_model(self, dmap, iso_filt_method, ivar_filt_method, filter_kwargs, verbose):
+        """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
+        return {}
+
+    @classmethod
+    @abstractmethod
+    def get_model_static(cls, dmap, iso_filt_method=None, ivar_filt_method=None,
+                         filter_kwargs=None, verbose=False, **kwargs):
+        """Get the square-root covariance in the operating basis given an input
+        mean-0 map. Allows filtering the input map prior to tiling transform."""
+        return {}
+    
+    @abstractmethod
+    def _write_model(self, fn, **kwargs):
+        """Write a dictionary of noise model variables to filename fn"""
+        pass
+    
+    @abstractmethod
+    def _get_sim(self, model_dict, seed, iso_filt_method, ivar_filt_method,
+                 filter_kwargs, verbose):
+        """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
+        return enmap.ndmap
+    
+    @classmethod
+    @abstractmethod
+    def get_sim_static(cls, sqrt_cov_mat, seed, iso_filt_method=None,
+                       ivar_filt_method=None, filter_kwargs=None, verbose=False,
+                       **kwargs):
+        """Draw a realization from the square-root covariance in the operating
+        basis. Allows filtering the output map after the tiling transform."""
+        return enmap.ndmap
+
     @property
     def _runtime_params(self):
         """Return bool if any runtime parameters passed to constructor"""
@@ -1363,9 +1422,10 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         return runtime_params
 
     @property
-    def _base_param_dict(self):
+    def _nm_param_dict(self):
         """Return a dictionary of model parameters for this BaseNoiseModel"""
-        return dict(
+        param_dict = dict(
+            noise_model_class=self.__class__.__name__,
             calibrated=self._calibrated,
             catalog_name=self._catalog_name,
             data_model_name=self._data_model_name,
@@ -1382,50 +1442,11 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             mask_obs_name=self._mask_obs_name,
             mask_obs_edgecut=self._mask_obs_edgecut,
             possible_subproduct_kwargs=self._possible_subproduct_kwargs,
-            qid_names_template=self._qid_names_template,
             srcfree=self._srcfree,
             subproduct=self._subproduct
         )
-
-    def _model_param_dict_updater(self, model_param_dict):
-        model_param_dict.update(
-            model_file_template=self._model_file_template, 
-            sim_file_template=self._sim_file_template
-        )
-
-    @classmethod
-    def from_config(cls, config_name, *qids):
-        """Load a BaseNoiseModel subclass instance with model parameters
-        specified by existing config.
-
-        Parameters
-        ----------
-        config_name : str
-            Name of config from which to read parameters. First check user
-            config directory, then mnms package. Only allows yaml files.
-        qids : str
-            One or more array qids for this model.
-
-        Returns
-        -------
-        BaseNoiseModel
-            An instance of a BaseNoiseModel subclass.
-        """
-        if not config_name.endswith('.yaml'):
-            config_name += '.yaml'
-
-        # to_write=False since this won't be dumpable
-        config_fn = utils.get_mnms_fn(config_name, 'configs', to_write=False)
-        config_dict = s_utils.config_from_yaml_file(config_fn)
-
-        kwargs = config_dict['BaseNoiseModel']
-        kwargs.update(config_dict[cls.__name__])
-        kwargs.update(dict(
-            config_name=config_name,
-            dumpable=False
-            ))
-
-        return cls(*qids, **kwargs)
+        param_dict.update(self._nm_subclass_param_dict)
+        return param_dict
 
     def _get_model_fn(self, split_num, lmax, to_write=False, **subproduct_kwargs):
         """Get a noise model filename for split split_num; return as <str>"""
@@ -1457,7 +1478,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             qid_names=self._qid_names,
             config_name=self._config_name,
             split_num=split_num,
-            sim_num=str(sim_num).zfill(4),
+            sim_num=f'{sim_num:04}',
             lmax=lmax,
             downgrade=utils.downgrade_from_lmaxs(self._full_lmax, lmax),
             alm_str='alm' if alm else 'map',
@@ -1472,12 +1493,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             fn += '.fits'
         fn = utils.get_mnms_fn(fn, 'sims', to_write=to_write)
         return fn
-
-    @property
-    @abstractmethod
-    def name(self):
-        """A shorthand name for this model, e.g. for filenames"""
-        return ''
 
     def get_model(self, split_num, lmax, check_in_memory=True, check_on_disk=True,
                   generate=True, keep_model=False, keep_mask_est=False,
@@ -1737,24 +1752,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             else:
                 print(f'Model for {utils.kwargs_str(split_num=split_num, lmax=lmax, **subproduct_kwargs)} not found on-disk, please generate it first')
                 raise e
-
-    @abstractmethod
-    def _read_model(self, fn):
-        """Read a noise model with filename fn; return a dictionary of noise model variables"""
-        return {}
-
-    @abstractmethod
-    def _get_model(self, dmap, iso_filt_method, ivar_filt_method, filter_kwargs, verbose):
-        """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
-        return {}
-
-    @classmethod
-    @abstractmethod
-    def get_model_static(cls, dmap, iso_filt_method=None, ivar_filt_method=None,
-                         filter_kwargs=None, verbose=False, **kwargs):
-        """Get the square-root covariance in the operating basis given an input
-        mean-0 map. Allows filtering the input map prior to tiling transform."""
-        return {}
     
     @classmethod
     def filter_model(cls, inp, iso_filt_method=None, ivar_filt_method=None,
@@ -1823,17 +1820,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         basis = model_inbasis
         
         return inp, out
-    
-    @classmethod
-    @abstractmethod
-    def operatingbasis(cls):
-        """The basis in which the tiling transform takes place."""
-        return ''
-
-    @abstractmethod
-    def _write_model(self, fn, **kwargs):
-        """Write a dictionary of noise model variables to filename fn"""
-        pass
 
     def get_sim(self, split_num, sim_num, lmax, alm=False, check_on_disk=True,
                 generate=True, keep_model=True, keep_mask_obs=True,
@@ -1944,7 +1930,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             sqrt_ivar_from_cache = False
         sqrt_ivar *= mask_obs
         
-        seed = self._get_seed(split_num, sim_num)
+        seed = utils.get_seed(split_num, sim_num, self.noise_model_name, *self._qids)
 
         # update filter kwargs. note that adding model_dict grabs any filter
         # info (e.g, sqrt_cov_ell) as well as the model itself
@@ -2048,25 +2034,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             else:
                 print(f'Sim {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)} not found on-disk, please generate it first')
                 raise e
-
-    def _get_seed(self, split_num, sim_num):
-        """Return seed for sim with split_num, sim_num."""
-        return utils.get_seed(*(split_num, sim_num, self.name, *self._qids))
-
-    @abstractmethod
-    def _get_sim(self, model_dict, seed, iso_filt_method, ivar_filt_method,
-                 filter_kwargs, verbose):
-        """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
-        return enmap.ndmap
-    
-    @classmethod
-    @abstractmethod
-    def get_sim_static(cls, sqrt_cov_mat, seed, iso_filt_method=None,
-                       ivar_filt_method=None, filter_kwargs=None, verbose=False,
-                       **kwargs):
-        """Draw a realization from the square-root covariance in the operating
-        basis. Allows filtering the output map after the tiling transform."""
-        return enmap.ndmap
 
     @classmethod
     def filter(cls, inp, iso_filt_method=None, ivar_filt_method=None,
@@ -2191,13 +2158,13 @@ class TiledNoiseModel(BaseNoiseModel):
         # attributes to exist
         super().__init__(*qids, **kwargs)
 
-    @property
-    def name(self):
-        """A shorthand name for this model, e.g. for filenames"""
-        return 'tile'
+    @classmethod
+    def operatingbasis(cls):
+        """The basis in which the tiling transform takes place."""
+        return 'map'
 
     @property
-    def _model_param_dict(self):
+    def _nm_subclass_param_dict(self):
         """Return a dictionary of model parameters particular to this subclass"""
         return dict(
             width_deg=self._width_deg,
@@ -2330,11 +2297,6 @@ class TiledNoiseModel(BaseNoiseModel):
         out.update(filter_out)
         
         return out
-    
-    @classmethod
-    def operatingbasis(cls):
-        """The basis in which the tiling transform takes place."""
-        return 'map'
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
         """Write a dictionary of noise model variables to filename fn"""
@@ -2475,13 +2437,13 @@ class WaveletNoiseModel(BaseNoiseModel):
 
         self._w_ell_dict = {}
 
-    @property
-    def name(self):
-        """A shorthand name for this model, e.g. for filenames"""
-        return 'wav'
+    @classmethod
+    def operatingbasis(cls):
+        """The basis in which the tiling transform takes place."""
+        return 'harmonic'
     
     @property
-    def _model_param_dict(self):
+    def _nm_subclass_param_dict(self):
         """Return a dictionary of model parameters particular to this subclass"""
         return dict(
             lamb=self._lamb,
@@ -2490,18 +2452,6 @@ class WaveletNoiseModel(BaseNoiseModel):
             fwhm_fact_pt1=self._fwhm_fact_pt1,
             fwhm_fact_pt2=self._fwhm_fact_pt2
         )
-
-    def _get_kernels(self, lmax):
-        """Build the kernels. These are passed to various methods for a given
-        lmax and so we only call it in the first call to _get_model or
-        _get_sim."""
-        # If lmax <= 5400, lmax_j will usually be lmax-100; else, capped at 5300
-        # so that white noise floor is described by a single (omega) wavelet
-        w_lmax_j = min(max(lmax - 100, self._w_lmin), self._w_lmax_j)
-        w_ell, _ = wav_noise.wlm_utils.get_sd_kernels(
-            self._lamb, lmax, lmin=self._w_lmin, lmax_j=w_lmax_j
-            )
-        return w_ell
 
     def _read_model(self, fn):
         """Read a noise model with filename fn; return a dictionary of noise model variables"""
@@ -2604,11 +2554,6 @@ class WaveletNoiseModel(BaseNoiseModel):
         
         return out
 
-    @classmethod
-    def operatingbasis(cls):
-        """The basis in which the tiling transform takes place."""
-        return 'harmonic'
-
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
         """Write a dictionary of noise model variables to filename fn"""
         extra_datasets = {'sqrt_cov_ell': sqrt_cov_ell} if sqrt_cov_ell is not None else None
@@ -2697,6 +2642,17 @@ class WaveletNoiseModel(BaseNoiseModel):
 
         return sim
     
+    def _get_kernels(self, lmax):
+        """Build the kernels. These are passed to various methods for a given
+        lmax and so we only call it in the first call to _get_model or
+        _get_sim."""
+        # If lmax <= 5400, lmax_j will usually be lmax-100; else, capped at 5300
+        # so that white noise floor is described by a single (omega) wavelet
+        w_lmax_j = min(max(lmax - 100, self._w_lmin), self._w_lmax_j)
+        w_ell, _ = wav_noise.wlm_utils.get_sd_kernels(
+            self._lamb, lmax, lmin=self._w_lmin, lmax_j=w_lmax_j
+            )
+        return w_ell
 
 @register()
 class FDWNoiseModel(BaseNoiseModel):
@@ -2805,13 +2761,13 @@ class FDWNoiseModel(BaseNoiseModel):
 
         self._fk_dict = {}
 
-    @property
-    def name(self):
-        """A shorthand name for this model, e.g. for filenames"""
-        return 'fdw'
+    @classmethod
+    def operatingbasis(cls):
+        """The basis in which the tiling transform takes place."""
+        return 'fourier'
 
     @property
-    def _model_param_dict(self):
+    def _nm_subclass_param_dict(self):
         """Return a dictionary of model parameters particular to this subclass"""
         return dict(
             lamb=self._lamb,
@@ -2826,20 +2782,6 @@ class FDWNoiseModel(BaseNoiseModel):
             pback=self._pback,
             fwhm_fact_pt1=self._fwhm_fact_pt1,
             fwhm_fact_pt2=self._fwhm_fact_pt2
-        )
-
-    def _get_kernels(self, lmax):
-        """Build the kernels. This is slow and so we only call it in the first
-        call to _get_model or _get_sim."""
-        downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
-        shape, wcs = utils.downgrade_geometry_cc_quad(
-            self._full_shape, self._full_wcs, downgrade
-            )
-
-        return fdw_noise.FDWKernels(
-            self._lamb, self._w_lmax, self._w_lmin, self._w_lmax_j, self._n, self._p,
-            shape, wcs, nforw=self._nforw, nback=self._nback,
-            pforw=self._pforw, pback=self._pback, dtype=self._dtype
         )
 
     def _read_model(self, fn):
@@ -2941,11 +2883,6 @@ class FDWNoiseModel(BaseNoiseModel):
         out.update(filter_out)
         
         return out
-    
-    @classmethod
-    def operatingbasis(cls):
-        """The basis in which the tiling transform takes place."""
-        return 'fourier'
 
     def _write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
         """Write a dictionary of noise model variables to filename fn"""
@@ -3028,3 +2965,17 @@ class FDWNoiseModel(BaseNoiseModel):
         )
 
         return sim
+    
+    def _get_kernels(self, lmax):
+        """Build the kernels. This is slow and so we only call it in the first
+        call to _get_model or _get_sim."""
+        downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
+        shape, wcs = utils.downgrade_geometry_cc_quad(
+            self._full_shape, self._full_wcs, downgrade
+            )
+
+        return fdw_noise.FDWKernels(
+            self._lamb, self._w_lmax, self._w_lmin, self._w_lmax_j, self._n, self._p,
+            shape, wcs, nforw=self._nforw, nback=self._nback,
+            pforw=self._pforw, pback=self._pback, dtype=self._dtype
+        )
