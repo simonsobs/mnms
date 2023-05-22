@@ -1,4 +1,5 @@
-BaseNoiseModel:
+tile:
+  noise_model_class: TiledNoiseModel
   calibrated: false
   catalog_name: union_catalog_regular_20220316.csv
   data_model_name: act_dr6.01
@@ -8,23 +9,50 @@ BaseNoiseModel:
   - patch
   - daynight
   - num_splits
-  fwhm_ivar: null
+  filter_kwargs:
+    post_filt_rel_downgrade: 2
+  iso_filt_method: harmonic
+  ivar_filt_method: basic
+  ivar_fwhms: null
+  ivar_lmaxs: null
   kfilt_lbounds: null
   mask_est_name: dr6v3_20220316_baseline_union_mask.fits
   mask_obs_name: dr6v3_xlink_union_mask_0.001.fits
+  mask_obs_edgecut: 0
   possible_subproduct_kwargs: null
   qid_names_template: '{array}_{freq}'
   srcfree: true
   subproduct: default
-
-TiledNoiseModel:
   delta_ell_smooth: 400
   height_deg: 4.0
   width_deg: 4.0
   model_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
   sim_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
 
-WaveletNoiseModel:
+wav:
+  noise_model_class: WaveletNoiseModel
+  calibrated: false
+  catalog_name: union_catalog_regular_20220316.csv
+  data_model_name: act_dr6.01
+  differenced: true
+  dtype: f4
+  enforce_equal_qid_kwargs:
+  - patch
+  - daynight
+  - num_splits
+  filter_kwargs: null
+  iso_filt_method: harmonic
+  ivar_filt_method: null
+  ivar_fwhms: null
+  ivar_lmaxs: null
+  kfilt_lbounds: null
+  mask_est_name: dr6v3_20220316_baseline_union_mask.fits
+  mask_obs_name: dr6v3_xlink_union_mask_0.001.fits
+  mask_obs_edgecut: 0
+  possible_subproduct_kwargs: null
+  qid_names_template: '{array}_{freq}'
+  srcfree: true
+  subproduct: default
   fwhm_fact_pt1:
   - 1350
   - 10.0
@@ -32,13 +60,36 @@ WaveletNoiseModel:
   - 5400
   - 16.0
   lamb: 1.3
-  smooth_loc: false
   w_lmax_j: 5300
   w_lmin: 10
   model_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'
   sim_file_template: '{config_name}_{noise_model_name}_{patch}_{qid_names}_{daynight}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num}'
 
-FDWNoiseModel:
+fdw:
+  noise_model_class: FDWNoiseModel
+  calibrated: false
+  catalog_name: union_catalog_regular_20220316.csv
+  data_model_name: act_dr6.01
+  differenced: true
+  dtype: f4
+  enforce_equal_qid_kwargs:
+  - patch
+  - daynight
+  - num_splits
+  filter_kwargs:
+    post_filt_rel_downgrade: 2
+  iso_filt_method: harmonic
+  ivar_filt_method: null
+  ivar_fwhms: null
+  ivar_lmaxs: null
+  kfilt_lbounds: null
+  mask_est_name: dr6v3_20220316_baseline_union_mask.fits
+  mask_obs_name: dr6v3_xlink_union_mask_0.001.fits
+  mask_obs_edgecut: 0
+  possible_subproduct_kwargs: null
+  qid_names_template: '{array}_{freq}'
+  srcfree: true
+  subproduct: default
   fwhm_fact_pt1:
   - 1350
   - 10.0

@@ -1,4 +1,5 @@
-BaseNoiseModel:
+fdw:
+  noise_model_class: FDWNoiseModel
   calibrated: false
   catalog_name: null
   data_model_name: so_scan_s0003
@@ -24,12 +25,11 @@ BaseNoiseModel:
   kfilt_lbounds: null
   mask_est_name: so_scan_s0003_mask.fits
   mask_obs_name: null
+  mask_obs_edgecut: 0
   possible_subproduct_kwargs: null
   qid_names_template: '{array}_{freq}'
   srcfree: false
   subproduct: default
-
-FDWNoiseModel:
   fwhm_fact_pt1:
   - 1350
   - 10.0

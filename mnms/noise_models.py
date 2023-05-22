@@ -168,13 +168,13 @@ class DataManager:
         self._subproduct = subproduct
         self._possible_subproduct_kwargs = possible_subproduct_kwargs
 
-        self._num_arrays = len(self._qids)
-
         # check that the value of each enforce_equal_qid_kwarg is the same
         # across qids. then, assign that key-value pair as a private instance
         # variable. 
         #
         # num_splits is always such a kwarg!
+        #
+        # NOTE: modifying supplied value forces good value in configs
         if enforce_equal_qid_kwargs is None:
             enforce_equal_qid_kwargs = []
         if 'num_splits' not in enforce_equal_qid_kwargs:
@@ -197,12 +197,12 @@ class DataManager:
         self._differenced = differenced
         self._dtype = dtype
         self._srcfree = srcfree
+        self._num_arrays = len(qids)
+        self._num_splits = reference_qid_kwargs['num_splits']
 
         # prepare filter kwargs
         self._iso_filt_method = iso_filt_method
         self._ivar_filt_method = ivar_filt_method
-        if filter_kwargs is None:
-            filter_kwargs = {}
         self._filter_kwargs = filter_kwargs
 
         # not strictly for the filters, but to serve ivar for the filters
@@ -220,6 +220,7 @@ class DataManager:
                 mask_obs_name += '.fits'
         self._mask_obs_name = mask_obs_name
 
+        # NOTE: modifying supplied value forces good value in configs
         self._mask_obs_edgecut = max(mask_obs_edgecut, 0)
 
         if catalog_name is not None:
@@ -271,7 +272,7 @@ class DataManager:
         """Check that each qid in this instance's qids has compatible shape and wcs."""
         i = 0
         for qid in self._qids:
-            for s in range(self._reference_qid_kwargs['num_splits']):
+            for s in range(self._num_splits):
                 for coadd in (True, False):
                     if coadd == True and s > 0: # coadds don't have splits
                         continue
@@ -368,7 +369,7 @@ class DataManager:
 
         with bench.show('Generating observed-pixels mask'):
             for qid in self._qids:
-                for s in range(self._reference_qid_kwargs['num_splits']):
+                for s in range(self._num_splits):
                     # we want to do this split-by-split in case we can save
                     # memory by downgrading one split at a time
                     ivar = utils.read_map(
@@ -853,7 +854,7 @@ class DataManager:
         if num_arrays is None:
             num_arrays = self._num_arrays
         if num_splits is None:
-            num_splits = self._reference_qid_kwargs['num_splits']
+            num_splits = self._num_splits
 
         shape = (num_arrays, num_splits, *shape)
         return enmap.empty(shape, wcs=footprint_wcs, dtype=self._dtype)
@@ -1155,9 +1156,25 @@ class ConfigManager(ABC):
         """
         def _check_model_dict():
             test_param_dict = config_dict[self.noise_model_name]
-            assert test_param_dict == self.param_dict, \
-                'Internal parameters do not match supplied ' + \
-                f'{self.noise_model_name} parameters'
+
+            try:
+                assert test_param_dict == self.param_dict
+            except AssertionError as e:
+                diff = {}
+                all_keys = test_param_dict.keys() | self.param_dict.keys()
+                for k in all_keys:
+                    int_param = self.param_dict.get(k, NotImplemented)
+                    sup_param = test_param_dict.get(k, NotImplemented)
+                    if int_param != sup_param:
+                        diff[k] = dict(internal=int_param, supplied=sup_param)
+
+                exc_msg = 'Internal parameters do not match supplied ' + \
+                          f'{self.noise_model_name} parameters:\n'
+                for k, v in diff.items():
+                    exc_msg += f"internal {k}: {v['internal']}, "  + \
+                               f"supplied {k}: {v['supplied']}\n"
+
+                raise AssertionError(exc_msg) from e
 
         if permit_absent_subclass:
             # don't raise KeyError if no XYZNoiseModel
@@ -1451,7 +1468,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     def _get_model_fn(self, split_num, lmax, to_write=False, **subproduct_kwargs):
         """Get a noise model filename for split split_num; return as <str>"""
         kwargs = dict(
-            noise_model_name=self.name,
+            noise_model_name=self.noise_model_name,
             qids='_'.join(self._qids),
             qid_names=self._qid_names,
             config_name=self._config_name,
@@ -1461,8 +1478,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             **subproduct_kwargs
             )
         kwargs.update(self._reference_qid_kwargs)
-        kwargs.update(self._base_param_dict)
-        kwargs.update(self._model_param_dict)
+        kwargs.update(self.param_dict)
 
         fn = self._model_file_template.format(**kwargs)
         if not fn.endswith('.hdf5'):
@@ -1473,7 +1489,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     def _get_sim_fn(self, split_num, sim_num, lmax, alm=False, to_write=False, **subproduct_kwargs):
         """Get a sim filename for split split_num, sim sim_num, and bool alm; return as <str>"""
         kwargs = dict(
-            noise_model_name=self.name,
+            noise_model_name=self.noise_model_name,
             qids='_'.join(self._qids),
             qid_names=self._qid_names,
             config_name=self._config_name,
@@ -1485,8 +1501,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             **subproduct_kwargs
             )
         kwargs.update(self._reference_qid_kwargs)
-        kwargs.update(self._base_param_dict)
-        kwargs.update(self._model_param_dict)
+        kwargs.update(self.param_dict)
 
         fn = self._sim_file_template.format(**kwargs)
         if not fn.endswith('.fits'): 
@@ -1559,9 +1574,10 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         lmax_model = lmax
         shape, wcs = utils.downgrade_geometry_cc_quad(
             self._full_shape, self._full_wcs, downgrade
-            )       
-
-        post_filt_rel_downgrade = self._filter_kwargs.get(
+            )      
+         
+        _filter_kwargs = {} if self._filter_kwargs is None else self._filter_kwargs
+        post_filt_rel_downgrade = _filter_kwargs.get(
             'post_filt_rel_downgrade', 1
             )
         lmax *= post_filt_rel_downgrade
@@ -1661,12 +1677,12 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             mask_obs=mask_obs, mask_est=mask_est, post_filt_downgrade_wcs=wcs,
             sqrt_ivar=sqrt_ivar
             )
-        if 'post_filt_rel_downgrade' not in self._filter_kwargs:
+        if 'post_filt_rel_downgrade' not in _filter_kwargs:
             filter_kwargs[post_filt_rel_downgrade] = post_filt_rel_downgrade
 
-        assert len(filter_kwargs.keys() & self._filter_kwargs.keys()) == 0, \
+        assert len(filter_kwargs.keys() & _filter_kwargs.keys()) == 0, \
             'Instance filter_kwargs and get_model supplied filter_kwargs overlap'
-        filter_kwargs.update(self._filter_kwargs)
+        filter_kwargs.update(_filter_kwargs)
 
         # get the model
         with bench.show(f'Generating noise model for {utils.kwargs_str(split_num=split_num, lmax=lmax_model, **subproduct_kwargs)}'):
@@ -1750,8 +1766,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                 print(f'Model for {utils.kwargs_str(split_num=split_num, lmax=lmax, **subproduct_kwargs)} not found on-disk, generating instead')
                 return False
             else:
-                print(f'Model for {utils.kwargs_str(split_num=split_num, lmax=lmax, **subproduct_kwargs)} not found on-disk, please generate it first')
-                raise e
+                raise FileNotFoundError(f'Model for {utils.kwargs_str(split_num=split_num, lmax=lmax, **subproduct_kwargs)} not found on-disk, please generate it first') from e
     
     @classmethod
     def filter_model(cls, inp, iso_filt_method=None, ivar_filt_method=None,
@@ -1876,7 +1891,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         if self._dumpable:
             self._save_yaml_config(self._config_fn)
 
-        post_filt_rel_downgrade = self._filter_kwargs.get(
+        _filter_kwargs = {} if self._filter_kwargs is None else self._filter_kwargs
+        post_filt_rel_downgrade = _filter_kwargs.get(
             'post_filt_rel_downgrade', 1
             )
         downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax) 
@@ -1942,12 +1958,12 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             dtype=self._dtype, n=shape[-1], nthread=0, normalize='ortho',
             mask_obs=mask_obs, sqrt_ivar=sqrt_ivar, inplace=True
             )
-        if 'post_filt_rel_downgrade' not in self._filter_kwargs:
+        if 'post_filt_rel_downgrade' not in _filter_kwargs:
             filter_kwargs[post_filt_rel_downgrade] = post_filt_rel_downgrade
 
-        assert len(filter_kwargs.keys() & self._filter_kwargs.keys()) == 0, \
+        assert len(filter_kwargs.keys() & _filter_kwargs.keys()) == 0, \
             'Instance filter_kwargs and get_model supplied filter_kwargs overlap'
-        filter_kwargs.update(self._filter_kwargs)
+        filter_kwargs.update(_filter_kwargs)
 
         assert len(model_dict.keys() & filter_kwargs.keys()) == 0, \
             'model_dict and filter_kwargs overlap'
@@ -2032,8 +2048,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                 print(f'Sim {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)} not found on-disk, generating instead')
                 return False
             else:
-                print(f'Sim {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)} not found on-disk, please generate it first')
-                raise e
+                raise FileNotFoundError(f'Sim {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)} not found on-disk, please generate it first') from e
 
     @classmethod
     def filter(cls, inp, iso_filt_method=None, ivar_filt_method=None,
