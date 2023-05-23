@@ -1,5 +1,5 @@
 from sofind import utils as s_utils
-from pixell import enmap, curvedsky, fft as enfft, sharp, colorize, cgrid
+from pixell import enmap, curvedsky, sharp, colorize, cgrid
 import healpy as hp
 from enlib import array_ops
 from optweight import alm_c_utils
@@ -15,8 +15,6 @@ from scipy import ndimage
 import numba
 import healpy as hp
 from astropy.io import fits
-import yaml
-import h5py
 
 from itertools import product
 from concurrent import futures
@@ -107,31 +105,6 @@ def get_mnms_fn(basename, pathtype, no_fn_collisions=True, to_write=False):
     return s_utils.get_protected_fn(
         fns, no_fn_collisions=no_fn_collisions, write_to_fn_idx=write_to_fn_idx
         )
-
-def config_from_hdf5_file(filename, address='/'):
-    """Return a dictionary of the attributes at hfile[address].attrs.
-
-    Parameters
-    ----------
-    filename : h5py.Group or path-like
-        Either an h5py.Group stream or a system path.
-    address : str, optional
-        Group in hfile to look for config, by default the root.
-
-    Returns
-    -------
-    dict
-        dict(hfile[address].attrs)
-    """
-    if not isinstance(filename, h5py.Group):
-        with h5py.File(filename, 'r') as hfile:
-            return config_from_hdf5_file(hfile, address=address)
-    
-    idict = filename[address].attrs
-    odict = {}
-    for k, v in idict.items():
-        odict[k] = yaml.safe_load(v)
-    return odict
 
 def kwargs_str(**kwargs):
     """For printing kwargs as a string"""

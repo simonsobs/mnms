@@ -978,12 +978,9 @@ class ConfigManager(ABC):
         ----------
         config_name : str, optional
             Name of configuration file to save this NoiseModel instance's
-            parameters, set to default based on current time if None. If
-            dumpable is True and this file already exists, all parameters
-            will be checked for compatibility with existing parameters
-            within file, and filename cannot be shared with a file shipped
-            by the mnms package. Must be a yaml file. If dumpable is False,
-            set to None and no compatibility checking occurs.
+            parameters, set to default based on current time if None. Filename
+            cannot be shared with a file shipped by the mnms package. Must be
+            a yaml file.
         noise_model_name : str, optional
             The string name of this NoiseModel instance. This becomes the header
             of the block in the config storing this NoiseModel's parameters.
@@ -1011,25 +1008,19 @@ class ConfigManager(ABC):
         Only supports configuration files with a yaml extension. If dumpable
         is True:
 
-        A config_name is not permissible and an exception raised if:
+        A config is not permissible and an exception raised if:
             1. It exists as a shipped config within the mnms package OR
-            2. It exists on-disk but does not contain any BaseNoiseModel 
-               parameters OR
-            3. It exists on-disk and its BaseNoiseModel parameters are not
-               identical to the supplied BaseNoiseModel parameters OR
-            4. It exists on-disk and it contains subclass parameters and the
-               subclass parameters are not identical to the supplied subclass
-               paramaters.
+            2. It exists on-disk and the NoiseModel parameters under the
+               named noise model are not identical to the calling NoiseModel
+               parameters
         
-        Conversely, config_name is permissible if:
+        Conversely, a config is permissible if:
             1. It does not already exist on disk or in the mnms package OR
-            2. If exists on-disk and it contains BaseNoiseModel parameters and 
-               the BaseNoiseModel parameters identically match the supplied
-               BaseNoiseModel parameters OR
-            3. It exists on-disk and it does not contain subclass parameters OR
-            4. It exists on-disk and it contains subclass parameters and the
-               subclass parameters identically match the supplied subclass
-               parameters.
+            2. If exists on-disk but does not contain an entry for the named 
+               noise model OR
+            3. It exists on-disk and the NoiseModel parameters under the
+               named noise model are identical to the calling NoiseModel
+               parameters
         """
         # check dumpability of model and whether filenames have been provided
         self._dumpable = dumpable and not self._runtime_params
@@ -1261,7 +1252,9 @@ class ConfigManager(ABC):
             param_dict attribute.
         """
         try:
-            on_disk_dict = utils.config_from_hdf5_file(file, address=address)
+            on_disk_dict = s_utils.config_from_hdf5_file(
+                file, address=address, op=yaml.safe_load
+                )
         except FileNotFoundError as e:
             if not permit_absent_config:
                 raise e 
