@@ -25,25 +25,18 @@ import warnings
 
 # Utility functions to support tiling classes and functions. Just keeping code organized so I don't get whelmed.
 
-def get_mnms_fn(basename, pathtype, no_fn_collisions=True, to_write=False):
+def get_private_mnms_fn(which, basename, to_write=False):
     """Get an absolute path to an mnms file. The file may exist or not
-    in any of the user's private mnms data directory, the system's 
-    public mnms data directory, or the mnms package. 
+    in the user's private mnms data directory. 
 
     Parameters
     ----------
+    which : str
+        The subdirectory (kind) of file. Must be one of models or sims.
     basename : str
         Basename of the file.
-    pathtype : str
-        The subdirectory (kind) of file. Must be one of configs, models, 
-        sims, masks, catalogs.
-    no_fn_collisions : bool, optional
-        If to_write is False: enforce that at most one of the supplied fns exists if 
-        True, and return the first fn that exists in fns if False. If to_write is True,
-        then enforce that none of the fns other than the private_fn exists.
     to_write : bool, optional
         Whether the returned file will be used for writing, by default False.
-        If True, then return private_fn.
 
     Returns
     -------
@@ -55,56 +48,24 @@ def get_mnms_fn(basename, pathtype, no_fn_collisions=True, to_write=False):
     KeyError
         If private_path not in user's .mnms_config.yaml file but to_write
         is True.
-
-    FileExistsError
-        If to_write is False:
-            If no_fn_collisions is True and more than one of fns exists.
-
-        Or to_write is True:
-            If no_fn_collisions is True and more than zero of the other
-            fns exists.
-    FileNotFoundError
-        If to_write is False and none of fns exists.
-
-    Notes
-    -----
-    If no_fn_collisions is False and the file exists in more than one location,
-    the priority order is private, public, then package location.
     """
-    assert pathtype in ['configs', 'models', 'sims', 'masks', 'catalogs'], \
-        'pathtype must be one of configs, models, sims, masks, catalogs'
+    assert which in ['models', 'sims'], \
+        'which must be one of models, sims'
 
     # e.g. model.fits --> models/model.fits
-    basename = os.path.join(pathtype, basename)
+    basename = os.path.join(which, basename)
 
     try:
         private_fn = s_utils.get_system_fn(
             '.mnms_config', basename, config_keys=['private_path']
             )
-    except KeyError as e:
+    except (TypeError, KeyError) as e:
         if to_write:
-            raise e
+            raise LookupError(f'No private_path in user mnms_config') from e
         else:
-            private_fn = ''
+            private_fn = '' # this path is guaranteed to not exist
 
-    try:
-        public_fn = s_utils.get_system_fn(
-            '.mnms_config', basename, config_keys=['public_path']
-            )
-    except KeyError:
-        public_fn = ''
-
-    package_fn = s_utils.get_package_fn('mnms', basename)
-    fns = [private_fn, public_fn, package_fn]
-
-    if to_write:
-        write_to_fn_idx = 0
-    else:
-        write_to_fn_idx = None
-
-    return s_utils.get_protected_fn(
-        fns, no_fn_collisions=no_fn_collisions, write_to_fn_idx=write_to_fn_idx
-        )
+    return private_fn
 
 def kwargs_str(**kwargs):
     """For printing kwargs as a string"""
@@ -2319,7 +2280,7 @@ def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=Fal
     return res
 
 def read_map(data_model, qid, split_num=0, coadd=False, ivar=False,
-             subproduct='default', srcfree=True, **subproduct_kwargs):
+             maps_subproduct='default', srcfree=True, **maps_subproduct_kwargs):
     """Read a map from disk according to the data_model filename conventions.
 
     Parameters
@@ -2336,11 +2297,11 @@ def read_map(data_model, qid, split_num=0, coadd=False, ivar=False,
     ivar : bool, optional
         If True, load the inverse-variance map for the qid and split. If False,
         load the source-free map for the same, by default False.
-    subproduct : str, optional
+    maps_subproduct : str, optional
         Name of map subproduct to load raw products from, by default 'default'.
     srcfree : bool, optional
         Whether to load a srcfree map or regular map, by default True.
-    subproduct_kwargs : dict, optional
+    maps_subproduct_kwargs : dict, optional
         Any additional keyword arguments used to format the map filename.
 
     Returns
@@ -2351,27 +2312,27 @@ def read_map(data_model, qid, split_num=0, coadd=False, ivar=False,
     if ivar:
         omap = data_model.read_map(
             qid, split_num=split_num, coadd=coadd, maptag='ivar',
-            subproduct=subproduct, **subproduct_kwargs
+            subproduct=maps_subproduct, **maps_subproduct_kwargs
             )
     elif srcfree:
         try:
             omap = data_model.read_map(
                 qid, split_num=split_num, coadd=coadd, maptag='map_srcfree',
-                subproduct=subproduct, **subproduct_kwargs
+                subproduct=maps_subproduct, **maps_subproduct_kwargs
                 )
         except FileNotFoundError:
             omap = data_model.read_map(
                 qid, split_num=split_num, coadd=coadd, maptag='map',
-                subproduct=subproduct, **subproduct_kwargs
+                subproduct=maps_subproduct, **maps_subproduct_kwargs
                 )
             omap -= data_model.read_map(
                 qid, split_num=split_num, coadd=coadd, maptag='srcs',
-                subproduct=subproduct, **subproduct_kwargs
+                subproduct=maps_subproduct, **maps_subproduct_kwargs
                 )
     else:
         omap = data_model.read_map(
             qid, split_num=split_num, coadd=coadd, maptag='map',
-            subproduct=subproduct, **subproduct_kwargs
+            subproduct=maps_subproduct, **maps_subproduct_kwargs
             )
 
     if omap.ndim == 2:
@@ -2379,7 +2340,7 @@ def read_map(data_model, qid, split_num=0, coadd=False, ivar=False,
     return omap
 
 def read_map_geometry(data_model, qid, split_num=0, coadd=False, ivar=False,
-                      subproduct='default', srcfree=True, **subproduct_kwargs):
+                      maps_subproduct='default', srcfree=True, **maps_subproduct_kwargs):
     """Read a map geometry from disk according to the data_model filename
     conventions.
 
@@ -2397,13 +2358,13 @@ def read_map_geometry(data_model, qid, split_num=0, coadd=False, ivar=False,
     ivar : bool, optional
         If True, load the inverse-variance map for the qid and split. If False,
         load the source-free map for the same, by default False.
-    subproduct : str, optional
+    maps_subproduct : str, optional
         Name of map subproduct to load raw products from, by default 'default'.
     srcfree : bool, optional
         Whether to load a srcfree map or regular map, by default True. If cannot
         find the desired map to load geometry from (e.g. 'map_srcfree'), will 
         look for the other (e.g. 'map').
-    subproduct_kwargs : dict, optional
+    maps_subproduct_kwargs : dict, optional
         Any additional keyword arguments used to format the map filename.
 
     Returns
@@ -2414,7 +2375,7 @@ def read_map_geometry(data_model, qid, split_num=0, coadd=False, ivar=False,
     if ivar:
         map_fn = data_model.get_map_fn(
             qid, split_num=split_num, coadd=coadd, maptag='ivar',
-            subproduct=subproduct, **subproduct_kwargs
+            subproduct=maps_subproduct, **maps_subproduct_kwargs
             )
         shape, wcs = enmap.read_map_geometry(map_fn)
     else:
@@ -2425,13 +2386,13 @@ def read_map_geometry(data_model, qid, split_num=0, coadd=False, ivar=False,
         try:
             map_fn = data_model.get_map_fn(
                 qid, split_num=split_num, coadd=coadd, maptag=maptags[0],
-                subproduct=subproduct, **subproduct_kwargs
+                subproduct=maps_subproduct, **maps_subproduct_kwargs
                 )
             shape, wcs = enmap.read_map_geometry(map_fn)
         except FileNotFoundError:
             map_fn = data_model.get_map_fn(
                 qid, split_num=split_num, coadd=coadd, maptag=maptags[1],
-                subproduct=subproduct, **subproduct_kwargs
+                subproduct=maps_subproduct, **maps_subproduct_kwargs
                 )
             shape, wcs = enmap.read_map_geometry(map_fn)
 
@@ -2601,33 +2562,6 @@ def get_bool_mask_from_ivar(ivar):
         mask *= ivar[idx].astype(bool)
 
     return enmap.enmap(mask, wcs=ivar.wcs, copy=False)
-
-def get_catalog(catalog_fn):
-    """Load and process source catalog.
-
-    Parameters
-    ----------
-    catalog_fn : str
-        A file for a source catalog. The source catalog must have the following
-        features:
-            * A row-major list of coordinates
-            * The first column is RA (in degrees)
-            * The second column is DEC (in degrees)
-            * Columns are comma-separated
-
-    Returns
-    -------
-    catalog : (2, N) array
-        DEC and RA values (in radians) for each point source.
-
-    Notes
-    -----
-    Expects RA, DEC columns (degrees), returns DEC, RA rows (radians).
-    """
-    ra, dec = np.loadtxt(catalog_fn, unpack=True, usecols=[0, 1], delimiter=',')
-    out = np.radians(np.vstack([dec, ra]))
-
-    return out
 
 def colorscheme_to_cmap(desc):
     """Convert a pixell.colorize.Colorscheme to a matplotlib.colors.Colormap"""
