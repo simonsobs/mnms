@@ -6,11 +6,11 @@ parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFo
 parser.add_argument('--config-name', dest='config_name', type=str, required=True,
                     help='Name of model config file from which to load parameters')
 
+parser.add_argument('--noise-model-name', dest='noise_model_name', type=str, required=True,
+                    help='Name of model within config file from which to load parameters')
+
 parser.add_argument('--qid', dest='qid', nargs='+', type=str, required=True,
                     help='list of soapack array "qids"')
-
-parser.add_argument('--lmax', dest='lmax', type=int, required=True,
-                    help='Bandlimit of covariance matrix.')
 
 parser.add_argument('--split', nargs='+', dest='split', type=int, 
                     help='if --no-auto-split, simulate this list of splits '
@@ -19,6 +19,9 @@ parser.add_argument('--split', nargs='+', dest='split', type=int,
 parser.add_argument('--no-auto-split', dest='auto_split', default=True, 
                     action='store_false', help='if passed, do not simulate every '
                     'split for this array')
+
+parser.add_argument('--lmax', dest='lmax', type=int, required=True,
+                    help='Bandlimit of covariance matrix.')
 
 parser.add_argument('--maps', dest='maps', nargs='+', type=str, default=None,
                     help='simulate exactly these map_ids, overwriting if preexisting; '
@@ -38,7 +41,7 @@ parser.add_argument('--alm', dest='alm', default=False,
                     action='store_true', help='Generate simulated alms instead of maps.')
 args = parser.parse_args()
 
-model = nm.WaveletNoiseModel.from_config(args.config_name, *args.qid)
+model = nm.BaseNoiseModel.from_config(args.config_name, args.noise_model_name, *args.qid)
 
 # get split nums
 if args.auto_split:
