@@ -74,7 +74,7 @@ def identity(inp, *args, **kwargs):
 @register('map', 'map', iso_filt_method='harmonic', model=True)
 def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
                                  post_filt_rel_downgrade=1,
-                                 post_filt_downgrade_wcs=None, **kwargs):
+                                 post_filt_downgrade_wcs=None, tweak=False, **kwargs):
     """Filter a map by an ell-dependent matrix in harmonic space. The
     filter is measured as the pseudospectra of the input and returned.
 
@@ -115,7 +115,7 @@ def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
         lmax = utils.lmax_from_wcs(imap)
 
     # measure correlated pseudo spectra for filtering
-    alm = utils.map2alm(imap * mask_est, ainfo=ainfo, lmax=lmax)
+    alm = utils.map2alm(imap * mask_est, ainfo=ainfo, lmax=lmax, tweak=tweak)
     sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', 0.5, mask_est=mask_est)
     inv_sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', -0.5, mask_est=mask_est)
     alm = None
@@ -123,7 +123,7 @@ def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
     # do filtering
     imap = utils.ell_filter_correlated(
         imap, 'map', inv_sqrt_cov_ell, map2basis='harmonic', ainfo=ainfo,
-        lmax=lmax, inplace=True
+        lmax=lmax, inplace=True, tweak=tweak
         ) 
 
     # possibly do rel downgrade
@@ -151,7 +151,7 @@ def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
 
 @register('harmonic', 'harmonic', iso_filt_method='harmonic')
 def iso_harmonic_ivar_none(alm, sqrt_cov_ell=None, ainfo=None, lmax=None,
-                           inplace=True, **kwargs):
+                           inplace=True, tweak=False, **kwargs):
     """Filter an alm by an ell-dependent matrix in harmonic space.
 
     Parameters
@@ -176,13 +176,13 @@ def iso_harmonic_ivar_none(alm, sqrt_cov_ell=None, ainfo=None, lmax=None,
     if lmax is None:
         lmax = sqrt_cov_ell.shape[-1] - 1
     return utils.ell_filter_correlated(
-        alm, 'harmonic', sqrt_cov_ell, ainfo=ainfo, lmax=lmax, inplace=inplace
+        alm, 'harmonic', sqrt_cov_ell, ainfo=ainfo, lmax=lmax, inplace=inplace, tweak=tweak
     )
 
 @register('map', 'map', iso_filt_method='harmonic', ivar_filt_method='basic', model=True)
 def iso_harmonic_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
                                   lmax=None, post_filt_rel_downgrade=1,
-                                  post_filt_downgrade_wcs=None, **kwargs):
+                                  post_filt_downgrade_wcs=None, tweak=False, **kwargs):
     """Filter a map by another map in map space, and then an ell-dependent
     matrix in harmonic space. The harmonic filter is measured as the
     pseudospectra of the input and returned.
@@ -225,14 +225,14 @@ def iso_harmonic_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
     return iso_harmonic_ivar_none_model(
         filt_imap, mask_est=mask_est, ainfo=ainfo, lmax=lmax,
         post_filt_rel_downgrade=post_filt_rel_downgrade, 
-        post_filt_downgrade_wcs=post_filt_downgrade_wcs
+        post_filt_downgrade_wcs=post_filt_downgrade_wcs, tweak=tweak
         )
 
 @register('harmonic', 'map', iso_filt_method='harmonic', ivar_filt_method='basic')
 def iso_harmonic_ivar_basic(alm, sqrt_ivar=1, sqrt_cov_ell=None, ainfo=None,
                             lmax=None, inplace=True, shape=None, wcs=None,
                             no_aliasing=True, adjoint=False,
-                            post_filt_rel_downgrade=1, **kwargs):
+                            post_filt_rel_downgrade=1, tweak=False, **kwargs):
     """Filter an alm by an ell-dependent matrix in harmonic space, and then by 
     another map in map space.
 
@@ -277,11 +277,11 @@ def iso_harmonic_ivar_basic(alm, sqrt_ivar=1, sqrt_cov_ell=None, ainfo=None,
     """
     alm = iso_harmonic_ivar_none(
         alm, sqrt_cov_ell=sqrt_cov_ell, ainfo=ainfo, lmax=lmax, inplace=inplace,
-        **kwargs
+        tweak=tweak, **kwargs
         )
     omap = transforms.alm2map(
         alm, shape=shape, wcs=wcs, ainfo=ainfo, no_aliasing=no_aliasing,
-        adjoint=adjoint
+        adjoint=adjoint, tweak=tweak
         )
     
     # need to handle that preshapes may not be the same. this is akin to what 
@@ -317,7 +317,7 @@ def iso_harmonic_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
                                      ell_highs=None, profile='cosine',
                                      dtype=np.float32, mask_est=1, ainfo=None,
                                      lmax=None, post_filt_rel_downgrade=1,
-                                     post_filt_downgrade_wcs=None, **kwargs):
+                                     post_filt_downgrade_wcs=None, tweak=False, **kwargs):
     """Filter a map by multiple maps in map space, each map for a different 
     range of ells in harmonic space. Then, filter that map by an ell-dependent
     matrix in harmonic space. The harmonic filter is measured as the
@@ -381,14 +381,14 @@ def iso_harmonic_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
         prof = trans_profs[i]
         lmaxi = prof.size - 1
         if i < len(sqrt_ivar) - 1:
-            filt_imap += utils.ell_filter(imap, prof, lmax=lmaxi) * sq_iv
+            filt_imap += utils.ell_filter(imap, prof, lmax=lmaxi, tweak=tweak) * sq_iv
         else:
-            filt_imap += (imap - utils.ell_filter(imap, 1 - prof, lmax=lmaxi)) * sq_iv
+            filt_imap += (imap - utils.ell_filter(imap, 1 - prof, lmax=lmaxi, tweak=tweak)) * sq_iv
 
     return iso_harmonic_ivar_none_model(
         filt_imap, mask_est=mask_est, ainfo=ainfo, lmax=lmax,
         post_filt_rel_downgrade=post_filt_rel_downgrade, 
-        post_filt_downgrade_wcs=post_filt_downgrade_wcs
+        post_filt_downgrade_wcs=post_filt_downgrade_wcs, tweak=tweak
         )
 
 @register('harmonic', 'map', iso_filt_method='harmonic', ivar_filt_method='scaledep')
@@ -396,7 +396,7 @@ def iso_harmonic_ivar_scaledep(alm, sqrt_cov_ell=None, sqrt_ivar=1,
                                ell_lows=None, ell_highs=None, profile='cosine',
                                dtype=np.float32, lmax=None, shape=None,
                                wcs=None, no_aliasing=True, adjoint=False,
-                               post_filt_rel_downgrade=1, **kwargs):
+                               post_filt_rel_downgrade=1, tweak=False, **kwargs):
     """Filter an alm by an ell-dependent matrix in harmonic space, and then by 
     multiple maps in map space, each map for a different range of ells in
     harmonic space.
@@ -476,7 +476,8 @@ def iso_harmonic_ivar_scaledep(alm, sqrt_cov_ell=None, sqrt_ivar=1,
             sqrt_cov_ell=sqrt_cov_ell[..., :lmaxi + 1]*prof,
             ainfo=None, lmax=lmaxi, inplace=False, shape=shape, wcs=wcs,
             no_aliasing=no_aliasing, adjoint=adjoint,
-            post_filt_rel_downgrade=1 # one multiplication instead of many to speed up
+            post_filt_rel_downgrade=1, # one multiplication instead of many to speed up
+            tweak=tweak
         )
     
     # one multiplication instead of many to speed up

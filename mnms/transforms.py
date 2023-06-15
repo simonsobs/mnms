@@ -48,7 +48,7 @@ def identity(inp, *args, **kwargs):
 
 @register('map', 'harmonic')
 def map2alm(imap, ainfo=None, lmax=None, no_aliasing=True, adjoint=False,
-            **kwargs):
+            tweak=False, **kwargs):
     """From map to harmonic space.
 
     Parameters
@@ -71,11 +71,11 @@ def map2alm(imap, ainfo=None, lmax=None, no_aliasing=True, adjoint=False,
         The transformed alm.
     """
     return utils.map2alm(imap, ainfo=ainfo, lmax=lmax, no_aliasing=no_aliasing,
-                         alm2map_adjoint=adjoint)
+                         alm2map_adjoint=adjoint, tweak=tweak)
 
 @register('harmonic', 'map')
 def alm2map(alm, shape=None, wcs=None, dtype=None, ainfo=None, no_aliasing=True,
-            adjoint=False, **kwargs):
+            adjoint=False, tweak=False, **kwargs):
     """From harmonic to map space.
 
     Parameters
@@ -102,7 +102,7 @@ def alm2map(alm, shape=None, wcs=None, dtype=None, ainfo=None, no_aliasing=True,
         The transformed map.
     """
     return utils.alm2map(alm, shape=shape, wcs=wcs, dtype=dtype, ainfo=ainfo,
-                         no_aliasing=no_aliasing, map2alm_adjoint=adjoint)
+                         no_aliasing=no_aliasing, map2alm_adjoint=adjoint, tweak=tweak)
 
 @register('map', 'fourier')
 def map2fourier(imap, nthread=0, normalize='ortho', adjoint=False, **kwargs):
@@ -157,7 +157,7 @@ def fourier2map(kmap, n=None, nthread=0, normalize='ortho', adjoint=False,
 @register('harmonic', 'fourier')
 def alm2fourier(alm, shape=None, wcs=None, dtype=None, ainfo=None,
                 no_aliasing=True, nthread=0, normalize='ortho', adjoint=False,
-                **kwargs):
+                tweak=False, **kwargs):
     """From harmonic to fourier space.
 
     Parameters
@@ -188,13 +188,14 @@ def alm2fourier(alm, shape=None, wcs=None, dtype=None, ainfo=None,
         The transformed map.
     """
     _map = alm2map(alm, shape=shape, wcs=wcs, ainfo=ainfo,
-                   no_aliasing=no_aliasing, adjoint=adjoint)
+                   no_aliasing=no_aliasing, adjoint=adjoint, tweak=tweak)
     return map2fourier(_map, nthread=nthread, normalize=normalize,
                        adjoint=adjoint) 
 
 @register('fourier', 'harmonic')
 def fourier2alm(kmap, n=None, nthread=0, normalize='ortho', ainfo=None,
-                lmax=None, no_aliasing=True, adjoint=False, **kwargs):
+                lmax=None, no_aliasing=True, adjoint=False, tweak=False,
+                **kwargs):
     """From fourier to harmonic space.
 
     Parameters
@@ -226,4 +227,4 @@ def fourier2alm(kmap, n=None, nthread=0, normalize='ortho', ainfo=None,
     _map = fourier2map(kmap, n=n, nthread=nthread, normalize=normalize,
                        adjoint=adjoint)
     return map2alm(_map, ainfo=ainfo, lmax=lmax, no_aliasing=no_aliasing,
-                   adjoint=adjoint)
+                   adjoint=adjoint, tweak=tweak)

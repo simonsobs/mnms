@@ -13,6 +13,9 @@ from itertools import product
 from abc import ABC, abstractmethod
 
 
+TWEAK = True
+
+
 class DataManager(io.Params):
 
     def __init__(self, *qids, **kwargs):
@@ -420,7 +423,7 @@ class DataManager(io.Params):
                     # if ivar_lmax is None, don't bandlimit it
                     if ivar_lmax:
                         _ivar = utils.alm2map(
-                            utils.map2alm(_ivar, lmax=ivar_lmax), shape=ivar.shape, wcs=ivar.wcs
+                            utils.map2alm(_ivar, lmax=ivar_lmax, tweak=TWEAK), shape=ivar.shape, wcs=ivar.wcs, tweak=TWEAK
                             )
 
                     # zero-out any numerical negative ivar
@@ -1449,7 +1452,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             lmax=lmax, no_aliasing=True, shape=shape, wcs=wcs,
             dtype=self._dtype, n=shape[-1], nthread=0, normalize='ortho',
             mask_obs=mask_obs, mask_est=mask_est, post_filt_downgrade_wcs=wcs,
-            sqrt_ivar=sqrt_ivar
+            sqrt_ivar=sqrt_ivar, tweak=TWEAK
             )
         if 'post_filt_rel_downgrade' not in _filter_kwargs:
             filter_kwargs[post_filt_rel_downgrade] = post_filt_rel_downgrade
@@ -1734,7 +1737,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         filter_kwargs = dict(
             lmax=lmax, no_aliasing=True, shape=shape, wcs=wcs,
             dtype=self._dtype, n=shape[-1], nthread=0, normalize='ortho',
-            mask_obs=mask_obs, sqrt_ivar=sqrt_ivar, inplace=True
+            mask_obs=mask_obs, sqrt_ivar=sqrt_ivar, inplace=True, tweak=TWEAK
             )
         if 'post_filt_rel_downgrade' not in _filter_kwargs:
             filter_kwargs[post_filt_rel_downgrade] = post_filt_rel_downgrade
@@ -1755,7 +1758,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                 )
             sim *= mask_obs
             if alm:
-                sim = utils.map2alm(sim, lmax=lmax)
+                sim = utils.map2alm(sim, lmax=lmax, tweak=TWEAK)
 
         # keep, write data if requested
         if keep_model and not model_from_cache:
