@@ -58,7 +58,7 @@ def estimate_sqrt_cov_wav_from_enmap(alm, w_ell, shape, wcs, fwhm_fact=2,
     ainfo = sharp.alm_info(nalm=alm.shape[-1])
 
     # Get wavelet kernels and estimate wavelet covariance.
-    wav_template = wavtrans.Wav.from_enmap(shape, wcs, w_ell, 1, preshape=shape[:-2],
+    wav_template = wavtrans.Wav.from_enmap(shape, wcs, w_ell, 1, preshape=alm.shape[:-1],
                                            dtype=type_utils.to_real(alm.dtype))
     cov_wav = noise_utils.estimate_cov_wav(alm, ainfo, w_ell, [0, 2], diag=False,
                                            wav_template=wav_template, fwhm_fact=fwhm_fact)

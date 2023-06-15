@@ -133,7 +133,10 @@ def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
             f'{post_filt_rel_downgrade}'
         post_filt_rel_downgrade = int(post_filt_rel_downgrade)
 
-        imap = utils.fourier_downgrade_cc_quad(imap, post_filt_rel_downgrade)
+        variant = utils.get_variant(*imap.geometry)
+        imap = utils.fourier_downgrade(
+            imap, post_filt_rel_downgrade, variant=variant
+            )
         
     # if imap is already downgraded, second downgrade may introduce
     # 360-deg offset in RA, so we give option to overwrite wcs with

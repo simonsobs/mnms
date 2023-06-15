@@ -1,4 +1,4 @@
-from mnms import noise_models as nm
+from mnms import noise_models as nm, utils
 import argparse
 import numpy as np
 
@@ -22,6 +22,10 @@ parser.add_argument('--no-auto-split', dest='auto_split', default=True,
 
 parser.add_argument('--lmax', dest='lmax', type=int, required=True,
                     help='Bandlimit of covariance matrix.')
+
+parser.add_argument('--subproduct-kwargs', dest='subproduct_kwargs', nargs='+', type=str, default={},
+                    action=utils.StoreDict, metavar='KEY1=VAL1 KEY2=VAL2 ...',
+                    help='additional key=value pairs to pass to get_model, get_sim')
 
 parser.add_argument('--maps', dest='maps', nargs='+', type=str, default=None,
                     help='simulate exactly these map_ids, overwriting if preexisting; '
@@ -61,8 +65,10 @@ assert np.all(maps >= 0)
 
 # Iterate over sims
 for s in splits:
-    model.get_model(s, args.lmax, keep_model=True, keep_mask_obs=True, keep_sqrt_ivar=True, verbose=True)
+    model.get_model(s, args.lmax, keep_model=True, keep_mask_obs=True, keep_sqrt_ivar=True, verbose=True,
+                    **args.subproduct_kwargs)
     for m in maps:
-        model.get_sim(s, m, args.lmax, alm=args.alm, write=True, verbose=True)
+        model.get_sim(s, m, args.lmax, alm=args.alm, write=True, verbose=True,
+                      **args.subproduct_kwargs)
     model.cache_clear('model')
     model.cache_clear('sqrt_ivar')

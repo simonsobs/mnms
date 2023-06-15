@@ -1,4 +1,4 @@
-from mnms import noise_models as nm
+from mnms import noise_models as nm, utils
 import argparse
 import numpy as np
 
@@ -22,6 +22,10 @@ parser.add_argument('--no-auto-split', dest='auto_split', default=True,
 
 parser.add_argument('--lmax', dest='lmax', type=int, required=True,
                     help='Bandlimit of covariance matrix.')
+
+parser.add_argument('--subproduct-kwargs', dest='subproduct_kwargs', nargs='+', type=str, default={},
+                    action=utils.StoreDict, metavar='KEY1=VAL1 KEY2=VAL2 ...',
+                    help='additional key=value pairs to pass to get_model, get_sim')
 args = parser.parse_args()
 
 model = nm.BaseNoiseModel.from_config(args.config_name, args.noise_model_name, *args.qid)
@@ -35,4 +39,5 @@ assert np.all(splits >= 0)
 
 # Iterate over models
 for s in splits:
-    model.get_model(s, args.lmax, keep_mask_est=True, keep_mask_obs=True, verbose=True)
+    model.get_model(s, args.lmax, keep_mask_est=True, keep_mask_obs=True, verbose=True,
+                    **args.subproduct_kwargs)

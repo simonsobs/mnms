@@ -122,6 +122,7 @@ class DataManager(io.Params):
 
         # Get lmax, shape, and wcs
         self._full_shape, self._full_wcs = self._check_geometry()
+        self._variant = utils.get_variant(self._full_shape, self._full_wcs)
         self._full_lmax = utils.lmax_from_wcs(self._full_wcs)
 
     def maps_subproduct_kwargs_iter(self):
@@ -200,7 +201,10 @@ class DataManager(io.Params):
                 mask_est = enmap.ones(self._full_shape, self._full_wcs, self._dtype)                                 
             
             if downgrade != 1:
-                mask_est = utils.interpol_downgrade_cc_quad(mask_est, downgrade)
+                if self._variant == 'cc':
+                    mask_est = utils.interpol_downgrade_cc_quad(mask_est, downgrade)
+                else:
+                    mask_est = enmap.downgrade(mask_est, downgrade)
 
                 # to prevent numerical error, cut below a threshold
                 mask_est[mask_est < min_threshold] = 0.
@@ -253,11 +257,14 @@ class DataManager(io.Params):
                         mask_obs *= ivar[idx].astype(bool)
 
                         if downgrade != 1:
-                            # use harmonic instead of interpolated downgrade because it is 
-                            # 10x faster
-                            ivar_dg = utils.fourier_downgrade_cc_quad(
-                                ivar[idx], downgrade
-                                )
+                            if self._variant == 'cc':
+                                # use harmonic instead of interpolated downgrade because it is 
+                                # 10x faster
+                                ivar_dg = utils.fourier_downgrade(
+                                    ivar[idx], downgrade, variant=self._variant
+                                    )
+                            else:
+                                ivar_dg = enmap.downgrade(ivar[idx], downgrade)
                             mask_obs_dg *= ivar_dg > 0
 
             # apply any edgecut to mask_obs
@@ -269,9 +276,12 @@ class DataManager(io.Params):
                 mask_obs *= self._get_mask_from_disk(self._mask_obs_name, dtype=bool)
 
             # downgrade the full resolution mask_obs
-            mask_obs = utils.interpol_downgrade_cc_quad(
-                mask_obs, downgrade, dtype=self._dtype
-                )
+            mask_obs = mask_obs.astype(self._dtype, copy=False)
+            if downgrade != 1:
+                if self._variant == 'cc':
+                    mask_obs = utils.interpol_downgrade_cc_quad(mask_obs, downgrade)
+                else:
+                    mask_obs = enmap.downgrade(mask_obs, downgrade)
 
             # define downgraded mask_obs to be True only where the interpolated 
             # downgrade is all 1 -- this is the most conservative route in terms of 
@@ -334,8 +344,13 @@ class DataManager(io.Params):
         length-1 iterables. If they are >length-2 iterables, then an additional
         dimension is prepended. They must be both scalar or the same length.
         """
-        shape, wcs = utils.downgrade_geometry_cc_quad(
-            self._full_shape, self._full_wcs, downgrade
+        if self._variant == 'cc':
+            shape, wcs = utils.downgrade_geometry_cc_quad(
+                self._full_shape, self._full_wcs, downgrade
+                )
+        else:
+            shape, wcs = enmap.downgrade_geometry(
+                self._full_shape, self._full_wcs, downgrade
             )
 
         # if scalars, make iterable
@@ -384,11 +399,14 @@ class DataManager(io.Params):
                 ivar *= mul
                 
                 if downgrade != 1:
-                    # use harmonic instead of interpolated downgrade because it is 
-                    # 10x faster
-                    ivar = utils.fourier_downgrade_cc_quad(
-                        ivar, downgrade, area_pow=1
-                        )
+                    if self._variant == 'cc':
+                        # use harmonic instead of interpolated downgrade because it is 
+                        # 10x faster
+                        ivar = utils.fourier_downgrade(
+                            ivar, downgrade, variant=self._variant, area_pow=1
+                            )
+                    else:
+                        ivar = enmap.downgrade(ivar, downgrade, op=np.sum)
 
                 for j in range(nsmooth):
                     ivar_fwhm = ivar_fwhms[j]
@@ -462,8 +480,13 @@ class DataManager(io.Params):
             Correction factor maps, possibly downgraded. If DataManger is 
             not differenced (at initialization), return 1. 
         """
-        shape, wcs = utils.downgrade_geometry_cc_quad(
-            self._full_shape, self._full_wcs, downgrade
+        if self._variant == 'cc':
+            shape, wcs = utils.downgrade_geometry_cc_quad(
+                self._full_shape, self._full_wcs, downgrade
+                )
+        else:
+            shape, wcs = enmap.downgrade_geometry(
+                self._full_shape, self._full_wcs, downgrade
             )
 
         # allocate a buffer to accumulate all ivar maps in.
@@ -475,7 +498,7 @@ class DataManager(io.Params):
             return cfacts
 
         for i, qid in enumerate(self._qids):
-            with bench.show('Generating difference-map correction-factors'):
+            with bench.show(f'Generating difference-map correction-factors for qid {qid}'):
                 if self._calibrated:
                     mul = utils.get_mult_fact(self._data_model, qid, ivar=True)
                 else:
@@ -503,11 +526,14 @@ class DataManager(io.Params):
                 cfact = utils.get_corr_fact(ivar, sum_ivar=cvar)
                 
                 if downgrade != 1:
-                    # use harmonic instead of interpolated downgrade because it is 
-                    # 10x faster
-                    cfact = utils.fourier_downgrade_cc_quad(
-                        cfact, downgrade
-                        )           
+                    if self._variant == 'cc':
+                        # use harmonic instead of interpolated downgrade because it is 
+                        # 10x faster
+                        cfact = utils.fourier_downgrade(
+                            cfact, downgrade, variant=self._variant
+                            )
+                    else:
+                        cfact = enmap.downgrade(cfact, downgrade)      
 
                 # zero-out any numerical negative cfacts
                 cfact[cfact < 0] = 0
@@ -540,8 +566,13 @@ class DataManager(io.Params):
         -----
         mask_obs is applied to dmap at full resolution before any downgrading.
         """
-        shape, wcs = utils.downgrade_geometry_cc_quad(
-            self._full_shape, self._full_wcs, downgrade
+        if self._variant == 'cc':
+            shape, wcs = utils.downgrade_geometry_cc_quad(
+                self._full_shape, self._full_wcs, downgrade
+                )
+        else:
+            shape, wcs = enmap.downgrade_geometry(
+                self._full_shape, self._full_wcs, downgrade
             )
 
         # allocate a buffer to accumulate all difference maps in.
@@ -560,7 +591,7 @@ class DataManager(io.Params):
                 )
     
         for i, qid in enumerate(self._qids):
-            with bench.show('Generating difference maps'):
+            with bench.show(f'Generating difference maps for qid {qid}'):
                 if self._calibrated:
                     mul_imap = utils.get_mult_fact(self._data_model, qid, ivar=False)
                     mul_ivar = utils.get_mult_fact(self._data_model, qid, ivar=True)
@@ -633,8 +664,8 @@ class DataManager(io.Params):
                     dmap = utils.filter_weighted(dmap, ivar_eff, filt)
 
                 if downgrade != 1:
-                    dmaps[i, 0] = utils.fourier_downgrade_cc_quad(
-                        mask_obs * dmap, downgrade
+                    dmaps[i, 0] = utils.fourier_downgrade(
+                        mask_obs * dmap, downgrade, self._variant
                     )
                 else:
                     dmaps[i, 0] = dmap
@@ -1310,9 +1341,14 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         """
         downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
         lmax_model = lmax
-        shape, wcs = utils.downgrade_geometry_cc_quad(
-            self._full_shape, self._full_wcs, downgrade
-            )      
+        if self._variant == 'cc':
+            shape, wcs = utils.downgrade_geometry_cc_quad(
+                self._full_shape, self._full_wcs, downgrade
+                )
+        else:
+            shape, wcs = enmap.downgrade_geometry(
+                self._full_shape, self._full_wcs, downgrade
+            ) 
          
         _filter_kwargs = {} if self._filter_kwargs is None else self._filter_kwargs
         post_filt_rel_downgrade = _filter_kwargs.get(
@@ -1633,9 +1669,14 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             'post_filt_rel_downgrade', 1
             )
         downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax) 
-        shape, wcs = utils.downgrade_geometry_cc_quad(
-            self._full_shape, self._full_wcs, downgrade
-            )       
+        if self._variant == 'cc':
+            shape, wcs = utils.downgrade_geometry_cc_quad(
+                self._full_shape, self._full_wcs, downgrade
+                )
+        else:
+            shape, wcs = enmap.downgrade_geometry(
+                self._full_shape, self._full_wcs, downgrade
+            )     
 
         assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
 
@@ -1975,12 +2016,18 @@ class TiledNoiseModel(io.TiledIO, BaseNoiseModel):
         # persists after filtering, since e.g. an isotropic filter may smooth
         # the map edge
         if mask_obs is not None:
+            mask_obs = mask_obs.astype(dmap.dtype, copy=False)
+
             post_filt_rel_downgrade = filter_kwargs.get(
                 'post_filt_rel_downgrade', 1
                 )
-            mask_obs = utils.interpol_downgrade_cc_quad(
-                mask_obs, post_filt_rel_downgrade, dtype=dmap.dtype
-            )
+            if post_filt_rel_downgrade != 1:
+                variant = utils.get_variant(*mask_obs.geometry)
+                if variant == 'cc':
+                    mask_obs = utils.interpol_downgrade_cc_quad(mask_obs, post_filt_rel_downgrade)
+                else:
+                    mask_obs = enmap.downgrade(mask_obs, post_filt_rel_downgrade)
+            
             mask_obs = utils.get_mask_bool(mask_obs, threshold=1.)
 
             pix_deg_x, pix_deg_y = np.abs(dmap.wcs.wcs.cdelt)
@@ -2034,7 +2081,7 @@ class TiledNoiseModel(io.TiledIO, BaseNoiseModel):
 
         Parameters
         ----------
-        sqrt_cov_mat : (*preshape, *preshape, nky, nkx) tiled_noise.tiled_ndmap
+        sqrt_cov_mat : (num_tiles, *preshape, *preshape, nky, nkx) tiled_noise.tiled_ndmap
             The tiled Fourier square-root covariance matrix.
         seed : iterable of ints
             Seed for random draw.
@@ -2570,10 +2617,15 @@ class FDWNoiseModel(io.FDWIO, BaseNoiseModel):
         """Build the kernels. This is slow and so we only call it in the first
         call to _get_model or _get_sim."""
         downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
-        shape, wcs = utils.downgrade_geometry_cc_quad(
-            self._full_shape, self._full_wcs, downgrade
+        if self._variant == 'cc':
+            shape, wcs = utils.downgrade_geometry_cc_quad(
+                self._full_shape, self._full_wcs, downgrade
+                )
+        else:
+            shape, wcs = enmap.downgrade_geometry(
+                self._full_shape, self._full_wcs, downgrade
             )
-
+        print(shape, wcs)
         return fdw_noise.FDWKernels(
             self._lamb, self._w_lmax, self._w_lmin, self._w_lmax_j, self._n, self._p,
             shape, wcs, nforw=self._nforw, nback=self._nback,

@@ -482,7 +482,8 @@ class KernelFactory:
             lx[:, -1] *= -1
         self._phimap = np.arctan2(ly, lx, dtype=dtype)
 
-        corners = enmap.corners(shape, wcs, corner=False)
+        # need to add 1 pixel to the shape for corner=False as of pixell>=0.17.3
+        corners = enmap.corners(np.array(shape[-2:]) + [1, 1], wcs, corner=False)
 
         # need to make sure corners are centered or else call to 
         # enmap.geometry in get_kernel may (sometimes) break 

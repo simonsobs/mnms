@@ -22,8 +22,19 @@ import multiprocessing
 import os
 import hashlib
 import warnings
+import argparse
 
 # Utility functions to support tiling classes and functions. Just keeping code organized so I don't get whelmed.
+
+# adapted from excellent help here https://stackoverflow.com/a/42355279
+class StoreDict(argparse.Action):
+    """An argparser action that allows storing key=value pairs (str only)"""  
+    def __call__(self, parser, namespace, values, option_string=None):
+        my_dict = {}
+        for kv in values:
+            k, v = kv.split('=')
+            my_dict[k] = v
+        setattr(namespace, self.dest, my_dict)
 
 def get_private_mnms_fn(which, basename, to_write=False):
     """Get an absolute path to an mnms file. The file may exist or not
@@ -1240,6 +1251,38 @@ def downgrade_from_lmaxs(lmax_in, lmax_out):
     assert lmax_out <= lmax_in, 'lmax_out must be <= lmax_in'
     return int(lmax_in // lmax_out)
 
+def get_variant(shape, wcs, atol=1e-6):
+    """Get the quadrature variant of the geometry. Only supports cc and fejer1.
+
+    Parameters
+    ----------
+    shape : tuple
+        Shape of map geometry.
+    wcs : astropy.wcs.WCS
+        Wcs of map geometry.
+    atol : float, optional
+        Tolerance of pixel shifts, by default 1e-6.
+
+    Returns
+    -------
+    str
+        Either 'cc' or 'fejer1'
+
+    Raises
+    ------
+    ValueError
+        If quadrature of pixelization is not within atol of either 'cc' or
+        'fejer1'.
+    """
+    pole_pix = enmap.sky2pix(shape, wcs, [[np.pi/2, -np.pi/2], [0, 0]], safe=False)[0]
+    n_frac, s_frac = pole_pix % 1
+    if (n_frac < atol or (1 - n_frac) < atol) and (s_frac < atol or (1 - s_frac) < atol):
+        return 'cc'
+    elif np.allclose([n_frac, s_frac], 0.5, rtol=0, atol=atol):
+        return 'fejer1'
+    else:
+        raise ValueError("variant not 'cc' or 'fejer1'")
+
 def downgrade_geometry_cc_quad(shape, wcs, dg):
     """Get downgraded geometry that adheres to Clenshaw-Curtis quadrature.
 
@@ -1263,15 +1306,19 @@ def downgrade_geometry_cc_quad(shape, wcs, dg):
     Works by generating a fullsky geometry at downgraded resolution and slicing
     out coordinates of original map.
     """
-    if dg <= 1:
+    if np.all(dg <= 1):
         return shape[-2:], wcs
     else:
         # get the shape, wcs corresponding to the sliced fullsky geometry, with resolution
         # downgraded vs. imap resolution by factor dg, containg sky footprint of imap
-        res = np.deg2rad(np.abs(wcs.wcs.cdelt)) * dg
-        full_dshape, full_dwcs = enmap.fullsky_geometry(res=res)
+        full_dshape, full_dwcs = enmap.fullsky_geometry(
+            res=np.deg2rad(np.abs(wcs.wcs.cdelt))*dg, variant='CC'
+            )
+
+        # need to add 1 pixel to the shape for corner=False as of pixell>=0.17.3
+        corners = enmap.corners(np.array(shape[-2:]) + [1, 1], wcs, corner=False)
         full_dpixbox = enmap.skybox2pixbox(
-            full_dshape, full_dwcs, enmap.corners(shape, wcs, corner=False), corner=False
+            full_dshape, full_dwcs, corners, corner=False
             )
 
         # we need to round this to an exact integer in order to guarantee that 
@@ -1280,19 +1327,25 @@ def downgrade_geometry_cc_quad(shape, wcs, dg):
         # see enmap.sky2pix documemtation
         full_dpixbox = np.round(full_dpixbox).astype(int)
 
-        slice_dshape, slice_dwcs = slice_geometry_by_pixbox(
-            full_dshape, full_dwcs, full_dpixbox
-            )
-        return slice_dshape, slice_dwcs
+        # need to recenter the pixbox because it can shift to multiples of pi, 
+        # 2pi away from centered map
+        full_dpixbox[:, 0] -= (full_dshape[0] - 1) * int(full_dpixbox.mean(axis=0)[0] // (full_dshape[0] - 1))
+        full_dpixbox[:, 1] -= full_dshape[1] * int(full_dpixbox.mean(axis=0)[1] // full_dshape[1])
+        return slice_geometry_by_pixbox(full_dshape, full_dwcs, full_dpixbox)
 
-def empty_downgrade_cc_quad(imap, dg):
-    """Get an empty enmap to hold the Clenshaw-Curtis-preserving downgraded map."""
-    oshape, owcs = downgrade_geometry_cc_quad(imap.shape, imap.wcs, dg)
+def empty_downgrade(imap, dg, variant='cc'):
+    """Get an empty enmap to hold the downgraded map."""
+    if variant == 'cc':
+        oshape, owcs = downgrade_geometry_cc_quad(imap.shape, imap.wcs, dg)
+    elif variant == 'fejer1':
+        oshape, owcs = enmap.downgrade_geometry(imap.shape, imap.wcs, dg)
+    else: 
+        raise ValueError(f"variant must be 'cc' or 'fejer1', got '{variant}'")
     oshape = (*imap.shape[:-2], *oshape)
     omap = enmap.empty(oshape, owcs, dtype=imap.dtype)
     return omap
 
-def fourier_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None):
+def fourier_downgrade(imap, dg, variant='cc', area_pow=0., dtype=None):
     """Downgrade a map by Fourier resampling into a geometry that adheres
     to Clenshaw-Curtis quadrature. This will bandlimit the input signal in 
     Fourier space which may introduce ringing around bright objects, but 
@@ -1304,6 +1357,9 @@ def fourier_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None):
         Map to be downgraded.
     dg : int or float
         Downgrade factor.
+    variant : str, optional
+        Quadtrature of output map, either Clenshaw-Curtis ('cc') or Fejer1
+        ('fejer1').
     area_pow : int or float, optional
         The area scaling of the downgraded signal, by default 0. Output map
         is multiplied by dg^(2*area_pow).
@@ -1316,7 +1372,7 @@ def fourier_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None):
     ndmap
         The downgraded map. The unchanged input if dg <= 1.
     """
-    if dg <= 1:
+    if np.all(dg <= 1):
         return imap
     else:
         # cast imap to dtype so now omap has omap dtype
@@ -1325,7 +1381,7 @@ def fourier_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None):
         ikmap = rfft(imap)
 
         # create empty buffers for map and downgraded fourier space
-        omap = empty_downgrade_cc_quad(imap, dg)
+        omap = empty_downgrade(imap, dg, variant=variant)
         okshape = (*omap.shape[:-2], omap.shape[-2], omap.shape[-1]//2 + 1)
         okmap = enmap.empty(okshape, omap.wcs, dtype=ikmap.dtype)
 
@@ -1344,13 +1400,24 @@ def fourier_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None):
         for sel in sels:
             okmap[sel] = ikmap[sel]
 
+        # multiply by phases for any shifts of pixelization
+        if variant == 'cc':
+            pass # pixel centers align
+        elif variant == 'fejer1':
+            shift = np.zeros(2, dtype=dtype) - (dg - 1)/(2*dg) # passive shift so minus sign
+            kx = np.fft.rfftfreq(omap.shape[-1]).astype(dtype, copy=False)
+            ky = np.fft.fftfreq(omap.shape[-2]).astype(dtype, copy=False)[..., None]
+            okmap *= np.exp(-2j*np.pi*(ky*shift[0] + kx*shift[1]))
+        else: 
+            raise ValueError(f"variant must be 'cc' or 'fejer1', got {variant}")
+
         # scale values by area factor, e.g. dg^2 if ivar maps.
         # the -0.5 is because of conventional fft normalization
         mult = dg ** (2*(area_pow-0.5))
 
         return mult * irfft(okmap, omap=omap)
 
-def harmonic_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None):
+def harmonic_downgrade(imap, dg, variant='cc', area_pow=0., dtype=None):
     """Downgrade a map by harmonic resampling into a geometry that adheres
     to Clenshaw-Curtis quadrature. This will bandlimit the input signal in 
     harmonic space which may introduce ringing around bright objects, but 
@@ -1362,6 +1429,9 @@ def harmonic_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None):
         Map to be downgraded.
     dg : int or float
         Downgrade factor.
+    variant : str, optional
+        Quadtrature of output map, either Clenshaw-Curtis ('cc') or Fejer1
+        ('fejer1').
     area_pow : int or float, optional
         The area scaling of the downgraded signal, by default 0. Output map
         is multiplied by dg^(2*area_pow).
@@ -1374,14 +1444,14 @@ def harmonic_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None):
     ndmap
         The downgraded map. The unchanged input if dg <= 1.
     """
-    if dg <= 1:
+    if np.all(dg <= 1):
         return imap
     else:
         # cast imap to dtype so now omap has omap dtype
         if dtype is not None:
             imap = imap.astype(dtype, copy=False)
 
-        omap = empty_downgrade_cc_quad(imap, dg)
+        omap = empty_downgrade(imap, dg, variant=variant)
         
         lmax = lmax_from_wcs(imap.wcs) // dg # new bandlimit
         ainfo = sharp.alm_info(lmax)
@@ -1432,7 +1502,7 @@ def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
     Constructs a new interpolant for each 2D map in the input array. This can be
     very slow (~1min per 2D map).
     """
-    if dg <= 1:
+    if np.all(dg <= 1):
         return imap
     else:
         # cast imap to dtype so now omap has omap dtype
@@ -1446,7 +1516,7 @@ def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
                     imap[preidx], size=dg, output=imap[preidx], mode='wrap'
                     )
         
-        omap = empty_downgrade_cc_quad(imap, dg)
+        omap = empty_downgrade(imap, dg, variant='cc')
         thetas_in, phis_in = imap.posaxes()
         thetas_out, phis_out = omap.posaxes()
 
