@@ -34,7 +34,7 @@ class DataManager(io.Params):
         possible_maps_subproduct_kwargs : dict, optional
             Mapping from keywords required for map subproduct to be loaded from disk,
             to a list of their possible values, for each required keyword. See
-            actapack/products/maps for documentation of required keywords and their
+            sofind/products/maps for documentation of required keywords and their
             possible values by subproduct. Assumed equal across qids.
         enforce_equal_qid_kwargs : list of str, optional
             Enforce the listed kwargs have equal values across supplied qids. No matter
