@@ -830,7 +830,8 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
                 inplace=inplace
                 )
             out = alm2map(
-                filtered_alm, shape=inshape, wcs=inp.wcs, dtype=inp.dtype, ainfo=ainfo
+                filtered_alm, shape=inshape, wcs=inp.wcs, dtype=inp.dtype,
+                ainfo=ainfo, tweak=tweak
                 )
         
         # lfilter_mat in fourier space assumes real fft
@@ -872,8 +873,8 @@ def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0
         Threads to use in FFTs, by default 0. If 0, will be
         the result of get_cpu_count()
     tweak : bool, optional
-        Whether to allow map2alm to shift the map to match a libsharp quadrature
-        rule, by default False.
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
 
     Returns
     -------
@@ -952,8 +953,8 @@ def ell_flatten(imap, mask_obs=1, mask_est=1, return_sqrt_cov=True, per_split=Tr
     nthread : int, optional
         If mode is 'fft', the number of threads to pass to enamp.fft, by default 0.
     tweak : bool, optional
-        Whether to allow map2alm to shift the map to match a libsharp quadrature
-        rule, by default False.
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
 
     Returns
     -------
@@ -1073,7 +1074,7 @@ def ell_flatten(imap, mask_obs=1, mask_est=1, return_sqrt_cov=True, per_split=Tr
         raise NotImplementedError('Only implemented modes are fft and curvedsky')
 
 def map2alm(imap, alm=None, ainfo=None, lmax=None, no_aliasing=True, 
-            alm2map_adjoint=False, **kwargs):
+            alm2map_adjoint=False, tweak=False, **kwargs):
     """A wrapper around pixell.curvedsky.map2alm that performs proper
     looping over array 'pre-dimensions'. Always performs a spin[0,2]
     transform if imap.ndim >= 3; therefore, 'pre-dimensions' are those
@@ -1095,6 +1096,9 @@ def map2alm(imap, alm=None, ainfo=None, lmax=None, no_aliasing=True,
         permitted by the imap pixelization, by default True.
     alm2map_adjoint : bool, optional
         Perform adjoint transform, by default False.
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
     kwargs : dict, optional
         Other kwargs to pass to curvedsky.map2alm.
 
@@ -1117,7 +1121,7 @@ def map2alm(imap, alm=None, ainfo=None, lmax=None, no_aliasing=True,
         assert imap[preidx].ndim in [2, 3]
         curvedsky.map2alm(
             imap[preidx], alm=alm[preidx], ainfo=ainfo, lmax=lmax, 
-            alm2map_adjoint=alm2map_adjoint, **kwargs
+            alm2map_adjoint=alm2map_adjoint, tweak=tweak, **kwargs
             )
     return alm
 
@@ -1167,7 +1171,7 @@ def alm2cl(alm1, alm2=None, method='curvedsky'):
     return out
 
 def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, 
-            no_aliasing=True, map2alm_adjoint=False, **kwargs):
+            no_aliasing=True, map2alm_adjoint=False, tweak=False, **kwargs):
     """A wrapper around pixell.curvedsky.alm2map that performs proper
     looping over array 'pre-dimensions'. Always performs a spin[0,2]
     transform if imap.ndim >= 3; therefore, 'pre-dimensions' are those
@@ -1196,6 +1200,9 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None,
         permitted by the omap pixelization, by default True.
     map2alm_adjoint : bool, optional
         Perform adjoint transform, by default False.
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
     kwargs : dict, optional
         Other kwargs to pass to curvedsky.alm2map.
 
@@ -1218,7 +1225,7 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None,
         assert omap[preidx].ndim in [2, 3]
         omap[preidx] = curvedsky.alm2map(
             alm[preidx], omap[preidx], ainfo=ainfo, 
-            map2alm_adjoint=map2alm_adjoint, **kwargs
+            map2alm_adjoint=map2alm_adjoint, tweak=tweak, **kwargs
             )
     return omap
 
@@ -1417,7 +1424,8 @@ def fourier_downgrade(imap, dg, variant='cc', area_pow=0., dtype=None):
 
         return mult * irfft(okmap, omap=omap)
 
-def harmonic_downgrade(imap, dg, variant='cc', area_pow=0., dtype=None):
+def harmonic_downgrade(imap, dg, variant='cc', area_pow=0., dtype=None,
+                       tweak=False):
     """Downgrade a map by harmonic resampling into a geometry that adheres
     to Clenshaw-Curtis quadrature. This will bandlimit the input signal in 
     harmonic space which may introduce ringing around bright objects, but 
@@ -1438,6 +1446,9 @@ def harmonic_downgrade(imap, dg, variant='cc', area_pow=0., dtype=None):
     dtype : np.dtype, optional
         If not None, cast the input map to this data type, by default None.
         Useful for allowing boolean masks to be "interpolated."
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
 
     Returns
     -------
@@ -1455,12 +1466,12 @@ def harmonic_downgrade(imap, dg, variant='cc', area_pow=0., dtype=None):
         
         lmax = lmax_from_wcs(imap.wcs) // dg # new bandlimit
         ainfo = sharp.alm_info(lmax)
-        alm = map2alm(imap, ainfo=ainfo, lmax=lmax)
+        alm = map2alm(imap, ainfo=ainfo, lmax=lmax, tweak=tweak)
 
         # scale values by area factor, e.g. dg^2 if ivar maps
         mult = dg ** (2*area_pow)
 
-        return mult * alm2map(alm, omap=omap, ainfo=ainfo)
+        return mult * alm2map(alm, omap=omap, ainfo=ainfo, tweak=tweak)
 
 # inspired by optweight.map_utils.gauss2guass
 def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
@@ -1590,7 +1601,7 @@ def recenter_coords(theta, phi, return_as_rad=False):
     return theta, phi
 
 def smooth_gauss(imap, fwhm, mask=None, inplace=True, method='curvedsky',
-                 **method_kwargs):
+                 tweak=False, **method_kwargs):
     """Smooth a map with a Gaussian profile.
 
     Parameters
@@ -1608,6 +1619,9 @@ def smooth_gauss(imap, fwhm, mask=None, inplace=True, method='curvedsky',
         by default True.
     method : str, optional
         The method used to perform the smoothing, by default 'curvedsky.'
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False. Only applicable if method is 'curvedsky'.
     method_kwargs : dict, optional
         Any additional kwargs to pass to the function performing the
         smoothing, by default {}.
@@ -1645,10 +1659,10 @@ def smooth_gauss(imap, fwhm, mask=None, inplace=True, method='curvedsky',
 
         b_ell = hp.gauss_beam(fwhm, lmax=lmax)
 
-        alm = map2alm(imap, ainfo=ainfo)
+        alm = map2alm(imap, ainfo=ainfo, tweak=tweak)
         for preidx in np.ndindex(imap.shape[:-2]):
             alm[preidx] = alm_c_utils.lmul(alm[preidx], b_ell, ainfo)
-        imap = alm2map(alm, omap=imap, ainfo=ainfo)
+        imap = alm2map(alm, omap=imap, ainfo=ainfo, tweak=tweak)
 
     if method == 'fft':
         raise NotImplementedError('FFT is not yet implemented')

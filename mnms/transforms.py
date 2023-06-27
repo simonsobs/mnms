@@ -64,6 +64,9 @@ def map2alm(imap, ainfo=None, lmax=None, no_aliasing=True, adjoint=False,
         lmax, by default True.
     adjoint : bool, optional
         Whether the map2alm operation is adjoint, by default False.
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
 
     Returns
     -------
@@ -95,6 +98,9 @@ def alm2map(alm, shape=None, wcs=None, dtype=None, ainfo=None, no_aliasing=True,
         by default True.
     adjoint : bool, optional
         Whether the alm2map operation is adjoint, by default False.
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
 
     Returns
     -------
@@ -181,6 +187,9 @@ def alm2fourier(alm, shape=None, wcs=None, dtype=None, ainfo=None,
         Rfft normalization, by default 'ortho'. See utils.rfft.
     adjoint : bool, optional
         Whether the alm2map and rfft operation are adjoint, by default False.
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
 
     Returns
     -------
@@ -218,6 +227,9 @@ def fourier2alm(kmap, n=None, nthread=0, normalize='ortho', ainfo=None,
         lmax, by default True.
     adjoint : bool, optional
         Whether the irfft and map2alm operation are adjoint, by default False.
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
 
     Returns
     -------

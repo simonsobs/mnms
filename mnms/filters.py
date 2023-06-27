@@ -95,6 +95,9 @@ def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
         bandlimits the measured pseudospectra by the same factor.
     post_filt_downgrade_wcs : astropy.wcs.WCS, optional
         Assign this wcs to the filtered maps, by default None.
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
 
     Returns
     -------
@@ -167,6 +170,9 @@ def iso_harmonic_ivar_none(alm, sqrt_cov_ell=None, ainfo=None, lmax=None,
         pixelization.
     inplace : bool, optional
         Filter the alm in place, by default True.
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
 
     Returns
     -------
@@ -206,6 +212,9 @@ def iso_harmonic_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
         bandlimits the measured pseudospectra by the same factor.
     post_filt_downgrade_wcs : astropy.wcs.WCS, optional
         Assign this wcs to the filtered maps, by default None.
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
 
     Returns
     -------
@@ -264,6 +273,9 @@ def iso_harmonic_ivar_basic(alm, sqrt_ivar=1, sqrt_cov_ell=None, ainfo=None,
         Whether the alm2map operation is adjoint, by default False.
     post_filt_rel_downgrade : int, optional
         Divide sqrt_ivar by this number, by default 1. 
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
 
     Returns
     -------
@@ -352,6 +364,9 @@ def iso_harmonic_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
         bandlimits the measured pseudospectra by the same factor.
     post_filt_downgrade_wcs : astropy.wcs.WCS, optional
         Assign this wcs to the filtered maps, by default None.
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
 
     Returns
     -------
@@ -435,7 +450,10 @@ def iso_harmonic_ivar_scaledep(alm, sqrt_cov_ell=None, sqrt_ivar=1,
     adjoint : bool, optional
         Whether the alm2map operation is adjoint, by default False.
     post_filt_rel_downgrade : int, optional
-        Divide sqrt_ivar by this number, by default 1. 
+        Divide sqrt_ivar by this number, by default 1.
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
 
     Returns
     -------
