@@ -19,7 +19,7 @@ class FDWKernels:
 
     def __init__(self, lamb, lmax, lmin, lmax_j, n, p, shape, wcs,
                  dtype=np.float32, nforw=None, nback=None, pforw=None, 
-                 pback=None):
+                 pback=None, kern_cut=1e-4):
         """A set of Fourier directional wavelets, allowing users to
         analyze maps by simultaneous scale-, direction-, and location-dependence
         of information. Also supports map synthesis. The wavelet transform (both
@@ -80,10 +80,13 @@ class FDWKernels:
             None. For example, if p is 4 but pback is [1, 2], then the highest-
             ell kernel have a locality paramater of 1, and the next highest-
             ell kernel will have a locality parameter of 2, and 4 thereafter. 
+        kern_cut : float, optional
+            When building kernels, kernel pixels where the kernel magnitude is
+            less than kern_cut are set to 0, by default 1e-4.
         """
         self._kf = KernelFactory(lamb, lmax, lmin, lmax_j, n, p, shape, wcs,
                                  dtype=dtype, nforw=nforw, nback=nback, 
-                                 pforw=pforw, pback=pback)
+                                 pforw=pforw, pback=pback, kern_cut=kern_cut)
         self._shape = shape
         self._real_shape = (shape[-2], shape[-1]//2 + 1)
         self._wcs = wcs
@@ -94,7 +97,7 @@ class FDWKernels:
         self._lmaxs = {}
         self._ns = {}
         self._mean_sqs = {}
-        for i in range(len(self._kf._rad_funcs)):
+        for i in self._kf._rad_funcs.keys():
             _n = self._kf._ns[i]
             for j in range(_n+1):
                 kern = self._kf.get_kernel(i, j)
@@ -402,7 +405,7 @@ class KernelFactory:
 
     def __init__(self, lamb, lmax, lmin, lmax_j, n, p, shape, wcs,
                  dtype=np.float32, nforw=None, nback=None, pforw=None,
-                 pback=None):
+                 pback=None, kern_cut=1e-4):
         """A helper class to build Kernel objects.
 
         Parameters
@@ -456,6 +459,9 @@ class KernelFactory:
             None. For example, if p is 4 but pback is [1, 2], then the highest-
             ell kernel have a locality paramater of 1, and the next highest-
             ell kernel will have a locality parameter of 2, and 4 thereafter. 
+        kern_cut : float, optional
+            When building kernels, kernel pixels where the kernel magnitude is
+            less than kern_cut are set to 0, by default 1e-4.
 
         Notes
         -----
@@ -519,26 +525,27 @@ class KernelFactory:
         # in one go, we are going to get rad funcs, rad_kerns (sliced), 
         # the slice/selection tuples (function of rad kern only), and 
         # kernel shapes
-        self._rad_funcs = []
-        self._sels = []
-        self._rad_kerns = []
+        self._rad_funcs = {}
+        self._sels = {}
+        self._rad_kerns = {}
+        self._kern_cut = kern_cut
         for i, w_ell in enumerate(w_ells):
             rad_func = get_rad_func(w_ell, len(w_ells), i)
-            self._rad_funcs.append(rad_func)
+            self._rad_funcs[i] = rad_func
 
             # interp1d returns as np.float64 always, need to cast
             unsliced_rad_kern = rad_func(modlmap).astype(modlmap.dtype)
 
             kern_shape, sels = self._get_sliced_shape_and_sels(
-                unsliced_rad_kern, idx=i
+                unsliced_rad_kern, idx=i, kern_cut=self._kern_cut
                 )
-            self._sels.append(sels)
+            self._sels[i] = sels
             
             # finally, get this radial kernel
             rad_kern = np.empty(kern_shape, dtype=unsliced_rad_kern.dtype)
             for sel in sels:
                 rad_kern[sel] = unsliced_rad_kern[sel]
-            self._rad_kerns.append(rad_kern)
+            self._rad_kerns[i] = rad_kern
 
         # get full list of n's, p's to build each kernel and sufficient phimaps
         if nforw is None:
@@ -584,7 +591,7 @@ class KernelFactory:
                 self._az_funcs[i, j] = get_az_func(_n, _p, j)
 
     def _get_sliced_shape_and_sels(self, unsliced_kern, idx=None,
-                                   unsliced_sels=None):
+                                   unsliced_sels=None, kern_cut=1e-4):
         """Given a kernel at full Fourier resolution, determine the minimal 
         'bounding box' and associated numpy selection tuples necessary and 
         sufficient to admit lossless analysis and synthesis.
@@ -600,6 +607,9 @@ class KernelFactory:
             unsliced_kern is already sliced out of some higher 
             resolution space. By default this is a selection tuple
             that grabs "everything."
+        kern_cut : float, optional
+            When building kernels, kernel pixels where the kernel magnitude is
+            less than kern_cut are set to 0, by default 1e-4.
 
         Returns
         -------
@@ -626,13 +636,13 @@ class KernelFactory:
         ny, nx = (unsliced_kern.shape[0], unsliced_kern.shape[1])
         
         # get bounding x indices
-        x_mask = np.nonzero(unsliced_kern.any(axis=0))[0]
+        x_mask = np.nonzero((abs(unsliced_kern) > kern_cut).any(axis=0))[0]
         assert x_mask.size > 0, \
             f'idx {idx} has empty kernel'
         x_max = x_mask.max() + 1 # inclusive bounds
 
         # get bounding y indices
-        y_mask = unsliced_kern.any(axis=1)
+        y_mask = (abs(unsliced_kern) > kern_cut).any(axis=1)
         y_mask_pos = np.nonzero(y_mask[:ny//2+1] > 0)[0]
         y_mask_neg = np.nonzero(y_mask[:-(ny//2+1):-1] > 0)[0]
         assert y_mask_pos.size > 0 or y_mask_neg.size > 0, \
@@ -740,7 +750,8 @@ class KernelFactory:
         # kernel
         _kern = rad_kern * az_kern
         kern_shape, sels = self._get_sliced_shape_and_sels(
-            _kern, idx=(rad_idx, az_idx), unsliced_sels=sels
+            _kern, idx=(rad_idx, az_idx), unsliced_sels=sels,
+            kern_cut=self._kern_cut
             )
         kern = np.empty(kern_shape, dtype=_kern.dtype)
         for sel in sels:

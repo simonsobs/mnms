@@ -275,7 +275,7 @@ class FDWIO(BaseIO, Params):
                  nforw=[0, 6, 6, 6, 6, 12, 12, 12, 12, 24, 24],
                  nback=[0], pforw=[0, 6, 4, 2, 2, 12, 8, 4, 2, 12, 8],
                  pback=[0], fwhm_fact_pt1=[1350, 10.],
-                 fwhm_fact_pt2=[5400, 16.], **kwargs):
+                 fwhm_fact_pt2=[5400, 16.], kern_cut=1e-4, **kwargs):
         self._lamb = lamb
         self._n = n
         self._p = p
@@ -286,6 +286,7 @@ class FDWIO(BaseIO, Params):
         self._nback = nback
         self._pforw = pforw
         self._pback = pback
+        self._kern_cut = kern_cut
         self._fwhm_fact_pt1 = list(fwhm_fact_pt1)
         self._fwhm_fact_pt2 = list(fwhm_fact_pt2)
         
@@ -305,6 +306,7 @@ class FDWIO(BaseIO, Params):
             nback=self._nback,
             pforw=self._pforw,
             pback=self._pback,
+            kern_cut=self._kern_cut,
             fwhm_fact_pt1=self._fwhm_fact_pt1,
             fwhm_fact_pt2=self._fwhm_fact_pt2
         )

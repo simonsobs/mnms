@@ -9,7 +9,7 @@ def test_wav_admissibility():
                                 nforw=[0, 12, 12, 12, 12, 24, 24, 24, 24],
                                 nback=[18],
                                 pforw=[0, 12, 9, 6, 3, 24, 18, 12, 6],
-                                dtype=np.float32)
+                                dtype=np.float32, kern_cut=1e-3)
     
     a = np.zeros((shape[-2], shape[-1]//2+1), dtype=fk._cdtype)
     for kern in fk.kernels.values():
@@ -25,7 +25,7 @@ def test_wav_reconstruction():
                                     nforw=[0, 12, 12, 12, 12, 24, 24, 24, 24],
                                     nback=[18],
                                     pforw=[0, 12, 9, 6, 3, 24, 18, 12, 6],
-                                    dtype=np.float32)
+                                    dtype=np.float32, kern_cut=1e-12)
 
         rng = np.random.default_rng(0)
         a = rng.standard_normal(shape, dtype=np.float32)

@@ -866,6 +866,14 @@ class DataManager(io.Params):
                     print(f"No {cacheprod} item for args {args[1:]}, kwargs {kwargs}, cannot clear")
 
     @property
+    def num_arrays(self):
+        return self._num_arrays
+    
+    @property
+    def num_splits(self):
+        return self._num_splits
+
+    @property
     def cache(self):
         return self._cache
 
@@ -1234,11 +1242,11 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         config_dict = s_utils.config_from_yaml_file(config_fn)
 
         kwargs = config_dict[noise_model_name]
-        kwargs.update(noise_model_name=noise_model_name)
+        kwargs.update(noise_model_name=noise_model_name, config_fn=config_fn)
 
         # _noise_model_class now lives in the object as a class attribute
         nm_cls = cls.get_subclass(kwargs.pop('noise_model_class'))
-        return nm_cls(*qids, config_fn=config_fn, **kwargs)
+        return nm_cls(*qids, **kwargs)
 
     def get_model_fn(self, split_num, lmax, to_write=False, **subproduct_kwargs):
         """Get a noise model filename for split split_num; return as <str>"""
@@ -2628,9 +2636,9 @@ class FDWNoiseModel(io.FDWIO, BaseNoiseModel):
             shape, wcs = enmap.downgrade_geometry(
                 self._full_shape, self._full_wcs, downgrade
             )
-        print(shape, wcs)
         return fdw_noise.FDWKernels(
             self._lamb, self._w_lmax, self._w_lmin, self._w_lmax_j, self._n, self._p,
             shape, wcs, nforw=self._nforw, nback=self._nback,
-            pforw=self._pforw, pback=self._pback, dtype=self._dtype
+            pforw=self._pforw, pback=self._pback, dtype=self._dtype,
+            kern_cut=self._kern_cut
         )
