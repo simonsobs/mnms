@@ -18,6 +18,7 @@ class Params(ABC):
                  differenced=True, srcfree=True, iso_filt_method=None,
                  ivar_filt_method=None, filter_kwargs=None, ivar_fwhms=None,
                  ivar_lmaxs=None, masks_subproduct=None, mask_est_name=None,
+                 mask_est_edgecut=None, mask_est_apodization=None,
                  mask_obs_name=None, mask_obs_edgecut=0,
                  catalogs_subproduct=None, catalog_name=None,
                  kfilt_lbounds=None, dtype=np.float32, model_file_template=None,
@@ -64,7 +65,11 @@ class Params(ABC):
             if not mask_est_name.endswith(('.fits', '.hdf5')):
                 mask_est_name += '.fits'
         self._mask_est_name = mask_est_name
-        
+
+        # NOTE: modifying supplied value forces good value in configs
+        self._mask_est_edgecut = max(mask_est_edgecut, 0)
+        self._mask_est_apodization = max(mask_est_apodization, 0)
+
         # allow filename with periods
         if mask_obs_name is not None:
             if not mask_obs_name.endswith(('.fits', '.hdf5')):
@@ -119,6 +124,8 @@ class Params(ABC):
             kfilt_lbounds=self._kfilt_lbounds,
             masks_subproduct=self._masks_subproduct,
             mask_est_name=self._mask_est_name,
+            mask_est_edgecut=self._mask_est_edgecut,
+            mask_est_apodization=self._mask_est_apodization,
             mask_obs_name=self._mask_obs_name,
             mask_obs_edgecut=self._mask_obs_edgecut,
             possible_maps_subproduct_kwargs=self._possible_maps_subproduct_kwargs,

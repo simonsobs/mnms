@@ -176,7 +176,8 @@ class DataManager(io.Params):
         else:
             return None
 
-    def get_mask_est(self, downgrade=1, min_threshold=1e-4, max_threshold=1.):
+    def get_mask_est(self, downgrade=1, min_threshold=1e-4, max_threshold=1.,
+                     keep_mask_obs=True, **maps_subproduct_kwargs):
         """Load the spectra mask from disk according to instance attributes.
 
         Parameters
@@ -189,6 +190,12 @@ class DataManager(io.Params):
         max_threshold : float, optional
             If mask_est is downgraded, values greater than max_threshold after
             downgrading are set to 1, by default 1.
+        keep_mask_obs : bool, optional
+            Store the loaded or generated mask_obs in the instance attributes, by 
+            default True.
+        maps_subproduct_kwargs : dict, optional
+            Any additional keyword arguments used to format the map filename 
+            (used internally in get_mask_obs call).
 
         Returns
         -------
@@ -197,11 +204,32 @@ class DataManager(io.Params):
         """
         with bench.show('Generating harmonic-filter-estimate mask'):
             if self._mask_est_name is not None:
-                mask_est = self._get_mask_from_disk(
-                    self._mask_est_name, dtype=self._dtype
-                    )
+                mask_est = self._get_mask_from_disk(self._mask_est_name, bool)
             else:
-                mask_est = enmap.ones(self._full_shape, self._full_wcs, self._dtype)                                 
+                mask_est = enmap.ones(self._full_shape, self._full_wcs, bool)
+
+            try:
+                mask_obs = self.get_from_cache(
+                    'mask_obs', downgrade=1, **maps_subproduct_kwargs
+                    )
+                mask_obs_from_cache = True
+            except KeyError:
+                mask_obs = self.get_mask_obs(
+                    downgrade=1, **maps_subproduct_kwargs
+                    )
+                mask_obs_from_cache = False  
+            if keep_mask_obs and not mask_obs_from_cache:
+                self.cache_data(
+                    'mask_obs', mask_obs, downgrade=1, **maps_subproduct_kwargs
+                    )      
+
+            if self._mask_est_edgecut > 0:
+                mask_est *= enmap.shrink_mask(mask_obs, np.deg2rad(self._mask_est_edgecut / 60)) 
+            
+            if self._mask_est_apodization > 0:
+                mask_est = utils.cosine_apodize(mask_est, self._mask_est_apodization / 60)    
+            
+            mask_est = mask_est.astype(self._dtype, copy=False)                 
             
             if downgrade != 1:
                 if self._variant == 'cc':
@@ -276,7 +304,7 @@ class DataManager(io.Params):
 
             # apply mask_obs from disk
             if self._mask_obs_name is not None:
-                mask_obs *= self._get_mask_from_disk(self._mask_obs_name, dtype=bool)
+                mask_obs *= self._get_mask_from_disk(self._mask_obs_name, bool)
 
             # downgrade the full resolution mask_obs
             mask_obs = mask_obs.astype(self._dtype, copy=False)
@@ -545,7 +573,8 @@ class DataManager(io.Params):
         
         return cfacts
 
-    def get_dmap(self, split_num, downgrade=1, **maps_subproduct_kwargs):
+    def get_dmap(self, split_num, downgrade=1, keep_mask_obs=True,
+                 **maps_subproduct_kwargs):
         """Load the raw data split differences according to instance attributes.
 
         Parameters
@@ -554,6 +583,9 @@ class DataManager(io.Params):
             The 0-based index of the split.
         downgrade : int, optional
             Downgrade factor, by default 1 (no downgrading).
+        keep_mask_obs : bool, optional
+            Store the loaded or generated mask_obs in the instance attributes, by 
+            default True.
         maps_subproduct_kwargs : dict, optional
             Any additional keyword arguments used to format the map filename.
 
@@ -584,7 +616,20 @@ class DataManager(io.Params):
 
         # to mask before downgrading to prevent ringing from noisy edge
         if downgrade != 1:
-            mask_obs = self.get_mask_obs(downgrade=1, **maps_subproduct_kwargs)
+            try:
+                mask_obs = self.get_from_cache(
+                    'mask_obs', downgrade=1, **maps_subproduct_kwargs
+                    )
+                mask_obs_from_cache = True
+            except KeyError:
+                mask_obs = self.get_mask_obs(
+                    downgrade=1, **maps_subproduct_kwargs
+                    )
+                mask_obs_from_cache = False
+            if keep_mask_obs and not mask_obs_from_cache:
+                self.cache_data(
+                    'mask_obs', mask_obs, downgrade=1, **maps_subproduct_kwargs
+                    )  
 
         # all filtering operations use the same filter
         if self._kfilt_lbounds is not None:
