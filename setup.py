@@ -10,7 +10,7 @@ if not os.path.isfile(mnms_config_fn):
 setup(
     name='mnms',
     packages=['mnms'],
-    version='0.0.2',
+    version='0.0.3',
     install_requires=[
         'ducc0>=0.30.0',
         'numba',
