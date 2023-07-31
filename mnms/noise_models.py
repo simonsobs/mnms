@@ -1448,12 +1448,12 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         try:
             mask_est = self.get_from_cache(
-                'mask_est', downgrade=downgrade
+                'mask_est', downgrade=downgrade, **subproduct_kwargs
                 )
             mask_est_from_cache = True
         except KeyError:
             mask_est = self.get_mask_est(
-                downgrade=downgrade
+                downgrade=downgrade, **subproduct_kwargs
                 )
             mask_est_from_cache = False
         mask_est *= mask_obs
