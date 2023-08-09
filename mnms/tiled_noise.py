@@ -472,8 +472,8 @@ def get_tiled_noise_covsqrt(imap, mask_obs=None, width_deg=4., height_deg=4.,
         omap[i] /= sq_f_sky[i]
 
     # take covsqrt of current power (and can safely delete kmap, smap)
-    kmap=None
-    smap=None
+    kmap = None
+    smap = None
     omap = utils.chunked_eigpow(omap, 0.5, axes=(-4,-3))
 
     return {'sqrt_cov_mat': imap.sametiles(omap)}

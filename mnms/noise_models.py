@@ -224,7 +224,8 @@ class DataManager(io.Params):
                     )      
 
             if self._mask_est_edgecut > 0:
-                mask_est *= enmap.shrink_mask(mask_obs, np.deg2rad(self._mask_est_edgecut / 60)) 
+                mask_obs = enmap.shrink_mask(mask_obs, np.deg2rad(self._mask_est_edgecut / 60)) 
+            mask_est *= mask_obs
             
             if self._mask_est_apodization > 0:
                 mask_est = utils.cosine_apodize(mask_est, self._mask_est_apodization / 60)    
