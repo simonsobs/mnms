@@ -1218,13 +1218,13 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         return {}
 
     @abstractmethod
-    def _get_model(self, dmap, iso_filt_method, ivar_filt_method, filter_kwargs, verbose):
+    def _get_model(self, dmap, lim, lim0, iso_filt_method, ivar_filt_method, filter_kwargs, verbose):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
         return {}
 
     @classmethod
     @abstractmethod
-    def get_model_static(cls, dmap, iso_filt_method=None, ivar_filt_method=None,
+    def get_model_static(cls, dmap, lim=None, lim0=None, iso_filt_method=None, ivar_filt_method=None,
                          filter_kwargs=None, verbose=False, **kwargs):
         """Get the square-root covariance in the operating basis given an input
         mean-0 map. Allows filtering the input map prior to tiling transform."""
@@ -1408,9 +1408,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             ) 
          
         _filter_kwargs = {} if self._filter_kwargs is None else self._filter_kwargs
-        post_filt_rel_downgrade = _filter_kwargs.get(
-            'post_filt_rel_downgrade', 1
-            )
+        post_filt_rel_downgrade = _filter_kwargs['post_filt_rel_downgrade']
+
         lmax *= post_filt_rel_downgrade
         downgrade //= post_filt_rel_downgrade
 
@@ -1508,8 +1507,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             mask_obs=mask_obs, mask_est=mask_est, post_filt_downgrade_wcs=wcs,
             sqrt_ivar=sqrt_ivar, tweak=TWEAK
             )
-        if 'post_filt_rel_downgrade' not in _filter_kwargs:
-            filter_kwargs[post_filt_rel_downgrade] = post_filt_rel_downgrade
 
         assert len(filter_kwargs.keys() & _filter_kwargs.keys()) == 0, \
             'Instance filter_kwargs and get_model supplied filter_kwargs overlap'
@@ -1518,7 +1515,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         # get the model
         with bench.show(f'Generating noise model for {utils.kwargs_str(split_num=split_num, lmax=lmax_model, **subproduct_kwargs)}'):
             model_dict = self._get_model(
-                dmap*cfact, self._iso_filt_method, self._ivar_filt_method,
+                dmap*cfact, self._model_lim, self._model_lim0,
+                self._iso_filt_method, self._ivar_filt_method,
                 filter_kwargs, verbose
                 )
 
@@ -1722,9 +1720,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             axes have size 1. As implemented, num_splits is always 1. 
         """
         _filter_kwargs = {} if self._filter_kwargs is None else self._filter_kwargs
-        post_filt_rel_downgrade = _filter_kwargs.get(
-            'post_filt_rel_downgrade', 1
-            )
+
         downgrade = utils.downgrade_from_lmaxs(self._full_lmax, lmax) 
         if self._variant == 'cc':
             shape, wcs = utils.downgrade_geometry_cc_quad(
@@ -1793,8 +1789,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             dtype=self._dtype, n=shape[-1], nthread=0, normalize='ortho',
             mask_obs=mask_obs, sqrt_ivar=sqrt_ivar, inplace=True, tweak=TWEAK
             )
-        if 'post_filt_rel_downgrade' not in _filter_kwargs:
-            filter_kwargs[post_filt_rel_downgrade] = post_filt_rel_downgrade
 
         assert len(filter_kwargs.keys() & _filter_kwargs.keys()) == 0, \
             'Instance filter_kwargs and get_model supplied filter_kwargs overlap'
@@ -1999,7 +1993,7 @@ class TiledNoiseModel(io.TiledIO, BaseNoiseModel):
         """The basis in which the tiling transform takes place."""
         return 'map'
 
-    def _get_model(self, dmap, iso_filt_method, ivar_filt_method,
+    def _get_model(self, dmap, lim, lim0, iso_filt_method, ivar_filt_method,
                    filter_kwargs, verbose):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
         mask_obs = filter_kwargs['mask_obs']
@@ -2007,7 +2001,7 @@ class TiledNoiseModel(io.TiledIO, BaseNoiseModel):
         out = self.__class__.get_model_static(
             dmap, mask_obs=mask_obs, width_deg=self._width_deg, 
             height_deg=self._height_deg, delta_ell_smooth=self._delta_ell_smooth,
-            nthread=0, iso_filt_method=iso_filt_method,
+            nthread=0, lim=lim, lim0=lim0, iso_filt_method=iso_filt_method,
             ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
             verbose=verbose
             )
@@ -2016,9 +2010,9 @@ class TiledNoiseModel(io.TiledIO, BaseNoiseModel):
 
     @classmethod
     def get_model_static(cls, dmap, mask_obs=None, width_deg=4., height_deg=4.,
-                         delta_ell_smooth=400, nthread=0, iso_filt_method=None,
-                         ivar_filt_method=None, filter_kwargs=None,
-                         verbose=False):
+                         delta_ell_smooth=400, nthread=0, lim=1e-6, lim0=None,
+                         iso_filt_method=None, ivar_filt_method=None, 
+                         filter_kwargs=None, verbose=False):
         """Get the square-root covariance in the tiled basis given an input
         mean-0 map. Allows filtering the input map prior to tiling transform.
 
@@ -2039,6 +2033,14 @@ class TiledNoiseModel(io.TiledIO, BaseNoiseModel):
         nthread : int, optional
             Number of concurrent threads to use in the tiling transform, by
             default 0. If 0, the result of utils.get_cpu_count(). Note, this is
+            distinct from the parameter of the same name that may be passed as
+            a filter_kwarg, which is only used in filtering.
+        lim : float, optional
+            Set eigenvalues smaller than lim * max(eigenvalues) to zero. Note, 
+            this is distinct from the parameter of the same name that may be
+            passed as a filter_kwarg, which is only used in filtering.
+        lim0 : float, optional
+            If max(eigenvalues) < lim0, set whole matrix to zero. Note, this is
             distinct from the parameter of the same name that may be passed as
             a filter_kwarg, which is only used in filtering.
         iso_filt_method : str, optional
@@ -2106,7 +2108,8 @@ class TiledNoiseModel(io.TiledIO, BaseNoiseModel):
         
         out = tiled_noise.get_tiled_noise_covsqrt(
             dmap, mask_obs=mask_obs, width_deg=width_deg, height_deg=height_deg,
-            delta_ell_smooth=delta_ell_smooth, nthread=nthread, verbose=verbose
+            delta_ell_smooth=delta_ell_smooth, nthread=nthread, lim=lim,
+            lim0=lim0, verbose=verbose
             )
         
         assert len(filter_out.keys() & out.keys()) == 0, \
@@ -2239,7 +2242,7 @@ class WaveletNoiseModel(io.WaveletIO, BaseNoiseModel):
         """The basis in which the tiling transform takes place."""
         return 'harmonic'
 
-    def _get_model(self, dmap, iso_filt_method, ivar_filt_method,
+    def _get_model(self, dmap, lim, lim0, iso_filt_method, ivar_filt_method,
                    filter_kwargs, verbose):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""        
         lmax_model = filter_kwargs['lmax'] // filter_kwargs['post_filt_rel_downgrade']
@@ -2250,7 +2253,7 @@ class WaveletNoiseModel(io.WaveletIO, BaseNoiseModel):
         w_ell = self._w_ell_dict[lmax_model]
         
         out = self.__class__.get_model_static(
-            dmap, w_ell, fwhm_fact=self._fwhm_fact_func,
+            dmap, w_ell, fwhm_fact=self._fwhm_fact_func, lim=lim, lim0=lim0,
             iso_filt_method=iso_filt_method, ivar_filt_method=ivar_filt_method,
             filter_kwargs=filter_kwargs, verbose=verbose
         )
@@ -2258,9 +2261,9 @@ class WaveletNoiseModel(io.WaveletIO, BaseNoiseModel):
         return out
 
     @classmethod
-    def get_model_static(cls, dmap, w_ell, fwhm_fact=2, iso_filt_method=None,
-                         ivar_filt_method=None, filter_kwargs=None,
-                         verbose=False):
+    def get_model_static(cls, dmap, w_ell, fwhm_fact=2, lim=1e-6, lim0=None,
+                         iso_filt_method=None, ivar_filt_method=None,
+                         filter_kwargs=None, verbose=False):
         """Get the square-root covariance in the isotropic wavelet basis given
         an input mean-0 map. Allows filtering the input map prior to tiling
         transform.
@@ -2278,6 +2281,14 @@ class WaveletNoiseModel(io.WaveletIO, BaseNoiseModel):
             by default 2. Can also be a function specifying this factor
             for a given ell. Function must accept a single scalar ell
             value and return one.
+        lim : float, optional
+            Set eigenvalues smaller than lim * max(eigenvalues) to zero. Note, 
+            this is distinct from the parameter of the same name that may be
+            passed as a filter_kwarg, which is only used in filtering.
+        lim0 : float, optional
+            If max(eigenvalues) < lim0, set whole matrix to zero. Note, this is
+            distinct from the parameter of the same name that may be passed as
+            a filter_kwarg, which is only used in filtering.
         iso_filt_method : str, optional
             The isotropic scale-dependent filtering method, by default None.
             Together with ivar_filt_method, selects the filter applied to dmap
@@ -2318,8 +2329,8 @@ class WaveletNoiseModel(io.WaveletIO, BaseNoiseModel):
         # squeeze alm dims, alm.ndim must be <= 3 after doing this, see
         # wav_noise.estimate_sqrt_cov_wav_from_enmap
         out = wav_noise.estimate_sqrt_cov_wav_from_enmap(
-            alm.squeeze(), w_ell, dmap.shape, dmap.wcs, fwhm_fact=fwhm_fact, 
-            verbose=verbose
+            alm.squeeze(), w_ell, dmap.shape, dmap.wcs, fwhm_fact=fwhm_fact,
+            lim=lim, lim0=lim0, verbose=verbose
             )
         
         assert len(filter_out.keys() & out.keys()) == 0, \
@@ -2510,7 +2521,7 @@ class FDWNoiseModel(io.FDWIO, BaseNoiseModel):
         """The basis in which the tiling transform takes place."""
         return 'fourier'
 
-    def _get_model(self, dmap, iso_filt_method, ivar_filt_method,
+    def _get_model(self, dmap, lim, lim0, iso_filt_method, ivar_filt_method,
                    filter_kwargs, verbose):
         """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
         lmax_model = filter_kwargs['lmax'] // filter_kwargs['post_filt_rel_downgrade']
@@ -2521,17 +2532,19 @@ class FDWNoiseModel(io.FDWIO, BaseNoiseModel):
         fk = self._fk_dict[lmax_model]
 
         out = self.__class__.get_model_static(
-            dmap, fk, fwhm_fact=self._fwhm_fact_func, nthread=0,
-            iso_filt_method=iso_filt_method, ivar_filt_method=ivar_filt_method,
-            filter_kwargs=filter_kwargs, verbose=verbose
+            dmap, fk, fwhm_fact=self._fwhm_fact_func, nthread=0, lim=lim,
+            lim0=lim0, iso_filt_method=iso_filt_method,
+            ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
+            verbose=verbose
             )
         
         return out
     
     @classmethod
     def get_model_static(cls, dmap, fdw_kernels, fwhm_fact=2, nthread=0, 
-                         iso_filt_method=None, ivar_filt_method=None,
-                         filter_kwargs=None, verbose=False):
+                         lim=1e-6, lim0=None, iso_filt_method=None,
+                         ivar_filt_method=None, filter_kwargs=None,
+                         verbose=False):
         """Get the square-root covariance in the directional wavelet basis given
         an input mean-0 map. Allows filtering the input map prior to tiling
         transform.
@@ -2553,6 +2566,14 @@ class FDWNoiseModel(io.FDWIO, BaseNoiseModel):
         nthread : int, optional
             Number of concurrent threads to use in the tiling transform, by
             default 0. If 0, the result of utils.get_cpu_count(). Note, this is
+            distinct from the parameter of the same name that may be passed as
+            a filter_kwarg, which is only used in filtering.
+        lim : float, optional
+            Set eigenvalues smaller than lim * max(eigenvalues) to zero. Note, 
+            this is distinct from the parameter of the same name that may be
+            passed as a filter_kwarg, which is only used in filtering.
+        lim0 : float, optional
+            If max(eigenvalues) < lim0, set whole matrix to zero. Note, this is
             distinct from the parameter of the same name that may be passed as
             a filter_kwarg, which is only used in filtering.
         iso_filt_method : str, optional
@@ -2584,8 +2605,8 @@ class FDWNoiseModel(io.FDWIO, BaseNoiseModel):
             )
         
         out = fdw_noise.get_fdw_noise_covsqrt(
-            kmap, fdw_kernels, fwhm_fact=fwhm_fact, nthread=nthread,
-            verbose=verbose
+            kmap, fdw_kernels, fwhm_fact=fwhm_fact, nthread=nthread, lim=lim,
+            lim0=lim0, verbose=verbose
             )
         
         assert len(filter_out.keys() & out.keys()) == 0, \

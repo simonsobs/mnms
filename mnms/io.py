@@ -9,6 +9,11 @@ import os
 from abc import ABC, abstractmethod
 
 
+REQUIRED_FILTER_KWARGS = [
+    'post_filt_rel_downgrade', 'lim', 'lim0'
+]
+
+
 class Params(ABC):
     
     def __init__(self, *args, data_model_name=None, subproduct=None,
@@ -20,12 +25,13 @@ class Params(ABC):
                  ivar_lmaxs=None, masks_subproduct=None, mask_est_name=None,
                  mask_est_edgecut=None, mask_est_apodization=None,
                  mask_obs_name=None, mask_obs_edgecut=0,
+                 model_lim=None, model_lim0=None,
                  catalogs_subproduct=None, catalog_name=None,
                  kfilt_lbounds=None, dtype=np.float32, model_file_template=None,
                  sim_file_template=None, qid_names_template=None, **kwargs):
         # data-related instance properties
-        if data_model_name is None:
-            raise ValueError('data_model_name cannot be None')
+        assert data_model_name is not None, \
+            'data_model_name cannot be None'
         # allow config_name with periods
         if not data_model_name.endswith('.yaml'):
             data_model_name += '.yaml'
@@ -53,6 +59,9 @@ class Params(ABC):
         self._iso_filt_method = iso_filt_method
         self._ivar_filt_method = ivar_filt_method
         self._filter_kwargs = filter_kwargs
+        for k in REQUIRED_FILTER_KWARGS: # NOTE: filter_kwargs can't be None
+            assert k in filter_kwargs, \
+                f'Required filter kwarg {k} not in filter_kwargs'
 
         # not strictly for the filters, but to serve ivar for the filters
         self._ivar_fwhms = ivar_fwhms
@@ -78,6 +87,9 @@ class Params(ABC):
 
         # NOTE: modifying supplied value forces good value in configs
         self._mask_obs_edgecut = max(mask_obs_edgecut, 0)
+
+        self._model_lim = model_lim
+        self._model_lim0 = model_lim0
 
         # allow filename with periods
         self._catalogs_subproduct = catalogs_subproduct
@@ -128,6 +140,8 @@ class Params(ABC):
             mask_est_apodization=self._mask_est_apodization,
             mask_obs_name=self._mask_obs_name,
             mask_obs_edgecut=self._mask_obs_edgecut,
+            model_lim=self._model_lim,
+            model_lim0=self._model_lim0,
             possible_maps_subproduct_kwargs=self._possible_maps_subproduct_kwargs,
             srcfree=self._srcfree,
             model_file_template=self._model_file_template,

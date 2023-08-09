@@ -74,7 +74,8 @@ def identity(inp, *args, **kwargs):
 @register('map', 'map', iso_filt_method='harmonic', model=True)
 def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
                                  post_filt_rel_downgrade=1,
-                                 post_filt_downgrade_wcs=None, tweak=False, **kwargs):
+                                 post_filt_downgrade_wcs=None, tweak=False,
+                                 lim=1e-6, lim0=None, **kwargs):
     """Filter a map by an ell-dependent matrix in harmonic space. The
     filter is measured as the pseudospectra of the input and returned.
 
@@ -98,6 +99,10 @@ def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
     tweak : bool, optional
         Allow inexact quadrature weights in spherical harmonic transforms, by
         default False.
+    lim : float, optional
+        Set eigenvalues smaller than lim * max(eigenvalues) to zero.
+    lim0 : float, optional
+        If max(eigenvalues) < lim0, set whole matrix to zero.
 
     Returns
     -------
@@ -119,8 +124,10 @@ def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
 
     # measure correlated pseudo spectra for filtering
     alm = utils.map2alm(imap * mask_est, ainfo=ainfo, lmax=lmax, tweak=tweak)
-    sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', 0.5, mask_est=mask_est)
-    inv_sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', -0.5, mask_est=mask_est)
+    sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', 0.5, lim=lim,
+                                    lim0=lim0, mask_est=mask_est)
+    inv_sqrt_cov_ell = utils.get_ps_mat(alm, 'harmonic', -0.5, lim=lim,
+                                        lim0=lim0, mask_est=mask_est)
     alm = None
 
     # do filtering
@@ -188,7 +195,8 @@ def iso_harmonic_ivar_none(alm, sqrt_cov_ell=None, ainfo=None, lmax=None,
 @register('map', 'map', iso_filt_method='harmonic', ivar_filt_method='basic', model=True)
 def iso_harmonic_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
                                   lmax=None, post_filt_rel_downgrade=1,
-                                  post_filt_downgrade_wcs=None, tweak=False, **kwargs):
+                                  post_filt_downgrade_wcs=None, tweak=False,
+                                  lim=1e-6, lim0=None, **kwargs):
     """Filter a map by another map in map space, and then an ell-dependent
     matrix in harmonic space. The harmonic filter is measured as the
     pseudospectra of the input and returned.
@@ -215,6 +223,10 @@ def iso_harmonic_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
     tweak : bool, optional
         Allow inexact quadrature weights in spherical harmonic transforms, by
         default False.
+    lim : float, optional
+        Set eigenvalues smaller than lim * max(eigenvalues) to zero.
+    lim0 : float, optional
+        If max(eigenvalues) < lim0, set whole matrix to zero.
 
     Returns
     -------
@@ -234,7 +246,8 @@ def iso_harmonic_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
     return iso_harmonic_ivar_none_model(
         filt_imap, mask_est=mask_est, ainfo=ainfo, lmax=lmax,
         post_filt_rel_downgrade=post_filt_rel_downgrade, 
-        post_filt_downgrade_wcs=post_filt_downgrade_wcs, tweak=tweak
+        post_filt_downgrade_wcs=post_filt_downgrade_wcs, tweak=tweak, lim=lim,
+        lim0=lim0
         )
 
 @register('harmonic', 'map', iso_filt_method='harmonic', ivar_filt_method='basic')
@@ -305,7 +318,7 @@ def iso_harmonic_ivar_basic(alm, sqrt_ivar=1, sqrt_cov_ell=None, ainfo=None,
     # finally, note that by writing (nblock, nelem), we are assuming a "block-
     # major" order for pre-components of omap
     oshape = omap.shape
-    omap = utils.atleast_nd(omap, 3)
+
     omap = utils.atleast_nd(omap, 3)
     ncomp = np.prod(omap.shape[:-2], dtype=int)
     omap = omap.reshape(ncomp, *omap.shape[-2:])
@@ -322,6 +335,7 @@ def iso_harmonic_ivar_basic(alm, sqrt_ivar=1, sqrt_cov_ell=None, ainfo=None,
     np.divide(omap, sqrt_ivar, where=sqrt_ivar!=0, out=omap)
     if post_filt_rel_downgrade != 1:
         omap *= post_filt_rel_downgrade
+    
     return omap.reshape(oshape)
 
 @register('map', 'map', iso_filt_method='harmonic', ivar_filt_method='scaledep', model=True)
@@ -329,7 +343,8 @@ def iso_harmonic_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
                                      ell_highs=None, profile='cosine',
                                      dtype=np.float32, mask_est=1, ainfo=None,
                                      lmax=None, post_filt_rel_downgrade=1,
-                                     post_filt_downgrade_wcs=None, tweak=False, **kwargs):
+                                     post_filt_downgrade_wcs=None, tweak=False,
+                                     lim=1e-6, lim0=None, **kwargs):
     """Filter a map by multiple maps in map space, each map for a different 
     range of ells in harmonic space. Then, filter that map by an ell-dependent
     matrix in harmonic space. The harmonic filter is measured as the
@@ -367,6 +382,10 @@ def iso_harmonic_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
     tweak : bool, optional
         Allow inexact quadrature weights in spherical harmonic transforms, by
         default False.
+    lim : float, optional
+        Set eigenvalues smaller than lim * max(eigenvalues) to zero.
+    lim0 : float, optional
+        If max(eigenvalues) < lim0, set whole matrix to zero.
 
     Returns
     -------
@@ -403,7 +422,8 @@ def iso_harmonic_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
     return iso_harmonic_ivar_none_model(
         filt_imap, mask_est=mask_est, ainfo=ainfo, lmax=lmax,
         post_filt_rel_downgrade=post_filt_rel_downgrade, 
-        post_filt_downgrade_wcs=post_filt_downgrade_wcs, tweak=tweak
+        post_filt_downgrade_wcs=post_filt_downgrade_wcs, tweak=tweak, lim=lim,
+        lim0=lim0
         )
 
 @register('harmonic', 'map', iso_filt_method='harmonic', ivar_filt_method='scaledep')

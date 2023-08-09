@@ -877,7 +877,8 @@ def get_az_func(n, p, j):
             return 1+0j
     return w_phi
 
-def get_fdw_noise_covsqrt(kmap, fdw_kernels, fwhm_fact=2, nthread=0, verbose=True):
+def get_fdw_noise_covsqrt(kmap, fdw_kernels, fwhm_fact=2, nthread=0, lim=1e-6,
+                          lim0=None,  verbose=True):
     """Generate square-root covariance information for the signal in imap.
     The covariance matrix is assumed to be block-diagonal in wavelet kernels,
     neglecting correlations due to their overlap. Kernels are managed by 
@@ -902,6 +903,10 @@ def get_fdw_noise_covsqrt(kmap, fdw_kernels, fwhm_fact=2, nthread=0, verbose=Tru
     nthread : int, optional
         Number of concurrent threads, by default 0. If 0, the result
         of mnms.utils.get_cpu_count().
+    lim : float, optional
+        Set eigenvalues smaller than lim * max(eigenvalues) to zero.
+    lim0 : float, optional
+        If max(eigenvalues) < lim0, set whole matrix to zero.
     verbose : bool, optional
         Print possibly helpful messages, by default True.
 
@@ -967,7 +972,7 @@ def get_fdw_noise_covsqrt(kmap, fdw_kernels, fwhm_fact=2, nthread=0, verbose=Tru
             wmap2 = np.sqrt(wmap2)
         else:
             utils.chunked_eigpow(
-                wmap2, 0.5, axes=[-3, -2], chunk_axis=-1
+                wmap2, 0.5, axes=[-3, -2], lim=lim, lim0=lim0, chunk_axis=-1
                 )
 
         sqrt_cov_wavs[idx] = wmap2.reshape(

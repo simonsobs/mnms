@@ -567,8 +567,8 @@ def interp1d_bins(bins, y, return_vals=False, **interp1d_kwargs):
     else:
         return interp1d(x, y, fill_value=fill_value, **interp1d_kwargs)
 
-def get_ps_mat(inp, outbasis, e, inbasis='harmonic', mask_est=None, 
-               shape=None, wcs=None):
+def get_ps_mat(inp, outbasis, e, lim=1e-6, lim0=None, inbasis='harmonic',
+               mask_est=None, shape=None, wcs=None):
     """Get a power spectrum matrix from input alm's or fft's, raised to a given
     matrix power.
 
@@ -581,6 +581,10 @@ def get_ps_mat(inp, outbasis, e, inbasis='harmonic', mask_est=None,
         If 'fourier', only the 'real-fft' modes.
     e : scalar
         Matrix power.
+    lim : float, optional
+        Set eigenvalues smaller than lim * max(eigenvalues) to zero.
+    lim0 : float, optional
+        If max(eigenvalues) < lim0, set whole matrix to zero.
     inbasis : str
         The basis of the input data, either 'harmonic' or 'fourier.' If
         'fourier', assumed only the 'real-fft' modes.
@@ -645,7 +649,7 @@ def get_ps_mat(inp, outbasis, e, inbasis='harmonic', mask_est=None,
 
         mat /= w2
         mat = mat.reshape(ncomp, ncomp, -1)
-        mat = eigpow(mat, e, axes=[0, 1])
+        mat = eigpow(mat, e, axes=[0, 1], lim=lim, lim0=lim0)
         mat = mat.reshape(*preshape, *preshape, -1)
         
         if outbasis == 'harmonic':
@@ -701,7 +705,7 @@ def get_ps_mat(inp, outbasis, e, inbasis='harmonic', mask_est=None,
         
         mat /= w2
         mat = mat.reshape(ncomp, ncomp, -1)
-        mat = eigpow(mat, e, axes=[0, 1])
+        mat = eigpow(mat, e, axes=[0, 1], lim=lim, lim0=lim0)
         mat = mat.reshape(*preshape, *preshape, -1)
 
         if outbasis == 'fourier':
@@ -2143,7 +2147,7 @@ def concurrent_einsum(subscripts, a, b, *args, flatten_axes=[-2, -1],
     out = np.moveaxis(out, range(len(oshape_axes)), flatten_axes)
     return out
 
-def eigpow(A, e, axes=[-2, -1], copy=False):
+def eigpow(A, e, axes=[-2, -1], lim=1e-6, lim0=None, copy=False):
     """A hack around enlib.array_ops.eigpow which upgrades the data
     precision to at least double precision if necessary prior to
     operation.
@@ -2158,15 +2162,24 @@ def eigpow(A, e, axes=[-2, -1], copy=False):
     dtype = A.dtype
     
     # cast to double precision if necessary
-    if np.dtype(dtype).itemsize < 8:
-        A = np.asanyarray(A, dtype=np.float64)
-        recast = True
-        copy = False # we already copied in recasting
+    if np.iscomplexobj(A):
+        if np.dtype(dtype).itemsize < 16:
+            A = np.asanyarray(A, dtype=np.complex128)
+            recast = True
+            copy = False # we already copied in recasting
+        else:
+            recast = False
     else:
-        recast = False
+        if np.dtype(dtype).itemsize < 8:
+            A = np.asanyarray(A, dtype=np.float64)
+            recast = True
+            copy = False # we already copied in recasting
+        else:
+            recast = False
 
-    array_ops.eigpow(A, e, axes=axes, copy=copy)
-
+    # reassign to A in case copy
+    A = array_ops.eigpow(A, e, axes=axes, lim=lim, lim0=lim0, copy=copy) 
+    
     # cast back to input precision if necessary
     if recast:
         A = np.asanyarray(A, dtype=dtype)
@@ -2176,7 +2189,8 @@ def eigpow(A, e, axes=[-2, -1], copy=False):
 
     return A
 
-def chunked_eigpow(A, e, axes=[-2, -1], chunk_axis=0, target_gb=5, copy=False):
+def chunked_eigpow(A, e, axes=[-2, -1], lim=1e-6, lim0=None, copy=False,
+                   chunk_axis=0, target_gb=5):
     """A hack around utils.eigpow which performs the operation
     one chunk at a time to reduce memory usage."""
     # store wcs if imap is ndmap
@@ -2205,7 +2219,10 @@ def chunked_eigpow(A, e, axes=[-2, -1], chunk_axis=0, target_gb=5, copy=False):
 
     # call eigpow for each chunk
     for i in range(nchunks):
-        A[i*chunksize:(i+1)*chunksize] = eigpow(A[i*chunksize:(i+1)*chunksize], e, axes=eaxes, copy=copy)
+        A[i*chunksize:(i+1)*chunksize] = eigpow(
+            A[i*chunksize:(i+1)*chunksize], e, axes=eaxes, lim=lim, lim0=lim0,
+            copy=copy
+            )
 
     # reshape
     A = np.moveaxis(A, 0, chunk_axis)

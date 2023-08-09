@@ -343,7 +343,8 @@ def tiled_info(tiled_imap, pop=None):
     return ret
 
 def get_tiled_noise_covsqrt(imap, mask_obs=None, width_deg=4., height_deg=4.,
-                            delta_ell_smooth=400, nthread=0, verbose=False):
+                            delta_ell_smooth=400, nthread=0, lim=1e-6, lim0=None, 
+                            verbose=False):
     """Generate a tiled noise model 'sqrt-covariance' matrix that captures spatially-varying
     noise correlation directions across the sky, as well as map-depth anistropies using
     the mapmaker inverse-variance maps.
@@ -364,6 +365,10 @@ def get_tiled_noise_covsqrt(imap, mask_obs=None, width_deg=4., height_deg=4.,
     nthread : int, optional
         Number of concurrent threads, by default 0. If 0, the result
         of mnms.utils.get_cpu_count().
+    lim : float, optional
+        Set eigenvalues smaller than lim * max(eigenvalues) to zero.
+    lim0 : float, optional
+        If max(eigenvalues) < lim0, set whole matrix to zero.
     verbose : bool, optional
         Print possibly helpful messages, by default False.
 
@@ -474,7 +479,7 @@ def get_tiled_noise_covsqrt(imap, mask_obs=None, width_deg=4., height_deg=4.,
     # take covsqrt of current power (and can safely delete kmap, smap)
     kmap = None
     smap = None
-    omap = utils.chunked_eigpow(omap, 0.5, axes=(-4,-3))
+    omap = utils.chunked_eigpow(omap, 0.5, axes=(-4,-3), lim=lim, lim0=lim0)
 
     return {'sqrt_cov_mat': imap.sametiles(omap)}
 

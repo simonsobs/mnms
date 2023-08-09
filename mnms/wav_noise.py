@@ -6,6 +6,7 @@ from optweight import noise_utils, type_utils, operators, mat_utils, wavtrans, w
 import numpy as np
 
 
+# TODO: add lim, lim0 args
 def estimate_sqrt_cov_wav_from_enmap(alm, w_ell, shape, wcs, fwhm_fact=2,
                                      verbose=True):
     """Estimate wavelet-based covariance matrix given noise enmap.
