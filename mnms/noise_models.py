@@ -1,4 +1,4 @@
-from mnms import inpaint, utils, tiled_noise, wav_noise, fdw_noise, filters, transforms, io, classes
+from mnms import inpaint, utils, tiled_noise, wav_noise, fdw_noise, harmonic_noise, filters, transforms, io, classes
 
 from sofind import DataModel, utils as s_utils
 from pixell import enmap, wcsutils
@@ -1292,7 +1292,18 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         # _noise_model_class now lives in the object as a class attribute
         nm_cls = cls.get_subclass(kwargs.pop('noise_model_class'))
-        return nm_cls(*qids, **kwargs)
+        outnm = nm_cls(*qids, **kwargs)
+
+        # check the subproduct! TODO: if we pass data_model, subproduct directly to
+        # config rather than the noise_model config, we won't need to carry around
+        # the subproduct in the config itself, and won't need this loopy check
+        config_name_from_config = outnm._data_model.get_subproduct_config(
+            'noise_models', outnm._subproduct
+        )
+        assert config_name == config_name_from_config, \
+            f'Inconsistent subproduct: {config_name} and {config_name_from_config}'
+
+        return outnm
 
     def get_model_fn(self, split_num, lmax, to_write=False, **subproduct_kwargs):
         """Get a noise model filename for split split_num; return as <str>"""
@@ -2645,7 +2656,7 @@ class FDWNoiseModel(io.FDWIO, BaseNoiseModel):
 
         Parameters
         ----------
-        sqrt_cov_wavs : dict
+        sqrt_cov_mat : dict
             A dictionary holding wavelet maps of the square-root covariance, 
             indexed by the wavelet key (radial index, azimuthal index).
         fdw_kernels : FDWKernels
@@ -2709,3 +2720,197 @@ class FDWNoiseModel(io.FDWIO, BaseNoiseModel):
             pforw=self._pforw, pback=self._pback, dtype=self._dtype,
             kern_cut=self._kern_cut
         )
+
+
+@BaseNoiseModel.register_subclass('Harmonic')
+class HarmonicNoiseModel(io.HarmonicIO, BaseNoiseModel):
+
+    def __init__(self, *qids, **kwargs):
+        """A HarmonicNoiseModel object supports drawing simulations which
+        capture scale-dependent features.
+
+        Parameters
+        ----------
+        filter_only : bool, optional
+            No information is recorded in the modeling, or used in drawing a
+            simulation, other than that recorded by the filter, by default
+            True.
+
+        Notes
+        -----
+        qids, kwargs passed to BaseNoiseModel constructor.
+
+        Examples
+        --------
+        >>> from mnms import noise_models as nm
+        >>> hnm = nm.HarmonicNoiseModel('s18_03', 's18_04', downgrade=2, notes='my_model')
+        >>> hnm.get_model() # will take several minutes and require a lot of memory
+                            # if running this exact model for the first time, otherwise
+                            # will return None if model exists on-disk already
+        >>> imap = hnm.get_sim(0, 123) # will get a sim of split 1 from the correlated arrays;
+                                        # the map will have "index" 123, which is used in making
+                                        # the random seed whether or not the sim is saved to disk,
+                                        # and will be recorded in the filename if saved to disk.
+        >>> print(imap.shape)
+        >>> (2, 1, 3, 5600, 21600)
+        """
+        super().__init__(*qids, **kwargs)
+
+    @classmethod
+    def operatingbasis(cls):
+        """The basis in which the tiling transform takes place."""
+        return 'harmonic'
+    
+    def _get_model(self, dmap, lim, lim0, iso_filt_method, ivar_filt_method,
+                   filter_kwargs, verbose):
+        """Return a dictionary of noise model variables for this NoiseModel subclass from difference map dmap"""
+        out = self.__class__.get_model_static(
+            dmap, filter_only=self._filter_only, lim=lim, lim0=lim0,
+            iso_filt_method=iso_filt_method, ivar_filt_method=ivar_filt_method,
+            filter_kwargs=filter_kwargs, verbose=verbose
+        )
+
+        return out
+    
+    @classmethod
+    def get_model_static(cls, dmap, filter_only=True, lim=1e-6, lim0=None,
+                         iso_filt_method=None, ivar_filt_method=None,
+                         filter_kwargs=None, verbose=False):
+        """Get the square-root covariance in the harmonic basis given an input
+        mean-0 map. Allows filtering the input map prior to measuring the 
+        spectrum.
+
+        Parameters
+        ----------
+        dmap : (*preshape, ny, nx) enmap.ndmap
+            Input mean-0 map.
+        filter_only : bool, optional
+            No information is recorded in the modeling, or used in drawing a
+            simulation, other than that recorded by the filter, by default
+            True.
+        lim : float, optional
+            Set eigenvalues smaller than lim * max(eigenvalues) to zero. Note, 
+            this is distinct from the parameter of the same name that may be
+            passed as a filter_kwarg, which is only used in filtering.
+        lim0 : float, optional
+            If max(eigenvalues) < lim0, set whole matrix to zero. Note, this is
+            distinct from the parameter of the same name that may be passed as
+            a filter_kwarg, which is only used in filtering.
+        iso_filt_method : str, optional
+            The isotropic scale-dependent filtering method, by default None.
+            Together with ivar_filt_method, selects the filter applied to dmap
+            prior to the tiling transform. See the registered functions in
+            filters.py.
+        ivar_filt_method : str, optional
+            The position-dependent filtering method, by default None. Together
+            with iso_filt_method, selects the filter applied to dmap prior to
+            the tiling transform. See the registered functions in filters.py.
+        filter_kwargs : dict, optional
+            Additional kwargs passed to the transforms and filter, by default
+            None. Which arguments, and their effects, depend on the transform
+            and filter function.
+        verbose : bool, optional
+            Print possibly helpful messages, by default False.
+
+        Returns
+        -------
+        dict
+            A dictionary holding the wavelet square-root covariance in addition
+            to any other quantities measured during filtering.
+
+        Notes
+        -----
+        The filter_only argument implies that the most useful filters are those
+        that record some harmonic information. Otherwise, if filter_only is 
+        True, the model probably will not be a good one.
+
+        Likewise, if filter_only is False, if the underlying data contain
+        inhomogeneities other than those modulated by any map-based filters,
+        the model may also not be good, because this class cannot model any
+        such inhomogeneities.
+        """
+        alm, filter_out = cls.filter_model(
+            dmap, iso_filt_method=iso_filt_method, 
+            ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
+            verbose=verbose
+            )
+        
+        out = harmonic_noise.get_harmonic_noise_covsqrt(
+            alm, filter_only=filter_only, lim=lim, lim0=lim0, verbose=verbose
+            )
+
+        assert len(filter_out.keys() & out.keys()) == 0, \
+            'filter outputs and model outputs overlap'
+        out.update(filter_out)
+        
+        return out
+    
+    def _get_sim(self, model_dict, seed, iso_filt_method, ivar_filt_method,
+                 filter_kwargs, verbose):
+        """Return a masked enmap.ndmap sim from model_dict, with seed <sequence of ints>"""
+        sqrt_cov_mat = model_dict['sqrt_cov_mat']
+        
+        sim = self.__class__.get_sim_static(
+            sqrt_cov_mat, seed, filter_only=self._filter_only, nthread=0,
+            iso_filt_method=iso_filt_method, ivar_filt_method=ivar_filt_method,
+            filter_kwargs=filter_kwargs, verbose=verbose
+            )
+        
+        # We always want shape (num_arrays, num_splits=1, num_pol, ny, nx).
+        return sim.reshape(self._num_arrays, 1, -1, *sim.shape[-2:])
+    
+    @classmethod
+    def get_sim_static(cls, sqrt_cov_mat, seed, filter_only=True, nthread=0,
+                       iso_filt_method=None, ivar_filt_method=None,
+                       filter_kwargs=None, verbose=False):
+        """Draw a realization from the square-root covariance in the harmonic
+        basis. Allows filtering the output map after drawing from the 
+        model spectrum.
+
+        Parameters
+        ----------
+        sqrt_cov_mat : (*preshape, *preshape, nell) np.ndarray
+            The harmonic square-root covariance matrix.
+        filter_only : bool, optional
+            No information is recorded in the modeling, or used in drawing a
+            simulation, other than that recorded by the filter, by default
+            True.
+        nthread : int, optional
+            Number of concurrent threads to use in the tiling transform, by
+            default 0. If 0, the result of utils.get_cpu_count(). Note, this is
+            distinct from the parameter of the same name that may be passed as
+            a filter_kwarg, which is only used in filtering.
+        iso_filt_method : str, optional
+            The isotropic scale-dependent filtering method, by default None.
+            Together with ivar_filt_method, selects the filter applied to sim
+            after the tiling transform. See the registered functions in
+            filters.py.
+        ivar_filt_method : str, optional
+            The position-dependent filtering method, by default None. Together
+            with iso_filt_method, selects the filter applied to sim after
+            the tiling transform. See the registered functions in filters.py.
+        filter_kwargs : dict, optional
+            Additional kwargs passed to the transforms and filter, by default
+            None. Which arguments, and their effects, depend on the transform
+            and filter function.
+        verbose : bool, optional
+            Print possibly helpful messages, by default False.
+
+        Returns
+        -------
+        (*preshape, ny, nx) enmap.ndmap
+            The simulation. Geometry information is necessarily provided in
+            filter_kwargs.
+        """
+        sim = harmonic_noise.get_harmonic_noise_sim(
+            sqrt_cov_mat, seed, filter_only=filter_only, nthread=nthread,
+            verbose=verbose
+            )
+        
+        sim = cls.filter(
+            sim, iso_filt_method=iso_filt_method,
+            ivar_filt_method=ivar_filt_method, filter_kwargs=filter_kwargs,
+            adjoint=False, verbose=verbose
+        )
+
+        return sim

@@ -1,4 +1,4 @@
-from mnms import utils, tiled_noise, fdw_noise, classes
+from mnms import utils, tiled_noise, fdw_noise, harmonic_noise, classes
 
 from pixell import enmap
 from optweight import wavtrans
@@ -353,3 +353,43 @@ class FDWIO(BaseIO, Params):
         extra_datasets = {'sqrt_cov_ell': sqrt_cov_ell} if sqrt_cov_ell is not None else None
         
         fdw_noise.write_wavs(fn, sqrt_cov_mat, extra_datasets=extra_datasets)
+
+
+@BaseIO.register_subclass('Harmonic')
+class HarmonicIO(BaseIO, Params):
+
+    def __init__(self, *args, filter_only=True, **kwargs):
+        self._filter_only = filter_only
+
+        super().__init__(*args, **kwargs)
+
+    @property
+    def nm_param_formatted_dict(self):
+        """Return a dictionary of model parameters particular to this subclass"""
+        return dict(
+            filter_only=self._filter_only
+        )
+
+    def read_model(self, fn):
+        """Read a noise model with filename fn; return a dictionary of noise model variables"""
+        extra_datasets = ['sqrt_cov_ell'] if self._iso_filt_method else None
+
+        sqrt_cov_mat, _, extra_datasets_dict = harmonic_noise.read_spec(
+            fn, extra_datasets=extra_datasets
+        )
+
+        out = {'sqrt_cov_mat': sqrt_cov_mat}
+
+        if self._iso_filt_method:
+            sqrt_cov_ell = extra_datasets_dict['sqrt_cov_ell']
+            out.update({'sqrt_cov_ell': sqrt_cov_ell})
+
+        return out
+
+    def write_model(self, fn, sqrt_cov_mat=None, sqrt_cov_ell=None, **kwargs):
+        """Write a dictionary of noise model variables to filename fn"""
+        extra_datasets = {'sqrt_cov_ell': sqrt_cov_ell} if sqrt_cov_ell is not None else None
+
+        harmonic_noise.write_spec(
+            fn, sqrt_cov_mat, extra_datasets=extra_datasets
+        )
