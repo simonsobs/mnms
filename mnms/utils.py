@@ -567,8 +567,8 @@ def interp1d_bins(bins, y, return_vals=False, **interp1d_kwargs):
     else:
         return interp1d(x, y, fill_value=fill_value, **interp1d_kwargs)
 
-def get_ps_mat(inp, outbasis, e, lim=1e-6, lim0=None, inbasis='harmonic',
-               mask_est=None, shape=None, wcs=None):
+def get_ps_mat(inp, outbasis, exp, lim=1e-6, lim0=None, inbasis='harmonic',
+               shape=None, wcs=None):
     """Get a power spectrum matrix from input alm's or fft's, raised to a given
     matrix power.
 
@@ -579,7 +579,7 @@ def get_ps_mat(inp, outbasis, e, lim=1e-6, lim0=None, inbasis='harmonic',
     outbasis : str
         The basis of the power spectrum matrix, either 'harmonic' or 'fourier'.
         If 'fourier', only the 'real-fft' modes.
-    e : scalar
+    exp : scalar
         Matrix power.
     lim : float, optional
         Set eigenvalues smaller than lim * max(eigenvalues) to zero.
@@ -588,10 +588,6 @@ def get_ps_mat(inp, outbasis, e, lim=1e-6, lim0=None, inbasis='harmonic',
     inbasis : str
         The basis of the input data, either 'harmonic' or 'fourier.' If
         'fourier', assumed only the 'real-fft' modes.
-    mask_est : (ny, nx) enmap.ndmap, optional
-        Mask applied to map before measuring input alm's, by default None. If
-        provided, power spectra matrix is normalized by sky fraction before
-        being raised to e.
     shape : (..., ny, nx) tuple, optional
         If outbasis or inbasis is 'fourier', the shape of the map-space, by default None.
     wcs : astropy.wcs.WCS, optional
@@ -624,12 +620,6 @@ def get_ps_mat(inp, outbasis, e, lim=1e-6, lim0=None, inbasis='harmonic',
     if outbasis not in ('harmonic', 'fourier'):
         raise ValueError('Only harmonic or fourier basis supported')
 
-    if mask_est is not None:
-        pmap = enmap.pixsizemap(mask_est.shape, mask_est.wcs)
-        w2 = np.sum((mask_est**2)*pmap) / np.pi / 4.   
-    else:
-        w2 = 1
-
     if inbasis == 'harmonic':
         preshape = inp.shape[:-1]
         ncomp = np.prod(preshape, dtype=int)
@@ -647,9 +637,8 @@ def get_ps_mat(inp, outbasis, e, lim=1e-6, lim0=None, inbasis='harmonic',
                 if preidx1 != preidx2:
                     mat[(*preidx2, *preidx1)] = mat[(*preidx1, *preidx2)]
 
-        mat /= w2
         mat = mat.reshape(ncomp, ncomp, -1)
-        mat = eigpow(mat, e, axes=[0, 1], lim=lim, lim0=lim0)
+        mat = eigpow(mat, exp, axes=[0, 1], lim=lim, lim0=lim0)
         mat = mat.reshape(*preshape, *preshape, -1)
         
         if outbasis == 'harmonic':
@@ -703,9 +692,8 @@ def get_ps_mat(inp, outbasis, e, lim=1e-6, lim0=None, inbasis='harmonic',
                 if preidx1 != preidx2:
                     mat[(*preidx2, *preidx1)] = mat[(*preidx1, *preidx2)]
         
-        mat /= w2
         mat = mat.reshape(ncomp, ncomp, -1)
-        mat = eigpow(mat, e, axes=[0, 1], lim=lim, lim0=lim0)
+        mat = eigpow(mat, exp, axes=[0, 1], lim=lim, lim0=lim0)
         mat = mat.reshape(*preshape, *preshape, -1)
 
         if outbasis == 'fourier':
@@ -728,6 +716,75 @@ def get_ps_mat(inp, outbasis, e, lim=1e-6, lim0=None, inbasis='harmonic',
         elif outbasis == 'harmonic':
             raise NotImplementedError("Can't go from fourier to spinny harmonic easily")
     
+    return out
+
+def measure_iso_harmonic(imap, *exp, mask_est=1, mask_norm=1, ainfo=None,
+                         lmax=None, tweak=False, lim=1e-6, lim0=None):
+    """Measure all auto- and cross-spectra of imap, raised to various matrix
+    exponents at each ell.
+
+    Parameters
+    ----------
+    imap : (*preshape, ny, nx) enmap.ndmap
+        Input map to be analyzed.
+    exp : iterable of scalar, optional
+        Exponents to raise covaried spectra matrix to at each ell.
+    mask_est : (ny, nx) enmap.ndmap, optional
+        Mask applied to imap to estimate pseudospectra, by default 1.
+    mask_norm : (ny, nx) enmap.ndmap, optional
+        With mask_est, used to normalize the measured pseudospectrum such that
+        a draw from the normalized spectra, multiplied by mask_norm and then
+        measured in mask_est, has the same pseudospectrum (on average) as 
+        imap measured in mask_est, by default 1.
+    ainfo : sharp.alm_info, optional
+        ainfo used in the pseudospectrum measurement, by default None.
+    lmax : int, optional
+        lmax used in the pseudospectrum measurement, by default the Nyquist
+        frequency of the pixelization.
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
+    lim : float, optional
+        Set eigenvalues smaller than lim * max(eigenvalues) to zero.
+    lim0 : float, optional
+        If max(eigenvalues) < lim0, set whole matrix to zero.
+
+    Returns
+    -------
+    iterable of (*preshape, *preshape, nell) np.ndarray
+        The auto- and cross-spectra raised to e for each e in exp.
+
+    Notes
+    -----
+    Although this does not correct the measured spectra for the geometry of
+    the masks with a mode-coupling matrix, it does correct the spectra for the
+    loss of power (i.e., the "diagonal mode-coupling" approximation).
+
+    The measured matrices are diagonal in ell but take the cross of the map
+    preshape, i.e. they have shape (*preshape, *preshape, nell).
+    """
+    if lmax is None:
+        lmax = lmax_from_wcs(imap)
+
+    mask_est = np.asanyarray(mask_est, dtype=imap.dtype)
+    mask_norm = np.asanyarray(mask_norm, dtype=imap.dtype)
+
+    mask_est = np.atleast_2d(mask_est)
+    mask_norm = np.atleast_2d(mask_norm)
+
+    # want to make sure the w2 broadcasts against (preshape, preshape) of the
+    # spectra, which also means we need to get rid of one of the kept mapdims
+    pmap = imap.pixsizemap()
+    w2 = np.sum((mask_est*mask_norm)**2 * pmap, axis=(-2, -1), keepdims=True)[..., 0]
+    w2 /= 4*np.pi
+    
+    # measure correlated pseudo spectra for filtering
+    alm = map2alm(imap * mask_est, ainfo=ainfo, lmax=lmax, tweak=tweak)
+    out = []
+    for e in exp:
+        out.append(get_ps_mat(alm, 'harmonic', e, lim=lim, lim0=lim0) / w2**e)
+    alm = None
+
     return out
 
 def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic', 
@@ -1780,7 +1837,8 @@ def get_ell_trans_profiles(ell_lows, ell_highs, lmax=None,
     Returns
     -------
     list
-        The profiles over all ells.
+        The profiles over all ells, bandlimited to the lmax for each
+        profile.
 
     Raises
     ------
@@ -2147,7 +2205,7 @@ def concurrent_einsum(subscripts, a, b, *args, flatten_axes=[-2, -1],
     out = np.moveaxis(out, range(len(oshape_axes)), flatten_axes)
     return out
 
-def eigpow(A, e, axes=[-2, -1], lim=1e-6, lim0=None, copy=False):
+def eigpow(A, exp, axes=[-2, -1], lim=1e-6, lim0=None, copy=False):
     """A hack around enlib.array_ops.eigpow which upgrades the data
     precision to at least double precision if necessary prior to
     operation.
@@ -2178,7 +2236,7 @@ def eigpow(A, e, axes=[-2, -1], lim=1e-6, lim0=None, copy=False):
             recast = False
 
     # reassign to A in case copy
-    A = array_ops.eigpow(A, e, axes=axes, lim=lim, lim0=lim0, copy=copy) 
+    A = array_ops.eigpow(A, exp, axes=axes, lim=lim, lim0=lim0, copy=copy) 
     
     # cast back to input precision if necessary
     if recast:
@@ -2189,7 +2247,7 @@ def eigpow(A, e, axes=[-2, -1], lim=1e-6, lim0=None, copy=False):
 
     return A
 
-def chunked_eigpow(A, e, axes=[-2, -1], lim=1e-6, lim0=None, copy=False,
+def chunked_eigpow(A, exp, axes=[-2, -1], lim=1e-6, lim0=None, copy=False,
                    chunk_axis=0, target_gb=5):
     """A hack around utils.eigpow which performs the operation
     one chunk at a time to reduce memory usage."""
@@ -2220,7 +2278,7 @@ def chunked_eigpow(A, e, axes=[-2, -1], lim=1e-6, lim0=None, copy=False,
     # call eigpow for each chunk
     for i in range(nchunks):
         A[i*chunksize:(i+1)*chunksize] = eigpow(
-            A[i*chunksize:(i+1)*chunksize], e, axes=eaxes, lim=lim, lim0=lim0,
+            A[i*chunksize:(i+1)*chunksize], exp, axes=eaxes, lim=lim, lim0=lim0,
             copy=copy
             )
 
