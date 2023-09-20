@@ -1,3 +1,4 @@
+from pixell import utils as putils
 from mnms import noise_models as nm, utils
 import argparse
 import numpy as np
@@ -26,8 +27,19 @@ parser.add_argument('--lmax', dest='lmax', type=int, required=True,
 parser.add_argument('--subproduct-kwargs', dest='subproduct_kwargs', nargs='+', type=str, default={},
                     action=utils.StoreDict, metavar='KEY1=VAL1 KEY2=VAL2 ...',
                     help='additional key=value pairs to pass to get_model, get_sim')
+
+parser.add_argument('--use-mpi', action='store_true',
+                    help='Use MPI to compute models in parallel')
+
 args = parser.parse_args()
 
+if args.use_mpi:
+    # Could add try statement, but better to crash if MPI cannot be imported.
+    from mpi4py import MPI
+    comm = MPI.COMM_WORLD
+else:
+    comm = putils.FakeCommunicator()
+        
 model = nm.BaseNoiseModel.from_config(args.config_name, args.noise_model_name, *args.qid)
 
 # get split nums
@@ -38,6 +50,6 @@ else:
 assert np.all(splits >= 0)
 
 # Iterate over models
-for s in splits:
+for s in splits[comm.rank::comm.size]:
     model.get_model(s, args.lmax, keep_mask_est=True, keep_mask_obs=True, verbose=True,
                     **args.subproduct_kwargs)
