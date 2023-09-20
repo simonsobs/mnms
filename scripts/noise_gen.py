@@ -1,4 +1,4 @@
-from pixell import utils as putils
+from pixell import mpi as p_mpi
 from mnms import noise_models as nm, utils
 import argparse
 import numpy as np
@@ -38,7 +38,7 @@ if args.use_mpi:
     from mpi4py import MPI
     comm = MPI.COMM_WORLD
 else:
-    comm = putils.FakeCommunicator()
+    comm = p_mpi.FakeCommunicator()
         
 model = nm.BaseNoiseModel.from_config(args.config_name, args.noise_model_name, *args.qid)
 
