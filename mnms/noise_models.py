@@ -102,7 +102,7 @@ class DataManager(io.Params):
             assert k in equal_qid_kwargs, \
                 f'{k} not in equal_qid_kwargs: {equal_qid_kwargs}'
 
-        self._num_arrays = len(qids)
+        self._num_arrays = len(super_qids)
         self._num_splits = equal_qid_kwargs['num_splits']
 
         # prepare cache
@@ -378,7 +378,7 @@ class DataManager(io.Params):
         
         # outer loop: qids, inner loop: scales (minimize i/o)
         for i, (subproduct_kwargs, qid) in enumerate(self._super_qids):
-            with bench.show(f'Generating sqrt_ivars for qid {qid}'):
+            with bench.show(f'Generating sqrt_ivars for {utils.kwargs_str(**subproduct_kwargs)}, qid {qid}'):
                 if self._calibrated:
                     mul = utils.get_mult_fact(self._data_model, qid, ivar=True)
                 else:
@@ -493,7 +493,7 @@ class DataManager(io.Params):
             return cfacts
 
         for i, (subproduct_kwargs, qid) in enumerate(self._super_qids):
-            with bench.show(f'Generating difference-map correction-factors for qid {qid}'):
+            with bench.show(f'Generating difference-map correction-factors for {utils.kwargs_str(**subproduct_kwargs)}, qid {qid}'):
                 if self._calibrated:
                     mul = utils.get_mult_fact(self._data_model, qid, ivar=True)
                 else:
@@ -594,7 +594,7 @@ class DataManager(io.Params):
                 )
     
         for i, (subproduct_kwargs, qid) in enumerate(self._super_qids):
-            with bench.show(f'Generating difference maps for qid {qid}'):
+            with bench.show(f'Generating difference maps for qid {utils.kwargs_str(**subproduct_kwargs)}, {qid}'):
                 if self._calibrated:
                     mul_imap = utils.get_mult_fact(self._data_model, qid, ivar=False)
                     mul_ivar = utils.get_mult_fact(self._data_model, qid, ivar=True)
