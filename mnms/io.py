@@ -18,20 +18,114 @@ class Params(ABC):
     
     def __init__(self, *args, data_model_name=None, subproduct=None,
                  maps_product=None, maps_subproduct='default',
-                 possible_maps_subproduct_kwargs=None,
                  enforce_equal_qid_kwargs=None, calibrated=False,
                  differenced=True, srcfree=True, iso_filt_method=None,
                  ivar_filt_method=None, filter_kwargs=None, ivar_fwhms=None,
                  ivar_lmaxs=None, masks_subproduct=None, mask_est_name=None,
-                 mask_est_edgecut=None, mask_est_apodization=None,
+                 mask_est_edgecut=0, mask_est_apodization=0,
                  mask_obs_name=None, mask_obs_edgecut=0,
                  model_lim=None, model_lim0=None,
                  catalogs_subproduct=None, catalog_name=None,
                  kfilt_lbounds=None, dtype=np.float32, model_file_template=None,
-                 sim_file_template=None, qid_names_template=None, **kwargs):
-        # data-related instance properties
-        assert data_model_name is not None, \
-            'data_model_name cannot be None'
+                 sim_file_template=None, qid_names_template=None,
+                 **kwargs):
+        """Helper class for both BaseIO and BaseNoiseModel subclasses. In
+        essence, a big custom type with many attributes, some with minor
+        formatting for downstream applications.
+
+        Parameters
+        ----------
+	    data_model_name : str, optional
+            Name of sofind.DataModel config to help load raw products.
+        subproduct : str, optional
+            Name of the noise_models subproduct within data model
+            (noise_models product).
+        maps_product : str, optional
+            Name of map product to load raw products from.
+        maps_subproduct : str, optional
+            Name of map subproduct to load raw products from, by default 'default'.
+        enforce_equal_qid_kwargs : list of str, optional
+            Enforce the listed kwargs have equal values across supplied qids. No matter
+            what is supplied here, 'num_splits' is always enforced. All enforced kwargs
+            are available to be passed to model or sim filename templates.
+        calibrated : bool, optional
+            Whether to load calibrated raw data, by default False.
+        differenced : bool, optional
+            Whether to take differences between splits or treat loaded maps as raw noise 
+            (e.g., a time-domain sim) that will not be differenced, by default True.
+        srcfree : bool, optional
+            Whether to load point-source subtracted maps or raw maps, by default True.
+        iso_filt_method : str, optional
+            The isotropic scale-dependent filtering method, by default None.
+            Together with ivar_filt_method, selects the filter applied to dmap
+            prior to the tiling transform. See the registered functions in
+            filters.py.
+        ivar_filt_method : str, optional
+            The position-dependent filtering method, by default None. Together
+            with iso_filt_method, selects the filter applied to dmap prior to
+            the tiling transform. See the registered functions in filters.py.
+        filter_kwargs : dict, optional
+            Additional kwargs passed to the transforms and filter, by default
+            None. Which arguments, and their effects, depend on the transform
+            and filter function.
+        ivar_fwhms : iterable of scalars, optional
+            Smooth the ivar maps by a Gaussian kernel of these fwhms in arcmin.
+            Used only in the get_sqrt_ivar method. 
+        ivar_lmaxs : iterable of ints, optional
+            Bandlimit the ivar maps to these lmaxs. Used only in the
+            get_sqrt_ivar method. 
+        masks_subproduct : str, optional
+            Name of masks product to load raw products from.
+        mask_est_name : str, optional
+            Name of harmonic filter estimate mask file, by default None. This mask will
+            be used as the mask_est (see above) if mask_est is None. Only allows fits
+            or hdf5 files. If neither extension detected, assumed to be fits.
+        mask_est_edgecut : int, optional
+            mask_est is always multiplied by mask_obs before apodizing, but
+            the multiplying mask_obs can be shrunk by mask_est_edgecut arcmin
+            first, by default 0.
+        mask_est_apodization : int, optional
+            The size of the cosine taper in the apodization (arcmin), by 
+            default 0.
+        mask_obs_name : str, optional
+            Name of observed mask file, by default None. This mask will be used as the
+            mask_obs (see above) if mask_obs is None. Only allows fits or hdf5 files.
+            If neither extension detected, assumed to be fits.
+        mask_obs_edgecut : scalar, optional
+            Cut this many pixels from within this many arcmin of the edge, prior
+            to applying any mask_obs from disk. See the get_mask_obs method.
+        model_lim : scalar, optional
+            Set eigenvalues smaller than lim * max(eigenvalues) to zero. Note, 
+            this is distinct from the parameter of the name 'lim' that may be
+            passed as a filter_kwarg, which is only used in filtering.
+        model_lim0 : _type_, optional
+            If max(eigenvalues) < lim0, set whole matrix to zero. Note, this is
+            distinct from the parameter of the name 'lim0' that may be passed as
+            a filter_kwarg, which is only used in filtering.
+        catalogs_subproduct : str, optional
+            Name of catalogs product to load raw products from.
+        catalog_name : str, optional
+            A source catalog, by default None. If given, inpaint data and ivar maps.
+            Only allows csv or txt files. If neither extension detected, assumed to be csv.
+        kfilt_lbounds : size-2 iterable, optional
+            The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
+            If given, filter data before (possibly) downgrading it. 
+        dtype : np.dtype, optional
+            The data type used in intermediate calculations and return types, by default 
+            np.float32.
+        model_file_template : str, optional
+            A format string to be formatted by attribute of this Params object
+            or of parameters passed at runtime to a sofind noise_models
+            product, by default '{config_name}_{noise_model_name}_{qid_names}_lmax{lmax}_{num_splits}way_set{split_num}_noise_model'.
+        sim_file_template : str, optional
+            A format string to be formatted by attribute of this Params object
+            or of parameters passed at runtime to a sofind noise_models
+            product, by default '{config_name}_{noise_model_name}_{qid_names}_lmax{lmax}_{num_splits}way_set{split_num}_noise_sim_{alm_str}{sim_num:04}'.      
+        qid_names_template : str, optional
+            A format string used to beautify the qids, by default None. For 
+            example, could be '{array}_{freq}' which would be formatted by the 
+            qid info in sofind.
+        """
         # allow config_name with periods
         if not data_model_name.endswith('.yaml'):
             data_model_name += '.yaml'
@@ -40,7 +134,6 @@ class Params(ABC):
 
         self._maps_product = maps_product
         self._maps_subproduct = maps_subproduct
-        self._possible_maps_subproduct_kwargs = possible_maps_subproduct_kwargs
 
         # NOTE: modifying supplied value forces good value in configs
         if enforce_equal_qid_kwargs is None:
@@ -142,7 +235,6 @@ class Params(ABC):
             mask_obs_edgecut=self._mask_obs_edgecut,
             model_lim=self._model_lim,
             model_lim0=self._model_lim0,
-            possible_maps_subproduct_kwargs=self._possible_maps_subproduct_kwargs,
             srcfree=self._srcfree,
             model_file_template=self._model_file_template,
             sim_file_template=self._sim_file_template,

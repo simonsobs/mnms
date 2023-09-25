@@ -11,96 +11,88 @@ import yaml
 import os
 from itertools import product
 from abc import ABC, abstractmethod
-
+import warnings
 
 TWEAK = True
 
 
 class DataManager(io.Params):
 
-    def __init__(self, *qids, **kwargs):
+    def __init__(self, *qids, subproduct_kwargs=None, **kwargs):
         """Helper class for all BaseNoiseModel subclasses. Supports loading raw
         data necessary for all subclasses, such as masks and ivars. Also
         defines some class methods usable in subclasses.
 
         Parameters
         ----------
-        qids : str
-            One or more qids to incorporate in model.
-        data_model_name : str
-            Name of actapack.DataModel config to help load raw products (required).
-        subproduct : str, optional
-            Name of map subproduct to load raw products from, by default 'default'.
-        possible_maps_subproduct_kwargs : dict, optional
-            Mapping from keywords required for map subproduct to be loaded from disk,
-            to a list of their possible values, for each required keyword. See
-            sofind/products/maps for documentation of required keywords and their
-            possible values by subproduct. Assumed equal across qids.
-        enforce_equal_qid_kwargs : list of str, optional
-            Enforce the listed kwargs have equal values across supplied qids. No matter
-            what is supplied here, 'num_splits' is always enforced. All enforced kwargs
-            are available to be passed to model or sim filename templates.
-        calibrated : bool, optional
-            Whether to load calibrated raw data, by default False.
-        differenced : bool, optional
-            Whether to take differences between splits or treat loaded maps as raw noise 
-            (e.g., a time-domain sim) that will not be differenced, by default True.
-        srcfree : bool, optional
-            Whether to load point-source subtracted maps or raw maps, by default True.
-        iso_filt_method : str, optional
-            The isotropic scale-dependent filtering method, by default None.
-            Together with ivar_filt_method, selects the filter applied to dmap
-            prior to the tiling transform. See the registered functions in
-            filters.py.
-        ivar_filt_method : str, optional
-            The position-dependent filtering method, by default None. Together
-            with iso_filt_method, selects the filter applied to dmap prior to
-            the tiling transform. See the registered functions in filters.py.
-        filter_kwargs : dict, optional
-            Additional kwargs passed to the transforms and filter, by default
-            None. Which arguments, and their effects, depend on the transform
-            and filter function.
-        ivar_fwhms : iterable of scalars, optional
-            Smooth the ivar maps by a Gaussian kernel of these fwhms in arcmin.
-            Used only in the get_sqrt_ivar method. 
-        ivar_lmaxs : iterable of ints, optional
-            Bandlimit the ivar maps to these lmaxs. Used only in the
-            get_sqrt_ivar method. 
-        mask_est_name : str, optional
-            Name of harmonic filter estimate mask file, by default None. This mask will
-            be used as the mask_est (see above) if mask_est is None. Only allows fits
-            or hdf5 files. If neither extension detected, assumed to be fits.
-        mask_obs_name : str, optional
-            Name of observed mask file, by default None. This mask will be used as the
-            mask_obs (see above) if mask_obs is None. Only allows fits or hdf5 files.
-            If neither extension detected, assumed to be fits.
-        mask_obs_edgecut : scalar, optional
-            Cut this many pixels from within this many arcmin of the edge, prior
-            to applying any mask_obs from disk. See the get_mask_obs method.
-        catalog_name : str, optional
-            A source catalog, by default None. If given, inpaint data and ivar maps.
-            Only allows csv or txt files. If neither extension detected, assumed to be csv.
-        kfilt_lbounds : size-2 iterable, optional
-            The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
-            If given, filter data before (possibly) downgrading it. 
-        dtype : np.dtype, optional
-            The data type used in intermediate calculations and return types, by default 
-            np.float32.
+        qids : str or iterable of str
+            One or more array qids for this model.
+        subproduct_kwargs : (key, iterable) mapping, optional
+            Any additional keyword arguments required to load products from
+            disk, or to format model and sim filenames. Note: these arguments
+            are thus the same for both the loaded products and generated 
+            products.
 
         Notes
         -----
+        The qids and subproduct kwargs have a special syntax. The qids form an
+        iterable, while each subproduct keyword should map to an iterable of
+        the desired values for that keyword. Then, the qids and subproduct
+        kwargs are merged into a list of "super qids" by taking their outer
+        product over all possible combinations, starting with the subproduct
+        kwargs from left to right. 
+
+        For example, if qids is ('pa5a', 'pa5b'), and subproduct_kwargs is
+        {'el_split': ['el1', 'el2', 'el3'], 'something_else': [0, 1]}, then
+        the following 12 datasets will be modeled and jointly covaried (with
+        components in this order):
+
+        ({'el_split': 'el1', 'something_else': 0}, 'pa5a'),
+        ({'el_split': 'el1', 'something_else': 0}, 'pa5b'),
+        ({'el_split': 'el1', 'something_else': 1}, 'pa5a'),
+        ({'el_split': 'el1', 'something_else': 1}, 'pa5b'),
+        ({'el_split': 'el2', 'something_else': 0}, 'pa5a'),
+        ({'el_split': 'el2', 'something_else': 0}, 'pa5b'),
+        ({'el_split': 'el2', 'something_else': 1}, 'pa5a'),
+        ({'el_split': 'el2', 'something_else': 1}, 'pa5b'),
+        ({'el_split': 'el3', 'something_else': 0}, 'pa5a'),
+        ({'el_split': 'el3', 'something_else': 0}, 'pa5b'),
+        ({'el_split': 'el3', 'something_else': 1}, 'pa5a'),
+        ({'el_split': 'el3', 'something_else': 1}, 'pa5b')
+
         kwargs are not used in this class but are included to allow class to be
         mixed-in with other classes. 
         """
         assert len(qids) >= 1, \
             'Must supply at least one qid'
         self._qids = qids
+        if subproduct_kwargs is None:
+            subproduct_kwargs = {}
+        self._subproduct_kwargs = subproduct_kwargs
+
+        # get "super qids": marriage of a subproduct_kwarg combo and qid (for
+        # all possible marriages)
+        super_qids = []
+        super_qid_strs = []
+        for vals in product(*subproduct_kwargs.values(), qids):
+            _subproduct_kwargs = dict(zip(subproduct_kwargs.keys(), vals[:-1]))
+            qid = vals[-1]
+
+            # e.g. ({'inout_split': 'inout1', 'el_split': 1}, 'pa5a')
+            super_qid = (_subproduct_kwargs, qid)
+            super_qids.append(super_qid)
+
+            super_qid_str = '_'.join([qid] + [f'{k}_{v}' for k, v in _subproduct_kwargs.items()])
+            super_qid_strs.append(super_qid_str)
+        self._super_qids = super_qids
+        self._super_qid_strs = super_qid_strs
 
         # don't pass qids up MRO, we eat them up here
         super().__init__(**kwargs)
 
         # data-related instance properties
         self._data_model = DataModel.from_config(self._data_model_name)
+
         # check that the value of each enforce_equal_qid_kwarg is the same
         # across qids.
         equal_qid_kwargs = self._data_model.get_equal_qid_kwargs_by_subproduct(
@@ -128,48 +120,35 @@ class DataManager(io.Params):
         self._variant = utils.get_variant(self._full_shape, self._full_wcs)
         self._full_lmax = utils.lmax_from_wcs(self._full_wcs)
 
-    def maps_subproduct_kwargs_iter(self):
-        """An iterator yielding all possible maps_subproduct_kwargs dictionaries."""
-        possible_maps_subproduct_kwargs = self._possible_maps_subproduct_kwargs
-        if possible_maps_subproduct_kwargs is None:
-            possible_maps_subproduct_kwargs = {}
-
-        for maps_subproduct_kwargs_values in product(*possible_maps_subproduct_kwargs.values()):
-            maps_subproduct_kwargs = dict(zip(
-                possible_maps_subproduct_kwargs.keys(), maps_subproduct_kwargs_values
-                ))
-            yield maps_subproduct_kwargs
-
     def _check_geometry(self, return_geometry=True):
-        """Check that each qid in this instance's qids has compatible shape and wcs."""
+        """Check that each super_qid in this instance's super_qids has compatible shape and wcs."""
         i = 0
-        for qid in self._qids:
+        for (subproduct_kwargs, qid) in self._super_qids:
             for s in range(self._num_splits):
                 for coadd in (True, False):
                     if coadd == True and s > 0: # coadds don't have splits
                         continue
                     if coadd == True and not self._differenced: # undifferenced maps never use coadd
                         continue
-                    for maps_subproduct_kwargs in self.maps_subproduct_kwargs_iter():
-                        shape, wcs = utils.read_map_geometry(
-                            self._data_model, qid, split_num=s, coadd=coadd, 
-                            ivar=True, maps_subproduct=self._maps_subproduct,
-                            srcfree=self._srcfree, **maps_subproduct_kwargs
-                            )
-                        shape = shape[-2:]
-                        assert len(shape) == 2, 'shape must have only 2 dimensions'
+                    shape, wcs = utils.read_map_geometry(
+                        self._data_model, qid, split_num=s, coadd=coadd, 
+                        ivar=True, maps_subproduct=self._maps_subproduct,
+                        srcfree=self._srcfree, **subproduct_kwargs
+                        )
+                    shape = shape[-2:]
+                    assert len(shape) == 2, 'shape must have only 2 dimensions'
 
-                        # Check that we are using the geometry for each qid -- this is required!
-                        if i == 0:
-                            reference_shape, reference_wcs = shape, wcs
-                        else:
-                            assert(shape == reference_shape), \
-                                'qids do not share map shape for all splits -- this is required!'
-                            assert wcsutils.equal(wcs, reference_wcs), \
-                                'qids do not share a common wcs for all splits -- this is required!'
-                        
-                        # advance the total iteration
-                        i += 1
+                    # Check that we are using the geometry for each qid -- this is required!
+                    if i == 0:
+                        reference_shape, reference_wcs = shape, wcs
+                    else:
+                        assert(shape == reference_shape), \
+                            'qids do not share map shape for all splits -- this is required!'
+                        assert wcsutils.equal(wcs, reference_wcs), \
+                            'qids do not share a common wcs for all splits -- this is required!'
+                    
+                    # advance the total iteration
+                    i += 1
         
         if return_geometry:
             return reference_shape, reference_wcs
@@ -177,7 +156,7 @@ class DataManager(io.Params):
             return None
 
     def get_mask_est(self, downgrade=1, min_threshold=1e-4, max_threshold=1.,
-                     keep_mask_obs=True, **maps_subproduct_kwargs):
+                     keep_mask_obs=True):
         """Load the spectra mask from disk according to instance attributes.
 
         Parameters
@@ -193,9 +172,6 @@ class DataManager(io.Params):
         keep_mask_obs : bool, optional
             Store the loaded or generated mask_obs in the instance attributes, by 
             default True.
-        maps_subproduct_kwargs : dict, optional
-            Any additional keyword arguments used to format the map filename 
-            (used internally in get_mask_obs call).
 
         Returns
         -------
@@ -209,19 +185,13 @@ class DataManager(io.Params):
                 mask_est = enmap.ones(self._full_shape, self._full_wcs, bool)
 
             try:
-                mask_obs = self.get_from_cache(
-                    'mask_obs', downgrade=1, **maps_subproduct_kwargs
-                    )
+                mask_obs = self.get_from_cache('mask_obs', downgrade=1)
                 mask_obs_from_cache = True
             except KeyError:
-                mask_obs = self.get_mask_obs(
-                    downgrade=1, **maps_subproduct_kwargs
-                    )
+                mask_obs = self.get_mask_obs(downgrade=1)
                 mask_obs_from_cache = False  
             if keep_mask_obs and not mask_obs_from_cache:
-                self.cache_data(
-                    'mask_obs', mask_obs, downgrade=1, **maps_subproduct_kwargs
-                    )      
+                self.cache_data('mask_obs', mask_obs, downgrade=1)      
 
             if self._mask_est_edgecut > 0:
                 mask_obs = enmap.shrink_mask(mask_obs, np.deg2rad(self._mask_est_edgecut / 60)) 
@@ -246,7 +216,7 @@ class DataManager(io.Params):
 
         return mask_est
 
-    def get_mask_obs(self, downgrade=1, **maps_subproduct_kwargs):
+    def get_mask_obs(self, downgrade=1):
         """Load the data mask from disk according to instance attributes.
 
         Parameters
@@ -258,8 +228,6 @@ class DataManager(io.Params):
         -------
         mask_obs : (ny, nx) enmap
             Observed-pixel map map, possibly downgraded.
-        maps_subproduct_kwargs : dict, optional
-            Any additional keyword arguments used to format the map filename.
 
         Notes
         -----
@@ -272,14 +240,14 @@ class DataManager(io.Params):
         mask_obs_dg = True
 
         with bench.show('Generating observed-pixels mask'):
-            for qid in self._qids:
+            for (subproduct_kwargs, qid) in self._super_qids:
                 for s in range(self._num_splits):
                     # we want to do this split-by-split in case we can save
                     # memory by downgrading one split at a time
                     ivar = utils.read_map(
                         self._data_model, qid, split_num=s, ivar=True,
                         maps_subproduct=self._maps_subproduct, srcfree=self._srcfree,
-                        **maps_subproduct_kwargs
+                        **subproduct_kwargs
                         )
                     ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
 
@@ -353,7 +321,7 @@ class DataManager(io.Params):
 
         return mask
 
-    def get_sqrt_ivar(self, split_num, downgrade=1, **maps_subproduct_kwargs):
+    def get_sqrt_ivar(self, split_num, downgrade=1):
         """Load the sqrt inverse-variance maps according to instance attributes.
 
         Parameters
@@ -362,8 +330,6 @@ class DataManager(io.Params):
             The 0-based index of the split.
         downgrade : int, optional
             Downgrade factor, by default 1 (no downgrading).
-        maps_subproduct_kwargs : dict, optional
-            Any additional keyword arguments used to format the map filename.
 
         Returns
         -------
@@ -407,13 +373,11 @@ class DataManager(io.Params):
         # allocate a buffer to accumulate all ivar maps in.
         # this has shape (nmaps, nsplits=1, npol=1, ny, nx).
         out = enmap.ndmap([
-            self._empty(
-                shape, wcs, ivar=True, num_splits=1, **maps_subproduct_kwargs
-                ) for i in range(nsmooth)
+            self._empty(shape, wcs, ivar=True, num_splits=1) for i in range(nsmooth)
             ], wcs=wcs)
         
         # outer loop: qids, inner loop: scales (minimize i/o)
-        for i, qid in enumerate(self._qids):
+        for i, (subproduct_kwargs, qid) in enumerate(self._super_qids):
             with bench.show(f'Generating sqrt_ivars for qid {qid}'):
                 if self._calibrated:
                     mul = utils.get_mult_fact(self._data_model, qid, ivar=True)
@@ -425,7 +389,7 @@ class DataManager(io.Params):
                 ivar = utils.read_map(
                     self._data_model, qid, split_num=split_num, ivar=True,
                     maps_subproduct=self._maps_subproduct, srcfree=self._srcfree,
-                    **maps_subproduct_kwargs
+                    **subproduct_kwargs
                     )
                 ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
                 ivar *= mul
@@ -452,7 +416,8 @@ class DataManager(io.Params):
                     # if ivar_lmax is None, don't bandlimit it
                     if ivar_lmax:
                         _ivar = utils.alm2map(
-                            utils.map2alm(_ivar, lmax=ivar_lmax, tweak=TWEAK), shape=ivar.shape, wcs=ivar.wcs, tweak=TWEAK
+                            utils.map2alm(_ivar, lmax=ivar_lmax, tweak=TWEAK),
+                            shape=ivar.shape, wcs=ivar.wcs, tweak=TWEAK
                             )
 
                     # zero-out any numerical negative ivar
@@ -494,7 +459,7 @@ class DataManager(io.Params):
         ivar *= mask_good
         return ivar
 
-    def get_cfact(self, split_num, downgrade=1, **maps_subproduct_kwargs):
+    def get_cfact(self, split_num, downgrade=1):
         """Load the correction factor maps according to instance attributes.
 
         Parameters
@@ -503,8 +468,6 @@ class DataManager(io.Params):
             The 0-based index of the split.
         downgrade : int, optional
             Downgrade factor, by default 1 (no downgrading).
-        maps_subproduct_kwargs : dict, optional
-            Any additional keyword arguments used to format the map filename.
 
         Returns
         -------
@@ -523,13 +486,13 @@ class DataManager(io.Params):
 
         # allocate a buffer to accumulate all ivar maps in.
         # this has shape (nmaps, nsplits=1, npol=1, ny, nx).
-        cfacts = self._empty(shape, wcs, ivar=True, num_splits=1, **maps_subproduct_kwargs)
+        cfacts = self._empty(shape, wcs, ivar=True, num_splits=1)
 
         if not self._differenced:
             cfacts[:] = 1
             return cfacts
 
-        for i, qid in enumerate(self._qids):
+        for i, (subproduct_kwargs, qid) in enumerate(self._super_qids):
             with bench.show(f'Generating difference-map correction-factors for qid {qid}'):
                 if self._calibrated:
                     mul = utils.get_mult_fact(self._data_model, qid, ivar=True)
@@ -540,7 +503,7 @@ class DataManager(io.Params):
                 cvar = utils.read_map(
                     self._data_model, qid, coadd=True, ivar=True,
                     maps_subproduct=self._maps_subproduct, srcfree=self._srcfree,
-                    **maps_subproduct_kwargs
+                    **subproduct_kwargs
                     )
                 cvar = enmap.extract(cvar, self._full_shape, self._full_wcs)
                 cvar *= mul
@@ -550,7 +513,7 @@ class DataManager(io.Params):
                 ivar = utils.read_map(
                     self._data_model, qid, split_num=split_num, ivar=True,
                     maps_subproduct=self._maps_subproduct, srcfree=self._srcfree,
-                    **maps_subproduct_kwargs
+                    **subproduct_kwargs
                     )
                 ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
                 ivar *= mul
@@ -574,8 +537,7 @@ class DataManager(io.Params):
         
         return cfacts
 
-    def get_dmap(self, split_num, downgrade=1, keep_mask_obs=True,
-                 **maps_subproduct_kwargs):
+    def get_dmap(self, split_num, downgrade=1, keep_mask_obs=True):
         """Load the raw data split differences according to instance attributes.
 
         Parameters
@@ -587,8 +549,6 @@ class DataManager(io.Params):
         keep_mask_obs : bool, optional
             Store the loaded or generated mask_obs in the instance attributes, by 
             default True.
-        maps_subproduct_kwargs : dict, optional
-            Any additional keyword arguments used to format the map filename.
 
         Returns
         -------
@@ -613,24 +573,18 @@ class DataManager(io.Params):
 
         # allocate a buffer to accumulate all difference maps in.
         # this has shape (nmaps, nsplits=1, npol, ny, nx).
-        dmaps = self._empty(shape, wcs, ivar=False, num_splits=1, **maps_subproduct_kwargs)
+        dmaps = self._empty(shape, wcs, ivar=False, num_splits=1)
 
         # to mask before downgrading to prevent ringing from noisy edge
         if downgrade != 1:
             try:
-                mask_obs = self.get_from_cache(
-                    'mask_obs', downgrade=1, **maps_subproduct_kwargs
-                    )
+                mask_obs = self.get_from_cache('mask_obs', downgrade=1)
                 mask_obs_from_cache = True
             except KeyError:
-                mask_obs = self.get_mask_obs(
-                    downgrade=1, **maps_subproduct_kwargs
-                    )
+                mask_obs = self.get_mask_obs(downgrade=1)
                 mask_obs_from_cache = False
             if keep_mask_obs and not mask_obs_from_cache:
-                self.cache_data(
-                    'mask_obs', mask_obs, downgrade=1, **maps_subproduct_kwargs
-                    )  
+                self.cache_data('mask_obs', mask_obs, downgrade=1)  
 
         # all filtering operations use the same filter
         if self._kfilt_lbounds is not None:
@@ -639,7 +593,7 @@ class DataManager(io.Params):
                 self._full_shape, self._full_wcs, kfilt_lbounds, self._dtype
                 )
     
-        for i, qid in enumerate(self._qids):
+        for i, (subproduct_kwargs, qid) in enumerate(self._super_qids):
             with bench.show(f'Generating difference maps for qid {qid}'):
                 if self._calibrated:
                     mul_imap = utils.get_mult_fact(self._data_model, qid, ivar=False)
@@ -653,7 +607,7 @@ class DataManager(io.Params):
                     cmap = utils.read_map(
                         self._data_model, qid, coadd=True, ivar=False,
                         maps_subproduct=self._maps_subproduct, srcfree=self._srcfree,
-                        **maps_subproduct_kwargs
+                        **subproduct_kwargs
                         )
                     cmap = enmap.extract(cmap, self._full_shape, self._full_wcs) 
                     cmap *= mul_imap
@@ -665,7 +619,7 @@ class DataManager(io.Params):
                     cvar = utils.read_map(
                         self._data_model, qid, coadd=True, ivar=True,
                         maps_subproduct=self._maps_subproduct, srcfree=self._srcfree,
-                        **maps_subproduct_kwargs
+                        **subproduct_kwargs
                         )
                     cvar = enmap.extract(cvar, self._full_shape, self._full_wcs)
                     cvar *= mul_ivar
@@ -675,7 +629,7 @@ class DataManager(io.Params):
                 imap = utils.read_map(
                     self._data_model, qid, split_num=split_num, ivar=False,
                     maps_subproduct=self._maps_subproduct, srcfree=self._srcfree,
-                    **maps_subproduct_kwargs
+                    **subproduct_kwargs
                     )
                 imap = enmap.extract(imap, self._full_shape, self._full_wcs)
                 imap *= mul_imap
@@ -686,7 +640,7 @@ class DataManager(io.Params):
                     ivar = utils.read_map(
                         self._data_model, qid, split_num=split_num, ivar=True,
                         maps_subproduct=self._maps_subproduct, srcfree=self._srcfree,
-                        **maps_subproduct_kwargs
+                        **subproduct_kwargs
                         )
                     ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
                     ivar *= mul_ivar
@@ -707,7 +661,9 @@ class DataManager(io.Params):
                     for idx in np.ndindex(*ivar.shape[:-2]):
                         mask_bool *= ivar[idx].astype(bool)
                         
-                    self._inpaint(dmap, ivar_eff, mask_bool, qid=qid, split_num=split_num) 
+                    self._inpaint(dmap, ivar_eff, mask_bool,
+                                  qid=self._super_qid_strs[i],
+                                  split_num=split_num) 
 
                 if self._kfilt_lbounds is not None:
                     dmap = utils.filter_weighted(dmap, ivar_eff, filt)
@@ -747,19 +703,17 @@ class DataManager(io.Params):
         mask_bool = utils.get_mask_bool(mask)
 
         if qid:
-            # This makes sure each qid gets a unique seed. The sim index is fixed,
-            # and noise models share data model so the data is inpainted "once" for
-            # all the different noise models as it were
             split_idx = 0 if split_num is None else split_num
-            seed = utils.get_seed(*(split_idx, 999_999_999, self._data_model_name, qid))
+            # OLD: seed = utils.get_seed(split_idx, 999_999_999, self._data_model_name, qid)
+            seed = utils.get_seed(split_idx, 999_999_999, self._data_model_name, 
+                                  self._maps_product, self._maps_subproduct, qid)
         else:
             seed = None
 
         return inpaint.inpaint_noise_catalog(imap, ivar, mask_bool, catalog, inplace=inplace, 
                                              seed=seed)
 
-    def _empty(self, shape, wcs, ivar=False, num_arrays=None, num_splits=None,
-               **maps_subproduct_kwargs):
+    def _empty(self, shape, wcs, ivar=False, num_arrays=None, num_splits=None):
         """Allocate an empty buffer that will broadcast against the Noise Model 
         number of arrays, number of splits, and the map (or ivar) shape.
 
@@ -779,8 +733,6 @@ class DataManager(io.Params):
         num_splits : int, optional
             The number of splits (axis -4) in the empty ndmap, by default None.
             If None, inferred from the number of splits on disk.
-        maps_subproduct_kwargs : dict, optional
-            Any additional keyword arguments used to format the map filename.
 
         Returns
         -------
@@ -795,10 +747,11 @@ class DataManager(io.Params):
         footprint_wcs = wcs
 
         # because we have checked geometry, we can pass qid[0], s=0, coadd=False...
+        subproduct_kwargs, qid = self._super_qids[0]
         shape, _ = utils.read_map_geometry(
-            self._data_model, self._qids[0], split_num=0, coadd=False,
-            ivar=ivar, maps_subproduct=self._maps_subproduct, srcfree=self._srcfree, 
-            **maps_subproduct_kwargs
+            self._data_model, qid, split_num=0, coadd=False,
+            ivar=ivar, maps_subproduct=self._maps_subproduct,
+            srcfree=self._srcfree, **subproduct_kwargs
             )
         shape = (shape[0], *footprint_shape)
 
@@ -1261,7 +1214,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         pass
     
     @classmethod
-    def from_config(cls, config_name, noise_model_name, *qids):
+    def from_config(cls, config_name, noise_model_name, *qids,
+                    **subproduct_kwargs):
         """Load a BaseNoiseModel subclass instance with model parameters
         specified by existing config.
 
@@ -1273,13 +1227,45 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         noise_model_name : str, optional
             The string name of this NoiseModel instance. This is the header
             of the block in the config storing this NoiseModel's parameters.
-        qids : str
+        qids : str or iterable of str
             One or more array qids for this model.
+        subproduct_kwargs : (key, iterable) mapping, optional
+            Any additional keyword arguments required to load products from
+            disk, or to format model and sim filenames. Note: these arguments
+            are thus the same for both the loaded products and generated 
+            products.
 
         Returns
         -------
         BaseNoiseModel
             An instance of a BaseNoiseModel subclass.
+
+        Notes
+        -----
+        The qids and subproduct kwargs have a special syntax. The qids form an
+        iterable, while each subproduct keyword should map to an iterable of
+        the desired values for that keyword. Then, the qids and subproduct
+        kwargs are merged into a list of "super qids" by taking their outer
+        product over all possible combinations, starting with the subproduct
+        kwargs from left to right. 
+
+        For example, if qids is ('pa5a', 'pa5b'), and subproduct_kwargs is
+        {'el_split': ['el1', 'el2', 'el3'], 'something_else': [0, 1]}, then
+        the following 12 datasets will be modeled and jointly covaried (with
+        components in this order):
+
+        ({'el_split': 'el1', 'something_else': 0}, 'pa5a'),
+        ({'el_split': 'el1', 'something_else': 0}, 'pa5b'),
+        ({'el_split': 'el1', 'something_else': 1}, 'pa5a'),
+        ({'el_split': 'el1', 'something_else': 1}, 'pa5b'),
+        ({'el_split': 'el2', 'something_else': 0}, 'pa5a'),
+        ({'el_split': 'el2', 'something_else': 0}, 'pa5b'),
+        ({'el_split': 'el2', 'something_else': 1}, 'pa5a'),
+        ({'el_split': 'el2', 'something_else': 1}, 'pa5b'),
+        ({'el_split': 'el3', 'something_else': 0}, 'pa5a'),
+        ({'el_split': 'el3', 'something_else': 0}, 'pa5b'),
+        ({'el_split': 'el3', 'something_else': 1}, 'pa5a'),
+        ({'el_split': 'el3', 'something_else': 1}, 'pa5b')
         """
         if not config_name.endswith('.yaml'):
             config_name += '.yaml'
@@ -1288,7 +1274,11 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         config_dict = s_utils.config_from_yaml_file(config_fn)
 
         kwargs = config_dict[noise_model_name]
-        kwargs.update(noise_model_name=noise_model_name, config_fn=config_fn)
+        kwargs.update(
+            noise_model_name=noise_model_name,
+            config_fn=config_fn,
+            subproduct_kwargs=subproduct_kwargs
+            )
 
         # _noise_model_class now lives in the object as a class attribute
         nm_cls = cls.get_subclass(kwargs.pop('noise_model_class'))
@@ -1305,8 +1295,13 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         return outnm
 
-    def get_model_fn(self, split_num, lmax, to_write=False, **subproduct_kwargs):
+    def get_model_fn(self, split_num, lmax, to_write=False):
         """Get a noise model filename for split split_num; return as <str>"""
+        # concatenate all subproduct_kwargs together
+        subproduct_kwargs = {
+            k: '_'.join(v) for k, v in self._subproduct_kwargs.items()
+            }
+
         basename = self._data_model.get_noise_fn(
             self._noise_model_name, *self._qids, which='models', 
             subproduct=self._subproduct, split_num=split_num,
@@ -1326,8 +1321,13 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             private_fn, public_fn, write_to_fn_idx=0 if to_write else None
             )
 
-    def get_sim_fn(self, split_num, sim_num, lmax, alm=False, to_write=False, **subproduct_kwargs):
+    def get_sim_fn(self, split_num, sim_num, lmax, alm=False, to_write=False):
         """Get a sim filename for split split_num, sim sim_num, and bool alm; return as <str>"""
+        # concatenate all subproduct_kwargs together
+        subproduct_kwargs = {
+            k: '_'.join(v) for k, v in self._subproduct_kwargs.items()
+            }
+        
         basename = self._data_model.get_noise_fn(
             self._noise_model_name, *self._qids, which='sims', 
             subproduct=self._subproduct, split_num=split_num, sim_num=sim_num,
@@ -1350,7 +1350,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     def get_model(self, split_num, lmax, check_in_memory=True, check_on_disk=True,
                   generate=True, keep_model=False, keep_mask_est=False,
                   keep_mask_obs=False, keep_sqrt_ivar=False, keep_cfact=False, 
-                  keep_dmap=False, write=True, verbose=False, **subproduct_kwargs):
+                  keep_dmap=False, write=True, verbose=False):
         """Load or generate a sqrt-covariance matrix from this NoiseModel. 
         Will load necessary products to disk if not yet stored in instance
         attributes.
@@ -1396,10 +1396,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             Save a generated model to disk, by default True.
         verbose : bool, optional
             Print possibly helpful messages, by default False.
-        subproduct_kwargs : dict, optional
-            Any additional keyword arguments used to format both the input map 
-            filenames and the noise model filename. Note: these arguments are thus
-            the same for both the input maps and output models.
 
         Returns
         -------
@@ -1426,82 +1422,56 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         if check_in_memory:
             try:
-                return self.get_from_cache(
-                    'model', split_num=split_num, lmax=lmax_model, **subproduct_kwargs
-                    )
+                return self.get_from_cache('model', split_num=split_num, lmax=lmax_model)
             except KeyError:
                 pass # not in memory
 
         if check_on_disk:
-            res = self._check_model_on_disk(
-                split_num, lmax_model, generate=generate, **subproduct_kwargs
-                )
+            res = self._check_model_on_disk(split_num, lmax_model, generate=generate)
             if res is not False:
                 if keep_model:
-                    self.cache_data(
-                        'model', res, split_num=split_num, lmax=lmax_model, **subproduct_kwargs
-                        )
+                    self.cache_data('model', res, split_num=split_num, lmax=lmax_model)
                 return res
             else: # generate == True
                 pass
         
         # get the masks, sqrt_ivar, cfact, dmap
         try:
-            mask_obs = self.get_from_cache(
-                'mask_obs', downgrade=downgrade, **subproduct_kwargs
-                )
+            mask_obs = self.get_from_cache('mask_obs', downgrade=downgrade)
             mask_obs_from_cache = True
         except KeyError:
-            mask_obs = self.get_mask_obs(
-                downgrade=downgrade, **subproduct_kwargs
-                )
+            mask_obs = self.get_mask_obs(downgrade=downgrade)
             mask_obs_from_cache = False
 
         try:
-            mask_est = self.get_from_cache(
-                'mask_est', downgrade=downgrade, **subproduct_kwargs
-                )
+            mask_est = self.get_from_cache('mask_est', downgrade=downgrade)
             mask_est_from_cache = True
         except KeyError:
-            mask_est = self.get_mask_est(
-                downgrade=downgrade, **subproduct_kwargs
-                )
+            mask_est = self.get_mask_est(downgrade=downgrade)
             mask_est_from_cache = False
         mask_est *= mask_obs
 
         try:
-            sqrt_ivar = self.get_from_cache(
-                'sqrt_ivar', split_num=split_num, downgrade=downgrade, **subproduct_kwargs
-                )
+            sqrt_ivar = self.get_from_cache('sqrt_ivar', split_num=split_num, downgrade=downgrade)
             sqrt_ivar_from_cache = True
         except KeyError:
-            sqrt_ivar = self.get_sqrt_ivar(
-                split_num=split_num, downgrade=downgrade, **subproduct_kwargs
-                )
+            sqrt_ivar = self.get_sqrt_ivar(split_num=split_num, downgrade=downgrade)
             sqrt_ivar_from_cache = False
         sqrt_ivar *= mask_obs
 
         try:
-            cfact = self.get_from_cache(
-                'cfact', split_num=split_num, downgrade=downgrade, **subproduct_kwargs
-                )
+            cfact = self.get_from_cache('cfact', split_num=split_num, downgrade=downgrade)
             cfact_from_cache = True
         except KeyError:
-            cfact = self.get_cfact(
-                split_num=split_num, downgrade=downgrade, **subproduct_kwargs
-                )
+            cfact = self.get_cfact(split_num=split_num, downgrade=downgrade)
             cfact_from_cache = False
         cfact *= mask_obs
         
         try:
-            dmap = self.get_from_cache(
-                'dmap', split_num=split_num, downgrade=downgrade, **subproduct_kwargs
-                )
+            dmap = self.get_from_cache('dmap', split_num=split_num, downgrade=downgrade)
             dmap_from_cache = True
         except KeyError:
-            dmap = self.get_dmap(
-                split_num=split_num, downgrade=downgrade, **subproduct_kwargs
-                )
+            dmap = self.get_dmap(split_num=split_num, downgrade=downgrade)
             dmap_from_cache = False
         dmap *= mask_obs
 
@@ -1524,7 +1494,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         filter_kwargs.update(_filter_kwargs)
 
         # get the model
-        with bench.show(f'Generating noise model for {utils.kwargs_str(split_num=split_num, lmax=lmax_model, **subproduct_kwargs)}'):
+        with bench.show(f'Generating noise model for {utils.kwargs_str(split_num=split_num, lmax=lmax_model)}'):
             model_dict = self._get_model(
                 dmap*cfact, self._model_lim, self._model_lim0,
                 self._iso_filt_method, self._ivar_filt_method,
@@ -1533,9 +1503,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         # keep, write data if requested
         if keep_model:
-            self.cache_data(
-                'model', model_dict, split_num=split_num, lmax=lmax_model, **subproduct_kwargs
-                )
+            self.cache_data('model', model_dict, split_num=split_num, lmax=lmax_model)
 
         if keep_mask_est and not mask_est_from_cache:
             self.cache_data(
@@ -1543,32 +1511,24 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                 )
 
         if keep_mask_obs and not mask_obs_from_cache:
-            self.cache_data(
-                'mask_obs', mask_obs, downgrade=downgrade, **subproduct_kwargs
-                )
+            self.cache_data('mask_obs', mask_obs, downgrade=downgrade)
 
         if keep_sqrt_ivar and not sqrt_ivar_from_cache:
-            self.cache_data(
-                'sqrt_ivar', sqrt_ivar, split_num=split_num, downgrade=downgrade, **subproduct_kwargs
-                )
+            self.cache_data('sqrt_ivar', sqrt_ivar, split_num=split_num, downgrade=downgrade)
 
         if keep_cfact and not cfact_from_cache:
-            self.cache_data(
-                'cfact', cfact, split_num=split_num, downgrade=downgrade, **subproduct_kwargs
-                )
+            self.cache_data('cfact', cfact, split_num=split_num, downgrade=downgrade)
 
         if keep_dmap and not dmap_from_cache:
-            self.cache_data(
-                'dmap', dmap, split_num=split_num, downgrade=downgrade, **subproduct_kwargs
-                )
+            self.cache_data('dmap', dmap, split_num=split_num, downgrade=downgrade)
                 
         if write:
-            fn = self.get_model_fn(split_num, lmax_model, to_write=True, **subproduct_kwargs)
+            fn = self.get_model_fn(split_num, lmax_model, to_write=True)
             self.write_model(fn, **model_dict)
 
         return model_dict
 
-    def _check_model_on_disk(self, split_num, lmax, generate=True, **subproduct_kwargs):
+    def _check_model_on_disk(self, split_num, lmax, generate=True):
         """Check if this NoiseModel's model for a given split exists on disk. 
         If it does, return its model_dict. Depending on the 'generate' kwarg, 
         return either False or raise a FileNotFoundError if it does not exist
@@ -1584,8 +1544,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             If the model does not exist on-disk and 'generate' is True, then return
             False. If the model does not exist on-disk and 'generate' is False, then
             raise a FileNotFoundError. By default True.
-        subproduct_kwargs : dict, optional
-            Any additional keyword arguments used to format the noise model filename.
 
         Returns
         -------
@@ -1599,14 +1557,14 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             If 'generate' is False and the model does not exist on-disk.
         """
         try:
-            fn = self.get_model_fn(split_num, lmax, to_write=False, **subproduct_kwargs)
+            fn = self.get_model_fn(split_num, lmax, to_write=False)
             return self.read_model(fn)
         except FileNotFoundError as e:
             if generate:
-                print(f'Model for {utils.kwargs_str(split_num=split_num, lmax=lmax, **subproduct_kwargs)} not found on-disk, generating instead')
+                print(f'Model for {utils.kwargs_str(split_num=split_num, lmax=lmax)} not found on-disk, generating instead')
                 return False
             else:
-                raise FileNotFoundError(f'Model for {utils.kwargs_str(split_num=split_num, lmax=lmax, **subproduct_kwargs)} not found on-disk, please generate it first') from e
+                raise FileNotFoundError(f'Model for {utils.kwargs_str(split_num=split_num, lmax=lmax)} not found on-disk, please generate it first') from e
     
     @classmethod
     def filter_model(cls, inp, iso_filt_method=None, ivar_filt_method=None,
@@ -1676,9 +1634,10 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         
         return inp, out
 
-    def get_sim(self, split_num, sim_num, lmax, alm=False, check_on_disk=True,
-                generate=True, keep_model=True, keep_mask_obs=True,
-                keep_sqrt_ivar=True, write=False, verbose=False, **subproduct_kwargs):
+    def get_sim(self, split_num, sim_num, lmax, seed=-1, alm=False,
+                check_on_disk=True, generate=True, keep_model=True,
+                keep_mask_obs=True, keep_sqrt_ivar=True, write=False,
+                verbose=False):
         """Load or generate a sim from this NoiseModel. Will load necessary
         products to disk if not yet stored in instance attributes.
 
@@ -1691,6 +1650,12 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             is written to disk, this will be recorded in the filename. There is a maximum of
             9999, ie, one cannot have more than 10_000 of the same sim, of the same split, 
             from the same noise model (including the 'notes').
+        seed : int or iterable of ints
+            Seed for random draw. If -1 (the default), a seed unique to the split_num,
+            sim_num, data_model_name, maps_product, maps_subproduct, noise_model_name,
+            qids, and subproduct_kwargs of this noise model instance is used. User can
+            manually pass 'None' or their own int or iterable of ints; however, they
+            should be careful to record the mapping between seeds and filenames.
         lmax : int
             Bandlimit for output noise covariance.
         alm : bool, optional
@@ -1718,10 +1683,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             Save a generated sim to disk, by default False.
         verbose : bool, optional
             Print possibly helpful messages, by default False.
-        subproduct_kwargs : dict, optional
-            Any additional keyword arguments used to format the input map filenames,
-            the noise model filename, and the output sim filename. Note: these
-            arguments are thus the same for all of the above filenames.
 
         Returns
         -------
@@ -1742,12 +1703,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                 self._full_shape, self._full_wcs, downgrade
             )     
 
-        assert sim_num <= 9999, 'Cannot use a map index greater than 9999'
-
         if check_on_disk:
-            res = self._check_sim_on_disk(
-                split_num, sim_num, lmax, alm=alm, generate=generate, **subproduct_kwargs
-            )
+            res = self._check_sim_on_disk(split_num, sim_num, lmax, alm=alm, generate=generate)
             if res is not False:
                 return res
             else: # generate == True
@@ -1755,40 +1712,34 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         # get the model, mask, sqrt_ivar
         try:
-            model_dict = self.get_from_cache(
-                'model', split_num=split_num, lmax=lmax, **subproduct_kwargs
-                )
+            model_dict = self.get_from_cache('model', split_num=split_num, lmax=lmax)
             model_from_cache = True
         except KeyError:
-            model_dict = self._check_model_on_disk(
-                split_num, lmax, generate=False, **subproduct_kwargs
-                )
+            model_dict = self._check_model_on_disk(split_num, lmax, generate=False)
             model_from_cache = False
 
         try:
-            mask_obs = self.get_from_cache(
-                'mask_obs', downgrade=downgrade, **subproduct_kwargs
-                )
+            mask_obs = self.get_from_cache('mask_obs', downgrade=downgrade)
             mask_obs_from_cache = True
         except KeyError:
-            mask_obs = self.get_mask_obs(
-                downgrade=downgrade, **subproduct_kwargs
-                )
+            mask_obs = self.get_mask_obs(downgrade=downgrade)
             mask_obs_from_cache = False
 
         try:
-            sqrt_ivar = self.get_from_cache(
-                'sqrt_ivar', split_num=split_num, downgrade=downgrade, **subproduct_kwargs
-                )
+            sqrt_ivar = self.get_from_cache('sqrt_ivar', split_num=split_num, downgrade=downgrade)
             sqrt_ivar_from_cache = True
         except KeyError:
-            sqrt_ivar = self.get_sqrt_ivar(
-                split_num=split_num, downgrade=downgrade, **subproduct_kwargs
-                )
+            sqrt_ivar = self.get_sqrt_ivar(split_num=split_num, downgrade=downgrade)
             sqrt_ivar_from_cache = False
         sqrt_ivar *= mask_obs
         
-        seed = utils.get_seed(split_num, sim_num, self.noise_model_name, *self._qids)
+        # OLD: seed = utils.get_seed(split_num, sim_num, self.noise_model_name, *self._qids)
+        if seed == -1:
+            seed = utils.get_seed(split_num, sim_num, self._data_model_name,
+                                  self._maps_product, self._maps_subproduct,
+                                  self.noise_model_name, *self._super_qid_strs)
+        else:
+            warnings.warn(f'User passed seed {seed}, take care in filename management')
 
         # update filter kwargs. note that adding model_dict grabs any filter
         # info (e.g, sqrt_cov_ell) as well as the model itself
@@ -1810,7 +1761,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         filter_kwargs.update(model_dict)
         
         # get the sim
-        with bench.show(f'Generating noise sim for {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)}'):
+        with bench.show(f'Generating noise sim for {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm)}'):
             sim = self._get_sim(
                 model_dict, seed, self._iso_filt_method, self._ivar_filt_method,
                 filter_kwargs, verbose
@@ -1821,27 +1772,21 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         # keep, write data if requested
         if keep_model and not model_from_cache:
-            self.cache_data(
-                'model', model_dict, split_num=split_num, lmax=lmax, **subproduct_kwargs
-                )
+            self.cache_data('model', model_dict, split_num=split_num, lmax=lmax)
 
         if keep_mask_obs and not mask_obs_from_cache:
-            self.cache_data(
-                'mask_obs', mask_obs, downgrade=downgrade, **subproduct_kwargs
-                )
+            self.cache_data('mask_obs', mask_obs, downgrade=downgrade)
 
         if keep_sqrt_ivar and not sqrt_ivar_from_cache:
-            self.cache_data(
-                'sqrt_ivar', sqrt_ivar, split_num=split_num, downgrade=downgrade, **subproduct_kwargs
-                )
+            self.cache_data('sqrt_ivar', sqrt_ivar, split_num=split_num, downgrade=downgrade)
         
         if write:
-            fn = self.get_sim_fn(split_num, sim_num, lmax, alm=alm, to_write=True, **subproduct_kwargs)
+            fn = self.get_sim_fn(split_num, sim_num, lmax, alm=alm, to_write=True)
             self.write_sim(fn, sim, alm=alm)
 
         return sim
 
-    def _check_sim_on_disk(self, split_num, sim_num, lmax, alm=False, generate=True, **subproduct_kwargs):
+    def _check_sim_on_disk(self, split_num, sim_num, lmax, alm=False, generate=True):
         """Check if this NoiseModel's sim for a given split, sim exists on-disk. 
         If it does, return it. Depending on the 'generate' kwarg, return either 
         False or raise a FileNotFoundError if it does not exist on-disk.
@@ -1860,8 +1805,6 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             If the sim does not exist on-disk and 'generate' is True, then return
             False. If the sim does not exist on-disk and 'generate' is False, then
             raise a FileNotFoundError. By default True.
-        subproduct_kwargs : dict, optional
-            Any additional keyword arguments used to format the noise sim filename.
 
         Returns
         -------
@@ -1875,15 +1818,15 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             If 'generate' is False and the sim does not exist on-disk.
         """
         try:        
-            fn = self.get_sim_fn(split_num, sim_num, lmax, alm=alm, to_write=False, **subproduct_kwargs)
+            fn = self.get_sim_fn(split_num, sim_num, lmax, alm=alm, to_write=False)
             read_sim_kwargs = dict(preshape=(self._num_arrays, 1)) if alm else {}
             return self.read_sim(fn, alm=alm, **read_sim_kwargs)
         except FileNotFoundError as e:
             if generate:
-                print(f'Sim {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)} not found on-disk, generating instead')
+                print(f'Sim {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm)} not found on-disk, generating instead')
                 return False
             else:
-                raise FileNotFoundError(f'Sim {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm, **subproduct_kwargs)} not found on-disk, please generate it first') from e
+                raise FileNotFoundError(f'Sim {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm)} not found on-disk, please generate it first') from e
 
     @classmethod
     def filter(cls, inp, iso_filt_method=None, ivar_filt_method=None,
@@ -2154,7 +2097,7 @@ class TiledNoiseModel(io.TiledIO, BaseNoiseModel):
         ----------
         sqrt_cov_mat : (num_tiles, *preshape, *preshape, nky, nkx) tiled_noise.tiled_ndmap
             The tiled Fourier square-root covariance matrix.
-        seed : iterable of ints
+        seed : int or iterable of ints
             Seed for random draw.
         nthread : int, optional
             Number of concurrent threads to use in the tiling transform, by
@@ -2382,7 +2325,7 @@ class WaveletNoiseModel(io.WaveletIO, BaseNoiseModel):
         ----------
         sqrt_cov_mat : (nwav, nwav) wavtrans.Wav
             Diagonal block square-root covariance matrix of flattened noise. 
-        seed : iterable of ints
+        seed : int or iterable of ints
             Seed for random draw.
         w_ell : (nwav, nell) array-like
             Wavelet kernels defined over ell. If lmax or ainfo is provided as
@@ -2659,6 +2602,8 @@ class FDWNoiseModel(io.FDWIO, BaseNoiseModel):
         sqrt_cov_mat : dict
             A dictionary holding wavelet maps of the square-root covariance, 
             indexed by the wavelet key (radial index, azimuthal index).
+        seed : int or iterable of ints
+            Seed for random draw.
         fdw_kernels : FDWKernels
             A set of Fourier steerable anisotropic wavelets, allowing users to
             analyze/synthesize maps by simultaneous scale-, direction-, and 
@@ -2815,7 +2760,7 @@ class HarmonicNoiseModel(io.HarmonicIO, BaseNoiseModel):
         Returns
         -------
         dict
-            A dictionary holding the wavelet square-root covariance in addition
+            A dictionary holding the harmonic square-root covariance in addition
             to any other quantities measured during filtering.
 
         Notes
@@ -2871,6 +2816,8 @@ class HarmonicNoiseModel(io.HarmonicIO, BaseNoiseModel):
         ----------
         sqrt_cov_mat : (*preshape, *preshape, nell) np.ndarray
             The harmonic square-root covariance matrix.
+        seed : int or iterable of ints
+            Seed for random draw.
         filter_only : bool, optional
             No information is recorded in the modeling, or used in drawing a
             simulation, other than that recorded by the filter, by default
@@ -2901,6 +2848,17 @@ class HarmonicNoiseModel(io.HarmonicIO, BaseNoiseModel):
         (*preshape, ny, nx) enmap.ndmap
             The simulation. Geometry information is necessarily provided in
             filter_kwargs.
+
+        Notes
+        -----
+        The filter_only argument implies that the most useful filters are those
+        that record some harmonic information. Otherwise, if filter_only is 
+        True, the sim probably will not be a good one.
+
+        Likewise, if filter_only is False, if the underlying data contain
+        inhomogeneities other than those modulated by any map-based filters,
+        the sim may also not be good, because this class cannot model any
+        such inhomogeneities.
         """
         sim = harmonic_noise.get_harmonic_noise_sim(
             sqrt_cov_mat, seed, filter_only=filter_only, nthread=nthread,

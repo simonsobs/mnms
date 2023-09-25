@@ -32,8 +32,9 @@ class StoreDict(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
         my_dict = {}
         for kv in values:
+            print(kv)
             k, v = kv.split('=')
-            my_dict[k] = v
+            my_dict[k] = v.split(',')
         setattr(namespace, self.dest, my_dict)
 
 def get_private_mnms_fn(which, basename, to_write=False):
@@ -2635,7 +2636,7 @@ def hash_str(istr, ndigits=9):
     """Turn a string into an ndigit hash, using hashlib.sha256 hashing"""
     return int(hashlib.sha256(istr.encode('utf-8')).hexdigest(), 16) % 10**ndigits
 
-def get_seed(split_num, sim_num, name_str, *qids, n_max_qids=4, ndigits=9):
+def get_seed(split_num, sim_num, *strs, n_max_strs=None, ndigits=9):
     """Get a seed for a sim. The seed is unique for a given split number, sim
     number, sofind.DataModel class, and list of array 'qids'.
 
@@ -2645,33 +2646,35 @@ def get_seed(split_num, sim_num, name_str, *qids, n_max_qids=4, ndigits=9):
         The 0-based index of the split to simulate.
     sim_num : int
         The map index, used in setting the random seed. Must be non-negative.
-    name_str : str
-        Name of noise model or data model as a string, so that sims from different
-        noise models or data models are different.
-    n_max_qids : int, optional
-        The maximum number of allowed 'qids' to be passed at once, by default
-        4. This way, seeds can be safely modified by appending integers outside
+    strs : iterable of strings
+        Strings that can help set the seed (hashed into integers).
+    n_max_strs : int, optional
+        The maximum number of allowed strings to be passed at once, by default
+        None. This way, seeds can be safely modified by appending integers outside
         of this function without overlapping with possible seeds returned by
-        this function.
+        this function. If None, then the number of strs.
     ndigits : int, optional
-        The length of each qid hash, by default 9.
+        The length of each string hash, by default 9.
 
     Returns
     -------
     list
         List of integers to be passed to np.random seeding utilities.
     """
+    if n_max_strs is None:
+        n_max_strs = len(strs)
+
     # can have at most n_max_qids
-    # this is important in case the seed gets modified outside of this function, e.g. when combining noise models in one sim
-    assert len(qids) <= n_max_qids
+    # this is important in case the seed gets modified outside of this function,
+    # e.g. when combining noise models in one sim
+    assert len(strs) <= n_max_strs
 
     # start filling in seed
-    seed = [0 for i in range(3 + n_max_qids)]
+    seed = [0 for i in range(2 + n_max_strs)]
     seed[0] = split_num
     seed[1] = sim_num
-    seed[2] = hash_str(name_str, ndigits=ndigits)
-    for i in range(len(qids)):
-        seed[i+3] = hash_str(qids[i], ndigits=ndigits)
+    for i in range(len(strs)):
+        seed[i+2] = hash_str(strs[i], ndigits=ndigits)
     return seed
 
 def get_mask_bool(mask, threshold=1e-3):

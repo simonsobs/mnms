@@ -24,11 +24,13 @@ parser.add_argument('--lmax', dest='lmax', type=int, required=True,
                     help='Bandlimit of covariance matrix.')
 
 parser.add_argument('--subproduct-kwargs', dest='subproduct_kwargs', nargs='+', type=str, default={},
-                    action=utils.StoreDict, metavar='KEY1=VAL1 KEY2=VAL2 ...',
-                    help='additional key=value pairs to pass to get_model, get_sim')
+                    action=utils.StoreDict, metavar='KEY1=VAL11,VAL12 KEY2=VAL21,VAL22 ...',
+                    help='additional key=value pairs to pass to get_model, get_sim; values '
+                    'split into list using "," separator')
 args = parser.parse_args()
 
-model = nm.BaseNoiseModel.from_config(args.config_name, args.noise_model_name, *args.qid)
+model = nm.BaseNoiseModel.from_config(args.config_name, args.noise_model_name,
+                                      *args.qid, **args.subproduct_kwargs)
 
 # get split nums
 if args.auto_split:
@@ -39,5 +41,4 @@ assert np.all(splits >= 0)
 
 # Iterate over models
 for s in splits:
-    model.get_model(s, args.lmax, keep_mask_est=True, keep_mask_obs=True, verbose=True,
-                    **args.subproduct_kwargs)
+    model.get_model(s, args.lmax, keep_mask_est=True, keep_mask_obs=True, verbose=True)
