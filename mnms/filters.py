@@ -788,3 +788,67 @@ def filter_imap_maps_scaledep(imap, mfilters, ell_lows=None, ell_highs=None,
             filt_imap += (imap - utils.ell_filter(imap, 1 - prof, lmax=lmaxi, tweak=tweak)) * mfilter
     
     return filt_imap
+
+# TODO: this is highly not DRY code given above function, but they are tricky
+# to merge cleanly
+def filter_imaps_scaledep(imaps, ell_lows=None, ell_highs=None,
+                          profile='cosine', exp=0.5, dtype=np.float32,
+                          tweak=False):
+    """Filter maps in an ell-dependent manner. That is, each input map will be
+    filtered by some "stitching" profile over a range of ells, and the sum of
+    them is returned.
+
+    Parameters
+    ----------
+    imaps : iterable of (*preshape, ny, nx) enmap.ndmap
+        Input maps to be filtered.
+    ell_lows : iterable of int, optional
+        Low-ell bounds of stitching regions in harmonic space for the map
+        filters, by default None.
+    ell_highs : iterable of int, optional
+        High-ell bounds of stitching regions in harmonic space for the map
+        filters, by default None.
+    profile : str, optional
+        Stitching profile in harmonic space, by default 'cosine'.
+    exp : int, optional
+        Power to raise profiles to, by default 1. For example, the Gaussian
+        admissibility criterion corresponds to e=0.5.
+    dtype : np.dtype, optional
+        Dtype of the stitching profiles, by default np.float32.
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
+
+    Returns
+    -------
+    (*preshape, ny, nx) enmap.ndmap
+        The filtered map.
+
+    Notes
+    -----
+    The highest-ell map is not applied by filtering the input map to its
+    Nyquist bandlimit, which would both lose "rectangular" information and
+    be slow, but rather by subtracting the input filtered by 1 - filter to
+    the next highest-ell filter bandlimit.
+    """
+    # first get ell trans profs. do lmax=None so last profile is
+    # aggressively bandlimited
+    trans_profs = utils.get_ell_trans_profiles(
+        ell_lows, ell_highs, lmax=None, profile=profile, exp=exp, dtype=dtype
+        )
+    
+    assert len(trans_profs) == len(imaps), \
+        'Must have same number of profiles as maps'
+
+    # we don't want to do the highest-ell profile in harmonic space
+    filt_imap = 0
+    for i, imap in enumerate(imaps):
+        prof = trans_profs[i]
+        lmaxi = prof.size - 1
+        if i < len(imaps) - 1:
+            omap = enmap.empty(imaps[-1].shape, imaps[-1].wcs, imaps[-1].dtype)
+            filt_imap += utils.ell_filter(imap, prof, omap=omap, lmax=lmaxi, tweak=tweak)
+        else:
+            filt_imap += (imap - utils.ell_filter(imap, 1 - prof, lmax=lmaxi, tweak=tweak))
+    
+    return filt_imap

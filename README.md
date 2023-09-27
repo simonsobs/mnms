@@ -51,16 +51,36 @@ from mnms import noise_models as nm
 qids = ['pa5a', 'pa5b'] 
 
 # this will load a baseline-map noise model for act_dr6v4. could also 
-# do (for example) 'act_dr6v4_pwv_split' for pwv split maps (likewise el_split, inout_split), or `act_dr6.01` for dr6.01 products
+# do (for example) 'act_dr6v4_pwv_split' for pwv split maps (likewise el_split, inout_split), or `act_dr6.01` for dr6.01 products. these
+# correspond to the name of noise_model config files in the noise_model
+# product of sofind
 config_name = 'act_dr6v4' 
 
 # this will load the tiled noise model. could also do 'fdw_cmbmask'
 # for directional wavelet model (or 'tile', 'wav', or 'fdw' for
-# dr6.01; see noise_models product configs in sofind)
+# dr6.01; see noise_models product configs in sofind). these correspond
+# to the blocks within the config file
 noise_model_name = 'tile_cmbmask'
 
+# if you are loading a config that requires subproduct_kwargs (e.g.,  
+# 'act_dr6v4_pwv_split' maps require a 'pwv_split' argument), you need
+# to specify which subproduct_kwargs the model will include at object
+# creation. this could be nothing (e.g., for 'act_dr6v4'),
+# {'pwv_split': ['pwv1']} (e.g, for 'act_dr6v4_pwv_split'), or may be
+# a longer list like {'inout_split': ['inout1', 'inout2']} (e.g., for
+# 'act_dr6v4_inout_split'). in the latter case, passing a pair of qids
+# will result in 4 "datasets" (the outer product of all the qids and
+# subproduct_kwargs in the list) being jointly modeled/covaried.
+subproduct_kwargs = {}
+# subproduct_kwargs = {'inout_split': ['inout1', 'inout2']}
+
 # instantiate NoiseModel object
-tnm = nm.BaseNoiseModel.from_config(config_name, noise_model_name,  *qids)
+tnm = nm.BaseNoiseModel.from_config(
+    config_name,
+    noise_model_name,
+    *qids,
+    **subproduct_kwargs
+    )
 
 # grab a sim from disk, generate on-the-fly if does not exist
 my_sim = tnm.get_sim(split_num=2, sim_num=16, lmax=10800)
@@ -85,14 +105,14 @@ Products written by users are **always** saved in their `private_path`!
 ## Configs and Metadata
 The recommended way to instantiate a `BaseNoiseModel` subclass of any type is by loading a configuration file (in fact, the provided scripts require this). A configuration file lives in the `sofind` repository, under `sofind/products/noise_models` (all configs are always `yaml` files).
 
-The job of a config is to store the metadata that helps instantiate noise models in a centralized location. For instance, you wouldn't want to have to manage all the arguments for a `FDWNoiseModel` instance yourself! In addition, the config maps this metadata to filenames. Each subclass also stores a `model_file_template` and a `sim_file_template` which will be populated by the kwargs in the config when those products are written. Users can experiment with changing the templates to match their preferred filename --- note, some additional kwargs provided at runtime to `get_model` and `get_sim` likely go here, e.g. `lmax` or `split_num`.
+The job of a config is to store the metadata that helps instantiate noise models in a centralized location. For instance, you wouldn't want to have to manage all the arguments for a `FDWNoiseModel` instance yourself! In addition, the config maps this metadata to filenames. Each config stores a `model_file_template` and a `sim_file_template` which will be populated by the kwargs in the config when those products are written. Users can experiment with changing the templates to match their preferred filename --- note, some additional kwargs provided at runtime to `get_model` and `get_sim` likely go here, e.g. `lmax` or `split_num`.
 
 Take care with filenames:
 * `mnms` will not prevent you from overwriting preexisting products in your `private_path`!
 * `mnms` **will** prevent you from writing a filename into your `private_path` if it already exists in the public location indicated by `sofind`. This ensures reading products from disk is always unambiguous as to where the product comes from.
 
 ## Other Notes
-* All noise models can account for correlated detector-arrays. The array correlations are introduced automatically between `qids` if multiple `qids` are passed in the constructor to a noise model. 
+* All noise models can account for correlated detector-arrays. The array correlations are introduced automatically between `qids` if multiple `qids` are passed in the constructor to a noise model. Adding a list of subproduct_kwargs for a given subproduct key expands the datasets as the outer product of all `qids` and `subproduct_kwargs` lists. See the documentation of `noise_models.BaseNoiseModel.from_config` for more detail.
 
 * All noise models are multithreaded. Please ensure to set the environment variable `OMP_NUM_THREADS` appropriately in your slurm scripts. The bottleneck tends to be either spherical-harmonic transforms or fourier transforms. We've had success on 10-20 threads; more than that tends to incur too much overhead. The number of threads also plays a role in random number generation, so sims with identical parameters but run with a different number of threads will be different.
 
