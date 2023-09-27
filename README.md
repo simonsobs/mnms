@@ -46,21 +46,30 @@ from mnms import noise_models as nm
 
 # a qid is an identifier tag for a dataset, like a detector array.
 # see sofind for a list of possible qids depending on which data
-# model you load
-qids = ['pa5a', 'pa5b']
+# model you load. thus, in the below, could also do ['pa4a', 'pa4b'] 
+# or ['pa6a', 'pa6b']
+qids = ['pa5a', 'pa5b'] 
 
-# can also instantiate WaveletNoiseModel (isotropic wavelet) 
-# or FDWNoiseModel (directional wavelet) here
-tnm = nm.BaseNoiseModel.from_config('act_dr6.01_cmbmask', 'tile' *qids)
+# this will load a baseline-map noise model for act_dr6v4. could also 
+# do (for example) 'act_dr6v4_pwv_split' for pwv split maps (likewise el_split, inout_split), or `act_dr6.01` for dr6.01 products
+config_name = 'act_dr6v4' 
+
+# this will load the tiled noise model. could also do 'fdw_cmbmask'
+# for directional wavelet model (or 'tile', 'wav', or 'fdw' for
+# dr6.01; see noise_models product configs in sofind)
+noise_model_name = 'tile_cmbmask'
+
+# instantiate NoiseModel object
+tnm = nm.BaseNoiseModel.from_config(config_name, noise_model_name,  *qids)
 
 # grab a sim from disk, generate on-the-fly if does not exist
-my_sim = tnm.get_sim(split_num=2, sim_num=16, lmax=5400)
+my_sim = tnm.get_sim(split_num=2, sim_num=16, lmax=10800)
 
-# grab a sim from disk, fail if does not exist
-my_sim = tnm.get_sim(split_num=2, sim_num=16, lmax=5400, generate=False)
+# grab a sim from disk, fail if does not exist on-disk
+my_sim = tnm.get_sim(split_num=2, sim_num=16, lmax=10800, generate=False)
 
 # generate a sim on-the-fly whether or not exists on disk
-my_sim = tnm.get_sim(split_num=2, sim_num=16, lmax=5400, check_on_disk=False)
+my_sim = tnm.get_sim(split_num=2, sim_num=16, lmax=10800, check_on_disk=False)
 ```
 These method calls can also write products to disk by supplying `write=True`. Products written by users are **always** saved in their `private_path`! Note, a noise covariance matrix (i.e., a `model`) must exist before a simulation can be drawn. Such a covariance matrix can be produced via the `BaseNoiseModel.get_model` method.
 

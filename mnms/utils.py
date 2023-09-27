@@ -79,9 +79,13 @@ def get_private_mnms_fn(which, basename, to_write=False):
 
     return private_fn
 
-def kwargs_str(**kwargs):
+def kwargs_str(text_terminator='', **kwargs):
     """For printing kwargs as a string"""
-    return ', '.join([f'{k} {v}' for k, v in kwargs.items()])
+    out = ', '.join([f'{k} {v}' for k, v in kwargs.items()])
+    if out != '':
+        return out + text_terminator
+    else:
+        return out
 
 def None2str(s):
     """Prints a string. If s is None, prints 'None'."""
@@ -913,7 +917,7 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
     return out
 
 # further extended here for ffts
-def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0, tweak=False):
+def ell_filter(imap, lfilter, omap=None, mode='curvedsky', ainfo=None, lmax=None, nthread=0, tweak=False):
     """Filter a map by an isotropic function of harmonic ell.
 
     Parameters
@@ -924,6 +928,9 @@ def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0
         If callable, will be evaluated over range(lmax+1) if 'curvedsky'
         and imap.modlmap() if 'fft'. If array-like or after being called, 
         lfilter.shape[:-1] must broadcast with imap.shape[:-2].
+    omap : ndmap, optional
+        Output map buffer, by default None. If None, a map with the same shape,
+        wcs, and dtype as imap.
     mode : str, optional
         The convolution space: 'curvedsky' or 'fft', by default 'curvedsky'.
     ainfo : sharp.alm_info, optional
@@ -972,8 +979,8 @@ def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0
             alm[preidx] = alm_c_utils.lmul(
                 alm[preidx], lfilter[preidx], ainfo
                 )
-
-        omap = enmap.empty(imap.shape, imap.wcs, dtype=imap.dtype)
+        if omap is None:
+            omap = enmap.empty(imap.shape, imap.wcs, dtype=imap.dtype)
         return alm2map(alm, omap, ainfo=ainfo, tweak=tweak)
 
 # forces shape to (num_arrays, num_splits, num_pol, ny, nx) and optionally averages over splits
@@ -1809,7 +1816,7 @@ def concurrent_gaussian_filter(a, sigma_pix, *args, flatten_axes=[0],
     return a
 
 def get_ell_trans_profiles(ell_lows, ell_highs, lmax=None, 
-                           profile='cosine', e=1, dtype=np.float32):
+                           profile='cosine', exp=1, dtype=np.float32):
     """Generate profiles over ell that smoothly transition from 1 to 0 (and
     vice-versa) in defined regions. 
 
@@ -1829,7 +1836,7 @@ def get_ell_trans_profiles(ell_lows, ell_highs, lmax=None,
     profile : str, optional
         The transition region shape, by default 'cosine'. Other supported
         option is 'linear'.
-    e : int, optional
+    exp : int, optional
         Power to raise profiles to, by default 1. For example, the Gaussian
         admissibility criterion corresponds to e=0.5.
     dtype : np.dtype, optional
@@ -1900,11 +1907,11 @@ def get_ell_trans_profiles(ell_lows, ell_highs, lmax=None,
         
         trans_prof[ell <= bottom] = 1
         trans_prof[ell > top] = 0
-        out[i] *= trans_prof**e
-        out[i+1] *= (1 - trans_prof)**e
+        out[i] *= trans_prof**exp
+        out[i+1] *= (1 - trans_prof)**exp
 
-    assert np.all(np.sum(out**(1/e), axis=0) - 1 < 1e-6), \
-        f'Profile sum does not equal 1, max error is {np.max(np.abs(np.sum(out**(1/e), axis=0) - 1))}'
+    assert np.all(np.sum(out**(1/exp), axis=0) - 1 < 1e-6), \
+        f'Profile sum does not equal 1, max error is {np.max(np.abs(np.sum(out**(1/exp), axis=0) - 1))}'
     
     out = list(out)
 
