@@ -1,3 +1,4 @@
+from pixell import mpi as p_mpi
 from mnms import noise_models as nm, utils
 import argparse
 import numpy as np
@@ -44,7 +45,18 @@ parser.add_argument('--maps-step', dest='maps_step', type=int, default=1,
 
 parser.add_argument('--alm', dest='alm', default=False, 
                     action='store_true', help='Generate simulated alms instead of maps.')
+
+parser.add_argument('--use-mpi', action='store_true',
+                    help='Use MPI to compute simulations in parallel.')
+
 args = parser.parse_args()
+
+if args.use_mpi:
+    # Could add try statement, but better to crash if MPI cannot be imported.
+    from mpi4py import MPI
+    comm = MPI.COMM_WORLD
+else:
+    comm = p_mpi.FakeCommunicator()
 
 model = nm.BaseNoiseModel.from_config(args.config_name, args.noise_model_name,
                                       *args.qid, **args.subproduct_kwargs)
@@ -65,9 +77,21 @@ else:
     maps = np.arange(args.maps_start, args.maps_end+args.maps_step, args.maps_step)
 assert np.all(maps >= 0)
 
-# Iterate over sims
-for s in splits:
-    for m in maps:
-        model.get_sim(s, m, args.lmax, alm=args.alm, write=True, verbose=True)
-    model.cache_clear('model')
-    model.cache_clear('sqrt_ivar')
+# Most common use with MPI should be many sims for small number of
+# splits, so we try to put sims with equal split index on the same rank
+splits_and_maps = np.asarray([(s, m) for s in splits for m in maps])
+splits_and_maps_on_rank = np.array_split(splits_and_maps, comm.size)[comm.rank]
+
+for idx, (s, m) in enumerate(splits_and_maps_on_rank):
+    model.get_sim(s, m, args.lmax, alm=args.alm, write=True, verbose=True)
+
+    # Get split number in next iteration of loop.
+    try:
+        s_next, _ = splits_and_maps_on_rank[idx+1]
+    except IndexError:
+        continue
+    else:
+        # Clear model if we're going to work on a different split next iteration.
+        if s_next != s:
+            model.cache_clear('model')
+            model.cache_clear('sqrt_ivar')
