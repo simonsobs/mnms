@@ -3,7 +3,7 @@
 # etc, so we need to use a keyword that will track them across the repo.
 
 ### CONTRIBUTORS MAY ADD TO REGISTERED_CLASSES ###
-REGISTERED_CLASSES = ['Tiled', 'Wavelet', 'FDW']
+REGISTERED_CLASSES = ['Tiled', 'Wavelet', 'FDW', 'Harmonic']
 
 ### DON'T MODIFY BELOW ###
 def add_registry(baseclass):

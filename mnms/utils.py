@@ -32,8 +32,9 @@ class StoreDict(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
         my_dict = {}
         for kv in values:
+            print(kv)
             k, v = kv.split('=')
-            my_dict[k] = v
+            my_dict[k] = v.split(',')
         setattr(namespace, self.dest, my_dict)
 
 def get_private_mnms_fn(which, basename, to_write=False):
@@ -78,9 +79,13 @@ def get_private_mnms_fn(which, basename, to_write=False):
 
     return private_fn
 
-def kwargs_str(**kwargs):
+def kwargs_str(text_terminator='', **kwargs):
     """For printing kwargs as a string"""
-    return ', '.join([f'{k} {v}' for k, v in kwargs.items()])
+    out = ', '.join([f'{k} {v}' for k, v in kwargs.items()])
+    if out != '':
+        return out + text_terminator
+    else:
+        return out
 
 def None2str(s):
     """Prints a string. If s is None, prints 'None'."""
@@ -567,8 +572,8 @@ def interp1d_bins(bins, y, return_vals=False, **interp1d_kwargs):
     else:
         return interp1d(x, y, fill_value=fill_value, **interp1d_kwargs)
 
-def get_ps_mat(inp, outbasis, e, lim=1e-6, lim0=None, inbasis='harmonic',
-               mask_est=None, shape=None, wcs=None):
+def get_ps_mat(inp, outbasis, exp, lim=1e-6, lim0=None, inbasis='harmonic',
+               shape=None, wcs=None):
     """Get a power spectrum matrix from input alm's or fft's, raised to a given
     matrix power.
 
@@ -579,7 +584,7 @@ def get_ps_mat(inp, outbasis, e, lim=1e-6, lim0=None, inbasis='harmonic',
     outbasis : str
         The basis of the power spectrum matrix, either 'harmonic' or 'fourier'.
         If 'fourier', only the 'real-fft' modes.
-    e : scalar
+    exp : scalar
         Matrix power.
     lim : float, optional
         Set eigenvalues smaller than lim * max(eigenvalues) to zero.
@@ -588,10 +593,6 @@ def get_ps_mat(inp, outbasis, e, lim=1e-6, lim0=None, inbasis='harmonic',
     inbasis : str
         The basis of the input data, either 'harmonic' or 'fourier.' If
         'fourier', assumed only the 'real-fft' modes.
-    mask_est : (ny, nx) enmap.ndmap, optional
-        Mask applied to map before measuring input alm's, by default None. If
-        provided, power spectra matrix is normalized by sky fraction before
-        being raised to e.
     shape : (..., ny, nx) tuple, optional
         If outbasis or inbasis is 'fourier', the shape of the map-space, by default None.
     wcs : astropy.wcs.WCS, optional
@@ -624,12 +625,6 @@ def get_ps_mat(inp, outbasis, e, lim=1e-6, lim0=None, inbasis='harmonic',
     if outbasis not in ('harmonic', 'fourier'):
         raise ValueError('Only harmonic or fourier basis supported')
 
-    if mask_est is not None:
-        pmap = enmap.pixsizemap(mask_est.shape, mask_est.wcs)
-        w2 = np.sum((mask_est**2)*pmap) / np.pi / 4.   
-    else:
-        w2 = 1
-
     if inbasis == 'harmonic':
         preshape = inp.shape[:-1]
         ncomp = np.prod(preshape, dtype=int)
@@ -647,9 +642,8 @@ def get_ps_mat(inp, outbasis, e, lim=1e-6, lim0=None, inbasis='harmonic',
                 if preidx1 != preidx2:
                     mat[(*preidx2, *preidx1)] = mat[(*preidx1, *preidx2)]
 
-        mat /= w2
         mat = mat.reshape(ncomp, ncomp, -1)
-        mat = eigpow(mat, e, axes=[0, 1], lim=lim, lim0=lim0)
+        mat = eigpow(mat, exp, axes=[0, 1], lim=lim, lim0=lim0)
         mat = mat.reshape(*preshape, *preshape, -1)
         
         if outbasis == 'harmonic':
@@ -703,9 +697,8 @@ def get_ps_mat(inp, outbasis, e, lim=1e-6, lim0=None, inbasis='harmonic',
                 if preidx1 != preidx2:
                     mat[(*preidx2, *preidx1)] = mat[(*preidx1, *preidx2)]
         
-        mat /= w2
         mat = mat.reshape(ncomp, ncomp, -1)
-        mat = eigpow(mat, e, axes=[0, 1], lim=lim, lim0=lim0)
+        mat = eigpow(mat, exp, axes=[0, 1], lim=lim, lim0=lim0)
         mat = mat.reshape(*preshape, *preshape, -1)
 
         if outbasis == 'fourier':
@@ -728,6 +721,75 @@ def get_ps_mat(inp, outbasis, e, lim=1e-6, lim0=None, inbasis='harmonic',
         elif outbasis == 'harmonic':
             raise NotImplementedError("Can't go from fourier to spinny harmonic easily")
     
+    return out
+
+def measure_iso_harmonic(imap, *exp, mask_est=1, mask_norm=1, ainfo=None,
+                         lmax=None, tweak=False, lim=1e-6, lim0=None):
+    """Measure all auto- and cross-spectra of imap, raised to various matrix
+    exponents at each ell.
+
+    Parameters
+    ----------
+    imap : (*preshape, ny, nx) enmap.ndmap
+        Input map to be analyzed.
+    exp : iterable of scalar, optional
+        Exponents to raise covaried spectra matrix to at each ell.
+    mask_est : (ny, nx) enmap.ndmap, optional
+        Mask applied to imap to estimate pseudospectra, by default 1.
+    mask_norm : (ny, nx) enmap.ndmap, optional
+        With mask_est, used to normalize the measured pseudospectrum such that
+        a draw from the normalized spectra, multiplied by mask_norm and then
+        measured in mask_est, has the same pseudospectrum (on average) as 
+        imap measured in mask_est, by default 1.
+    ainfo : sharp.alm_info, optional
+        ainfo used in the pseudospectrum measurement, by default None.
+    lmax : int, optional
+        lmax used in the pseudospectrum measurement, by default the Nyquist
+        frequency of the pixelization.
+    tweak : bool, optional
+        Allow inexact quadrature weights in spherical harmonic transforms, by
+        default False.
+    lim : float, optional
+        Set eigenvalues smaller than lim * max(eigenvalues) to zero.
+    lim0 : float, optional
+        If max(eigenvalues) < lim0, set whole matrix to zero.
+
+    Returns
+    -------
+    iterable of (*preshape, *preshape, nell) np.ndarray
+        The auto- and cross-spectra raised to e for each e in exp.
+
+    Notes
+    -----
+    Although this does not correct the measured spectra for the geometry of
+    the masks with a mode-coupling matrix, it does correct the spectra for the
+    loss of power (i.e., the "diagonal mode-coupling" approximation).
+
+    The measured matrices are diagonal in ell but take the cross of the map
+    preshape, i.e. they have shape (*preshape, *preshape, nell).
+    """
+    if lmax is None:
+        lmax = lmax_from_wcs(imap)
+
+    mask_est = np.asanyarray(mask_est, dtype=imap.dtype)
+    mask_norm = np.asanyarray(mask_norm, dtype=imap.dtype)
+
+    mask_est = np.atleast_2d(mask_est)
+    mask_norm = np.atleast_2d(mask_norm)
+
+    # want to make sure the w2 broadcasts against (preshape, preshape) of the
+    # spectra, which also means we need to get rid of one of the kept mapdims
+    pmap = imap.pixsizemap()
+    w2 = np.sum((mask_est*mask_norm)**2 * pmap, axis=(-2, -1), keepdims=True)[..., 0]
+    w2 /= 4*np.pi
+    
+    # measure correlated pseudo spectra for filtering
+    alm = map2alm(imap * mask_est, ainfo=ainfo, lmax=lmax, tweak=tweak)
+    out = []
+    for e in exp:
+        out.append(get_ps_mat(alm, 'harmonic', e, lim=lim, lim0=lim0) / w2**e)
+    alm = None
+
     return out
 
 def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic', 
@@ -855,7 +917,7 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
     return out
 
 # further extended here for ffts
-def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0, tweak=False):
+def ell_filter(imap, lfilter, omap=None, mode='curvedsky', ainfo=None, lmax=None, nthread=0, tweak=False):
     """Filter a map by an isotropic function of harmonic ell.
 
     Parameters
@@ -866,6 +928,9 @@ def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0
         If callable, will be evaluated over range(lmax+1) if 'curvedsky'
         and imap.modlmap() if 'fft'. If array-like or after being called, 
         lfilter.shape[:-1] must broadcast with imap.shape[:-2].
+    omap : ndmap, optional
+        Output map buffer, by default None. If None, a map with the same shape,
+        wcs, and dtype as imap.
     mode : str, optional
         The convolution space: 'curvedsky' or 'fft', by default 'curvedsky'.
     ainfo : sharp.alm_info, optional
@@ -914,8 +979,8 @@ def ell_filter(imap, lfilter, mode='curvedsky', ainfo=None, lmax=None, nthread=0
             alm[preidx] = alm_c_utils.lmul(
                 alm[preidx], lfilter[preidx], ainfo
                 )
-
-        omap = enmap.empty(imap.shape, imap.wcs, dtype=imap.dtype)
+        if omap is None:
+            omap = enmap.empty(imap.shape, imap.wcs, dtype=imap.dtype)
         return alm2map(alm, omap, ainfo=ainfo, tweak=tweak)
 
 # forces shape to (num_arrays, num_splits, num_pol, ny, nx) and optionally averages over splits
@@ -1751,7 +1816,7 @@ def concurrent_gaussian_filter(a, sigma_pix, *args, flatten_axes=[0],
     return a
 
 def get_ell_trans_profiles(ell_lows, ell_highs, lmax=None, 
-                           profile='cosine', e=1, dtype=np.float32):
+                           profile='cosine', exp=1, dtype=np.float32):
     """Generate profiles over ell that smoothly transition from 1 to 0 (and
     vice-versa) in defined regions. 
 
@@ -1771,7 +1836,7 @@ def get_ell_trans_profiles(ell_lows, ell_highs, lmax=None,
     profile : str, optional
         The transition region shape, by default 'cosine'. Other supported
         option is 'linear'.
-    e : int, optional
+    exp : int, optional
         Power to raise profiles to, by default 1. For example, the Gaussian
         admissibility criterion corresponds to e=0.5.
     dtype : np.dtype, optional
@@ -1780,7 +1845,8 @@ def get_ell_trans_profiles(ell_lows, ell_highs, lmax=None,
     Returns
     -------
     list
-        The profiles over all ells.
+        The profiles over all ells, bandlimited to the lmax for each
+        profile.
 
     Raises
     ------
@@ -1841,11 +1907,11 @@ def get_ell_trans_profiles(ell_lows, ell_highs, lmax=None,
         
         trans_prof[ell <= bottom] = 1
         trans_prof[ell > top] = 0
-        out[i] *= trans_prof**e
-        out[i+1] *= (1 - trans_prof)**e
+        out[i] *= trans_prof**exp
+        out[i+1] *= (1 - trans_prof)**exp
 
-    assert np.all(np.sum(out**(1/e), axis=0) - 1 < 1e-6), \
-        f'Profile sum does not equal 1, max error is {np.max(np.abs(np.sum(out**(1/e), axis=0) - 1))}'
+    assert np.all(np.sum(out**(1/exp), axis=0) - 1 < 1e-6), \
+        f'Profile sum does not equal 1, max error is {np.max(np.abs(np.sum(out**(1/exp), axis=0) - 1))}'
     
     out = list(out)
 
@@ -2147,7 +2213,7 @@ def concurrent_einsum(subscripts, a, b, *args, flatten_axes=[-2, -1],
     out = np.moveaxis(out, range(len(oshape_axes)), flatten_axes)
     return out
 
-def eigpow(A, e, axes=[-2, -1], lim=1e-6, lim0=None, copy=False):
+def eigpow(A, exp, axes=[-2, -1], lim=1e-6, lim0=None, copy=False):
     """A hack around enlib.array_ops.eigpow which upgrades the data
     precision to at least double precision if necessary prior to
     operation.
@@ -2178,7 +2244,7 @@ def eigpow(A, e, axes=[-2, -1], lim=1e-6, lim0=None, copy=False):
             recast = False
 
     # reassign to A in case copy
-    A = array_ops.eigpow(A, e, axes=axes, lim=lim, lim0=lim0, copy=copy) 
+    A = array_ops.eigpow(A, exp, axes=axes, lim=lim, lim0=lim0, copy=copy) 
     
     # cast back to input precision if necessary
     if recast:
@@ -2189,7 +2255,7 @@ def eigpow(A, e, axes=[-2, -1], lim=1e-6, lim0=None, copy=False):
 
     return A
 
-def chunked_eigpow(A, e, axes=[-2, -1], lim=1e-6, lim0=None, copy=False,
+def chunked_eigpow(A, exp, axes=[-2, -1], lim=1e-6, lim0=None, copy=False,
                    chunk_axis=0, target_gb=5):
     """A hack around utils.eigpow which performs the operation
     one chunk at a time to reduce memory usage."""
@@ -2220,7 +2286,7 @@ def chunked_eigpow(A, e, axes=[-2, -1], lim=1e-6, lim0=None, copy=False,
     # call eigpow for each chunk
     for i in range(nchunks):
         A[i*chunksize:(i+1)*chunksize] = eigpow(
-            A[i*chunksize:(i+1)*chunksize], e, axes=eaxes, lim=lim, lim0=lim0,
+            A[i*chunksize:(i+1)*chunksize], exp, axes=eaxes, lim=lim, lim0=lim0,
             copy=copy
             )
 
@@ -2577,7 +2643,7 @@ def hash_str(istr, ndigits=9):
     """Turn a string into an ndigit hash, using hashlib.sha256 hashing"""
     return int(hashlib.sha256(istr.encode('utf-8')).hexdigest(), 16) % 10**ndigits
 
-def get_seed(split_num, sim_num, name_str, *qids, n_max_qids=4, ndigits=9):
+def get_seed(split_num, sim_num, *strs, n_max_strs=None, ndigits=9):
     """Get a seed for a sim. The seed is unique for a given split number, sim
     number, sofind.DataModel class, and list of array 'qids'.
 
@@ -2587,33 +2653,35 @@ def get_seed(split_num, sim_num, name_str, *qids, n_max_qids=4, ndigits=9):
         The 0-based index of the split to simulate.
     sim_num : int
         The map index, used in setting the random seed. Must be non-negative.
-    name_str : str
-        Name of noise model or data model as a string, so that sims from different
-        noise models or data models are different.
-    n_max_qids : int, optional
-        The maximum number of allowed 'qids' to be passed at once, by default
-        4. This way, seeds can be safely modified by appending integers outside
+    strs : iterable of strings
+        Strings that can help set the seed (hashed into integers).
+    n_max_strs : int, optional
+        The maximum number of allowed strings to be passed at once, by default
+        None. This way, seeds can be safely modified by appending integers outside
         of this function without overlapping with possible seeds returned by
-        this function.
+        this function. If None, then the number of strs.
     ndigits : int, optional
-        The length of each qid hash, by default 9.
+        The length of each string hash, by default 9.
 
     Returns
     -------
     list
         List of integers to be passed to np.random seeding utilities.
     """
+    if n_max_strs is None:
+        n_max_strs = len(strs)
+
     # can have at most n_max_qids
-    # this is important in case the seed gets modified outside of this function, e.g. when combining noise models in one sim
-    assert len(qids) <= n_max_qids
+    # this is important in case the seed gets modified outside of this function,
+    # e.g. when combining noise models in one sim
+    assert len(strs) <= n_max_strs
 
     # start filling in seed
-    seed = [0 for i in range(3 + n_max_qids)]
+    seed = [0 for i in range(2 + n_max_strs)]
     seed[0] = split_num
     seed[1] = sim_num
-    seed[2] = hash_str(name_str, ndigits=ndigits)
-    for i in range(len(qids)):
-        seed[i+3] = hash_str(qids[i], ndigits=ndigits)
+    for i in range(len(strs)):
+        seed[i+2] = hash_str(strs[i], ndigits=ndigits)
     return seed
 
 def get_mask_bool(mask, threshold=1e-3):

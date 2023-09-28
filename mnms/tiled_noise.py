@@ -534,8 +534,7 @@ def get_tiled_noise_sim(covsqrt, seed, nthread=0, verbose=True):
     omap = omap[covsqrt.unmasked_tiles]
 
     # because reality condition will suppress power in only the first column
-    # (for all but the 0-freq compoonent)
-    omap[..., 1:, 0] *= np.sqrt(2)
+    omap[..., :, 0] *= np.sqrt(2)
 
     # multiply random draws by the covsqrt to get the sim
     omap = utils.concurrent_einsum(
@@ -624,7 +623,7 @@ def read_tiled_ndmap(fname, extra_attrs=None, extra_datasets=None):
     Returns
     -------
     tiled_ndmap, dict, dict
-        The tiled map, a dictionary of with keys given by extra_attrs. A
+        The tiled map. A dictionary of with keys given by extra_attrs. A
         dictionary with keys given by extra_datasets.
     """
     if fname[-5:] != '.hdf5':

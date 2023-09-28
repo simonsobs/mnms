@@ -25,8 +25,9 @@ parser.add_argument('--lmax', dest='lmax', type=int, required=True,
                     help='Bandlimit of covariance matrix.')
 
 parser.add_argument('--subproduct-kwargs', dest='subproduct_kwargs', nargs='+', type=str, default={},
-                    action=utils.StoreDict, metavar='KEY1=VAL1 KEY2=VAL2 ...',
-                    help='additional key=value pairs to pass to get_model, get_sim')
+                    action=utils.StoreDict, metavar='KEY1=VAL11,VAL12 KEY2=VAL21,VAL22 ...',
+                    help='additional key=value pairs to pass to get_model, get_sim; values '
+                    'split into list using "," separator')
 
 parser.add_argument('--maps', dest='maps', nargs='+', type=str, default=None,
                     help='simulate exactly these map_ids, overwriting if preexisting; '
@@ -57,7 +58,8 @@ if args.use_mpi:
 else:
     comm = p_mpi.FakeCommunicator()
 
-model = nm.BaseNoiseModel.from_config(args.config_name, args.noise_model_name, *args.qid)
+model = nm.BaseNoiseModel.from_config(args.config_name, args.noise_model_name,
+                                      *args.qid, **args.subproduct_kwargs)
 
 # get split nums
 if args.auto_split:
@@ -81,8 +83,7 @@ splits_and_maps = np.asarray([(s, m) for s in splits for m in maps])
 splits_and_maps_on_rank = np.array_split(splits_and_maps, comm.size)[comm.rank]
 
 for idx, (s, m) in enumerate(splits_and_maps_on_rank):
-    model.get_sim(s, m, args.lmax, alm=args.alm, write=True, verbose=True,
-                  **args.subproduct_kwargs)
+    model.get_sim(s, m, args.lmax, alm=args.alm, write=True, verbose=True)
 
     # Get split number in next iteration of loop.
     try:
