@@ -420,7 +420,6 @@ def get_tiled_noise_covsqrt(imap, mask_obs=None, width_deg=4., height_deg=4.,
     # get component shapes
     ncomp = np.prod(imap.shape[1:-2], dtype=int)
     imap = imap.reshape((-1, ncomp, *imap.shape[-2:]))
-    nspec = utils.triangular(ncomp)
 
     # get all the 2D power spectra for this split; note kmap 
     # has shape (num_tiles, ncomp, ny, nx)
@@ -442,36 +441,32 @@ def get_tiled_noise_covsqrt(imap, mask_obs=None, width_deg=4., height_deg=4.,
 
         # ewcs per tile is necessary for delta_ell_smooth to operate over correct number of Fourier pixels
         _, ewcs = imap.get_tile_geometry(n)
-
-        # iterate over spectra
-        for j in range(nspec):
-            # get array, pol indices
-            comp1, comp2 = utils.triu_pos(j, ncomp)
-                        
-            # whether we are on the main diagonal
-            diag = comp1 == comp2
-
-            # get this 2D PS and apply correct geometry for this tile
-            power = smap[comp1, comp2]
-            power = enmap.ndmap(power, wcs=ewcs)
             
-            # smooth the 2D PS
-            if delta_ell_smooth > 0:
-                power = smooth_ps_grid_uniform(
-                    power, delta_ell_smooth, diag=diag
+        # smooth the 2D PS
+        if delta_ell_smooth > 0:
+            ly, lx = enmap.laxes(smap.shape, ewcs)
+            smooth_size = np.round(
+                np.abs(
+                    delta_ell_smooth / np.array([ly[1], lx[1]])
                     )
+                )
+            smooth_size = smooth_size.astype(int)
+            smap = utils.concurrent_ndimage_filter(
+                smap, size=smooth_size, flatten_axes=[0, 1], 
+                op=ndimage.uniform_filter, mode='wrap'
+                )
+            smap[..., 0, 0] = 0 # zero dc
             
-            # skip smoothing if delta_ell_smooth=0 is passed as arg
-            elif delta_ell_smooth == 0:
-                if verbose:
-                    print('Not smoothing')
-            else:
-                raise ValueError('delta_ell_smooth must be >= 0')    
+        # skip smoothing if delta_ell_smooth=0 is passed as arg
+        elif delta_ell_smooth == 0:
+            if verbose:
+                print('Not smoothing')
+                
+        else:
+            raise ValueError('delta_ell_smooth must be >= 0')    
             
-            # update output 2D PS map
-            omap[i, comp1, comp2] = power[..., :nkx]
-            if not diag:
-                omap[i, comp2, comp1] = power[..., :nkx]
+        # update output PS map
+        omap[i] = smap[..., :nkx]
 
         # correct for f_sky from mask and apod windows
         omap[i] /= sq_f_sky[i]
@@ -479,7 +474,12 @@ def get_tiled_noise_covsqrt(imap, mask_obs=None, width_deg=4., height_deg=4.,
     # take covsqrt of current power (and can safely delete kmap, smap)
     kmap = None
     smap = None
-    omap = utils.chunked_eigpow(omap, 0.5, axes=(-4,-3), lim=lim, lim0=lim0)
+    
+    # sqrt much faster, but only possible for one component
+    if omap.shape[-4] == 1:
+        omap = np.sqrt(omap)
+    else:
+        omap = utils.chunked_eigpow(omap, 0.5, axes=(-4, -3), lim=lim, lim0=lim0)
 
     return {'sqrt_cov_mat': imap.sametiles(omap)}
 
@@ -671,60 +671,3 @@ def read_tiled_ndmap(fname, extra_attrs=None, extra_datasets=None):
                 extra_datasets_dict[k] = imap
 
     return tmap, extra_attrs_dict, extra_datasets_dict
-
-# adapted from tilec.covtools.py (https://github.com/ACTCollaboration/tilec/blob/master/tilec/covtools.py),
-# want to avoid dependency on tilec
-def smooth_ps_grid_uniform(ps, res, zero_dc=True, diag=False, shape=None, rfft=False,
-                        fill=False, fill_lmax=None, fill_lmax_est_width=None, fill_value=None, **kwargs):
-    """Smooth a 2d power spectrum to the target resolution in l.
-    """
-    # first fill any values beyond max lmax
-    if fill:
-        if fill_lmax is None:
-            fill_lmax = utils.lmax_from_wcs(ps.wcs)
-        fill_boundary(
-            ps, shape=shape, rfft=rfft, fill_lmax=fill_lmax,
-            fill_lmax_est_width=fill_lmax_est_width, fill_value=fill_value
-            )
-    if diag: assert np.all(ps>=0), 'If diag input ps must be positive semi-definite'
-    # First get our pixel size in l
-    if shape is None:
-        shape = ps.shape
-    ly, lx = enmap.laxes(shape, ps.wcs)
-    ires   = np.array([ly[1],lx[1]])
-    smooth = np.round(np.abs(res/ires)).astype(int)
-    # We now know how many pixels to somoth by in each direction,
-    # so perform the actual smoothing
-    if rfft:
-        # the y-direction needs a 'wrap' boundary and the x-direction
-        # needs a 'reflect' boundary. this is because the enmap rfft 
-        # convention cuts half the x-domain, so we don't have two-sided
-        # kx=0 data, but we do have two-sided ky=0 data. this is better 
-        # than the transpose, because it tends to be that the scan is
-        # up-down, making features stick out more along the x-axis than y
-        ps = ndimage.uniform_filter1d(ps, size=smooth[-2], axis=-2, mode='wrap')
-        ps = ndimage.uniform_filter1d(ps, size=smooth[-1], axis=-1, mode='reflect')
-    else:
-        ps = ndimage.uniform_filter(ps, size=smooth, mode='wrap')
-    if zero_dc: ps[..., 0,0] = 0
-    if diag: assert np.all(ps>=0), 'If diag output ps must be positive semi-definite'
-    return ps
-
-def fill_boundary(ps, shape=None, rfft=False, fill_lmax=None, fill_lmax_est_width=0, fill_value=None):
-    """Performs in-place filling of ps outer edge.
-    """
-    if shape is None:
-        shape = ps.shape
-    modlmap = enmap.modlmap(shape, ps.wcs)
-    if rfft:
-        modlmap = modlmap[..., :shape[-1]//2 + 1]
-    if fill_lmax is None:
-        fill_lmax = utils.lmax_from_wcs(ps.wcs)
-    assert fill_lmax_est_width > 0 or fill_value is not None, 'Must supply at least fill_lmax_est_width or fill_value'
-    if fill_lmax_est_width > 0 and fill_value is None:
-        fill_value = get_avg_value_by_ring(ps, modlmap, fill_lmax - fill_lmax_est_width, fill_lmax)
-    ps[fill_lmax <= modlmap] = fill_value
-
-def get_avg_value_by_ring(ps, modlmap, ell0, ell1):
-    ring_mask = np.logical_and(ell0 <= modlmap, modlmap < ell1)
-    return ps[ring_mask].mean()

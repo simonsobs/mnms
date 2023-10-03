@@ -32,7 +32,6 @@ class StoreDict(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
         my_dict = {}
         for kv in values:
-            print(kv)
             k, v = kv.split('=')
             my_dict[k] = v.split(',')
         setattr(namespace, self.dest, my_dict)
@@ -1747,7 +1746,7 @@ def smooth_gauss(imap, fwhm, mask=None, inplace=True, method='curvedsky',
         # always has at least len 1.
         ishape = imap.shape
         imap = atleast_nd(imap, 3)
-        concurrent_gaussian_filter(imap, sigma_pix, **method_kwargs)
+        concurrent_ndimage_filter(imap, sigma_pix, **method_kwargs)
         imap = imap.reshape(ishape)
     
     if mask is not None:
@@ -1755,22 +1754,26 @@ def smooth_gauss(imap, fwhm, mask=None, inplace=True, method='curvedsky',
 
     return imap
 
-def concurrent_gaussian_filter(a, sigma_pix, *args, flatten_axes=[0], 
-                               nthread=0, **kwargs):
+def concurrent_ndimage_filter(a, size, *args, flatten_axes=[0], 
+                              op=ndimage.gaussian_filter, nthread=0, **kwargs):
     """Perform scipy.ndimage.gaussian_filter concurrently. Always inplace.
 
     Parameters
     ----------
     a : array-like
         Array to be filtered.
-    sigma_pix : scalar or iterable of scalar
-        Number of elements per standard deviation along each axis to filter.
-        See flatten_axes for more information.
+    size : scalar or iterable of scalar
+        Number of elements along each axis to filter. See flatten_axes for more
+        information.
     flatten_axes : iterable of int
         Axes in a to flatten and concurrently apply filtering over in chunks.
         Note that these axes will internally be moved to the 0 position for
-        concurrent operations. Therefore, sigma_pix must be written to respect
+        concurrent operations. Therefore, size must be written to respect
         the shape of a after the axis flattening and moving step.
+    op : method of scipy.ndimage, optional
+        The filtering method, must have signature
+        op(a, size, *args, output=None, **kwargs), by default
+        ndimage.gaussian_filter.
     nthread : int, optional
         The number of threads, by default 0.
         If 0, use output of get_cpu_count().
@@ -1781,12 +1784,12 @@ def concurrent_gaussian_filter(a, sigma_pix, *args, flatten_axes=[0],
         Filtered input array, inplace.
     """
     try:
-        assert a.ndim - len(flatten_axes) == len(sigma_pix), \
-            'If sigma_pix is sequence, then a.ndim - len(flatten_axes) ' + \
-            'must equal len(sigma_pix)'
+        assert a.ndim - len(flatten_axes) == len(size), \
+            'If size is sequence, then a.ndim - len(flatten_axes) ' + \
+            'must equal len(size)'
     except TypeError:
         assert a.ndim > len(flatten_axes), \
-            'If sigma_pix is scalar, then a.ndim must be greater than ' + \
+            'If size is scalar, then a.ndim must be greater than ' + \
             'len(flatten_axes)'
 
     # get the shape of the subspace to flatten
@@ -1802,9 +1805,7 @@ def concurrent_gaussian_filter(a, sigma_pix, *args, flatten_axes=[0],
     executor = futures.ThreadPoolExecutor(max_workers=nthread)
 
     def _fill(idx):
-        ndimage.gaussian_filter(
-            a[idx], sigma_pix, *args, output=a[idx], **kwargs
-            )
+        op(a[idx], size, *args, output=a[idx], **kwargs)
     
     fs = [executor.submit(_fill, i) for i in range(a.shape[0])]
     futures.wait(fs)

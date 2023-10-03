@@ -64,7 +64,20 @@ def test_concurrent_gaussian_filter():
             a[preidx], (100, 100), output=true[preidx],
             mode=['constant', 'wrap']
             )
-    conc = utils.concurrent_gaussian_filter(
-        a, (100, 100), flatten_axes=[0, 1, 2], mode=['constant', 'wrap']
+    conc = utils.concurrent_ndimage_filter(
+        a, (100, 100), flatten_axes=[0, 1, 2], mode=['constant', 'wrap'], op=ndimage.gaussian_filter
+    )
+    assert np.all(true == conc)
+
+def test_concurrent_uniform_filter():
+    a = np.random.randn(2,3,4,500,500)
+    true = np.empty_like(a)
+    for preidx in np.ndindex(a.shape[:-2]):
+        ndimage.uniform_filter(
+            a[preidx], (100, 100), output=true[preidx],
+            mode=['constant', 'wrap']
+            )
+    conc = utils.concurrent_ndimage_filter(
+        a, (100, 100), flatten_axes=[0, 1, 2], mode=['constant', 'wrap'], op=ndimage.uniform_filter
     )
     assert np.all(true == conc)
