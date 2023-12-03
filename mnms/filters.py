@@ -1,6 +1,6 @@
 from mnms import utils, transforms
 
-from pixell import enmap, sharp
+from pixell import enmap, curvedsky
 
 import numpy as np
 
@@ -74,7 +74,7 @@ def identity(inp, *args, **kwargs):
 @register('map', 'map', iso_filt_method='harmonic', model=True)
 def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
                                  post_filt_rel_downgrade=1,
-                                 post_filt_downgrade_wcs=None, tweak=False,
+                                 post_filt_downgrade_wcs=None,
                                  lim=1e-6, lim0=None, **kwargs):
     """Filter a map by an ell-dependent matrix in harmonic space. The
     filter is measured as the pseudospectra of the input and returned.
@@ -85,7 +85,7 @@ def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
         Input map to be filtered.
     mask_est : (ny, nx) enmap.ndmap, optional
         Mask applied to imap to estimate pseudospectra, by default 1.
-    ainfo : sharp.alm_info, optional
+    ainfo : curvedsky.alm_info, optional
         ainfo used in the pseudospectrum measurement and subsequent filtering,
         by default None.
     lmax : int, optional
@@ -96,9 +96,6 @@ def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
         bandlimits the measured pseudospectra by the same factor.
     post_filt_downgrade_wcs : astropy.wcs.WCS, optional
         Assign this wcs to the filtered maps, by default None.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
     lim : float, optional
         Set eigenvalues smaller than lim * max(eigenvalues) to zero.
     lim0 : float, optional
@@ -124,7 +121,7 @@ def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
     # measure sqrt_cov_ell and inv_sqrt_cov_ell
     sqrt_cov_ell, inv_sqrt_cov_ell = utils.measure_iso_harmonic(
         imap, 0.5, -0.5, mask_est=mask_est, ainfo=ainfo, lmax=lmax,
-        tweak=tweak, lim=lim, lim0=lim0
+        lim=lim, lim0=lim0
         )
     
     # also need to downgrade the measured power spectra!
@@ -132,14 +129,13 @@ def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
     
     imap = filter_imap_ell(imap, inv_sqrt_cov_ell, ainfo=ainfo, lmax=lmax,
                            post_filt_rel_downgrade=post_filt_rel_downgrade,
-                           post_filt_downgrade_wcs=post_filt_downgrade_wcs,
-                           tweak=tweak)
+                           post_filt_downgrade_wcs=post_filt_downgrade_wcs)
 
     return imap, {'sqrt_cov_ell': sqrt_cov_ell}
 
 @register('harmonic', 'harmonic', iso_filt_method='harmonic')
 def iso_harmonic_ivar_none(alm, sqrt_cov_ell=None, ainfo=None, lmax=None,
-                           inplace=True, tweak=False, **kwargs):
+                           inplace=True, **kwargs):
     """Filter an alm by an ell-dependent matrix in harmonic space.
 
     Parameters
@@ -148,16 +144,13 @@ def iso_harmonic_ivar_none(alm, sqrt_cov_ell=None, ainfo=None, lmax=None,
         Alm to be filtered.
     sqrt_cov_ell : (*preshape, *preshape, nell) np.ndarray, optional
         Matrix filter to be applied, by default None.
-    ainfo : sharp.alm_info, optional
+    ainfo : curvedsky.alm_info, optional
         ainfo used in the filtering, by default None.
     lmax : int, optional
         lmax used in the filtering, by default the Nyquist frequency of the
         pixelization.
     inplace : bool, optional
         Filter the alm in place, by default True.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
 
     Returns
     -------
@@ -167,13 +160,13 @@ def iso_harmonic_ivar_none(alm, sqrt_cov_ell=None, ainfo=None, lmax=None,
     if lmax is None:
         lmax = sqrt_cov_ell.shape[-1] - 1
     return utils.ell_filter_correlated(
-        alm, 'harmonic', sqrt_cov_ell, ainfo=ainfo, lmax=lmax, inplace=inplace, tweak=tweak
+        alm, 'harmonic', sqrt_cov_ell, ainfo=ainfo, lmax=lmax, inplace=inplace
     )
 
 @register('map', 'map', iso_filt_method='harmonic', ivar_filt_method='basic', model=True)
 def iso_harmonic_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
                                   lmax=None, post_filt_rel_downgrade=1,
-                                  post_filt_downgrade_wcs=None, tweak=False,
+                                  post_filt_downgrade_wcs=None,
                                   lim=1e-6, lim0=None, **kwargs):
     """Filter a map by another map in map space, and then an ell-dependent
     matrix in harmonic space. The harmonic filter is measured as the
@@ -187,7 +180,7 @@ def iso_harmonic_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
         Map to filter imap with, must broadcast, by default 1.
     mask_est : (ny, nx) enmap.ndmap, optional
         Mask applied to imap to estimate pseudospectra, by default 1.
-    ainfo : sharp.alm_info, optional
+    ainfo : curvedsky.alm_info, optional
         ainfo used in the pseudospectrum measurement and subsequent filtering,
         by default None.
     lmax : int, optional
@@ -198,9 +191,6 @@ def iso_harmonic_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
         bandlimits the measured pseudospectra by the same factor.
     post_filt_downgrade_wcs : astropy.wcs.WCS, optional
         Assign this wcs to the filtered maps, by default None.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
     lim : float, optional
         Set eigenvalues smaller than lim * max(eigenvalues) to zero.
     lim0 : float, optional
@@ -230,14 +220,14 @@ def iso_harmonic_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
     return iso_harmonic_ivar_none_model(
         imap, mask_est=mask_est, ainfo=ainfo, lmax=lmax,
         post_filt_rel_downgrade=post_filt_rel_downgrade, 
-        post_filt_downgrade_wcs=post_filt_downgrade_wcs, tweak=tweak, lim=lim,
+        post_filt_downgrade_wcs=post_filt_downgrade_wcs, lim=lim,
         lim0=lim0
         )
 
 @register('map', 'map', iso_filt_method='harmonic_raw', ivar_filt_method='basic', model=True)
 def iso_harmonic_raw_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
                                       lmax=None, post_filt_rel_downgrade=1,
-                                      post_filt_downgrade_wcs=None, tweak=False,
+                                      post_filt_downgrade_wcs=None,
                                       lim=1e-6, lim0=None, **kwargs):
     """Filter a map by another map in map space, and then an ell-dependent
     matrix in harmonic space. The harmonic filter is measured as the
@@ -252,7 +242,7 @@ def iso_harmonic_raw_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
         Map to filter imap with, must broadcast, by default 1.
     mask_est : (ny, nx) enmap.ndmap, optional
         Mask applied to imap to estimate pseudospectra, by default 1.
-    ainfo : sharp.alm_info, optional
+    ainfo : curvedsky.alm_info, optional
         ainfo used in the pseudospectrum measurement and subsequent filtering,
         by default None.
     lmax : int, optional
@@ -263,9 +253,6 @@ def iso_harmonic_raw_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
         bandlimits the measured pseudospectra by the same factor.
     post_filt_downgrade_wcs : astropy.wcs.WCS, optional
         Assign this wcs to the filtered maps, by default None.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
     lim : float, optional
         Set eigenvalues smaller than lim * max(eigenvalues) to zero.
     lim0 : float, optional
@@ -294,7 +281,7 @@ def iso_harmonic_raw_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
 
     sqrt_cov_ell, inv_sqrt_cov_ell = utils.measure_iso_harmonic(
         imap, 0.5, -0.5, mask_est=mask_est, mask_norm=sqrt_var, ainfo=ainfo, #TODO: is this right in general?
-        lmax=lmax, tweak=tweak, lim=lim, lim0=lim0
+        lmax=lmax, lim=lim, lim0=lim0
         )
     
     # also need to downgrade the measured power spectra!
@@ -305,8 +292,7 @@ def iso_harmonic_raw_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
     
     imap = filter_imap_ell(imap, inv_sqrt_cov_ell, ainfo=ainfo, lmax=lmax,
                            post_filt_rel_downgrade=post_filt_rel_downgrade,
-                           post_filt_downgrade_wcs=post_filt_downgrade_wcs,
-                           tweak=tweak)
+                           post_filt_downgrade_wcs=post_filt_downgrade_wcs)
 
     return imap, {'sqrt_cov_ell': sqrt_cov_ell}
 
@@ -315,7 +301,7 @@ def iso_harmonic_raw_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
 def iso_harmonic_ivar_basic(alm, sqrt_ivar=1, sqrt_cov_ell=None, ainfo=None,
                             lmax=None, inplace=True, shape=None, wcs=None,
                             no_aliasing=True, adjoint=False,
-                            post_filt_rel_downgrade=1, tweak=False, **kwargs):
+                            post_filt_rel_downgrade=1, **kwargs):
     """Filter an alm by an ell-dependent matrix in harmonic space, and then by 
     another map in map space.
 
@@ -328,7 +314,7 @@ def iso_harmonic_ivar_basic(alm, sqrt_ivar=1, sqrt_cov_ell=None, ainfo=None,
         this map.
     sqrt_cov_ell : (*preshape, *preshape, nell) np.ndarray, optional
         Matrix filter to be applied, by default None.
-    ainfo : sharp.alm_info, optional
+    ainfo : curvedsky.alm_info, optional
         ainfo used in the filtering, by default None.
     lmax : int, optional
         lmax used in the filtering, by default the Nyquist frequency of the
@@ -347,9 +333,6 @@ def iso_harmonic_ivar_basic(alm, sqrt_ivar=1, sqrt_cov_ell=None, ainfo=None,
         Whether the alm2map operation is adjoint, by default False.
     post_filt_rel_downgrade : int, optional
         Divide sqrt_ivar by this number, by default 1. 
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
 
     Returns
     -------
@@ -363,11 +346,11 @@ def iso_harmonic_ivar_basic(alm, sqrt_ivar=1, sqrt_cov_ell=None, ainfo=None,
     """
     alm = iso_harmonic_ivar_none(
         alm, sqrt_cov_ell=sqrt_cov_ell, ainfo=ainfo, lmax=lmax, inplace=inplace,
-        tweak=tweak, **kwargs
+        **kwargs
         )
     omap = transforms.REGISTERED_TRANSFORMS['harmonic', 'map'](
         alm, shape=shape, wcs=wcs, ainfo=ainfo, no_aliasing=no_aliasing,
-        adjoint=adjoint, tweak=tweak
+        adjoint=adjoint
         )
     
     # need to handle that preshapes may not be the same. this is akin to what 
@@ -405,7 +388,7 @@ def iso_harmonic_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
                                      ell_highs=None, profile='cosine',
                                      dtype=np.float32, mask_est=1, ainfo=None,
                                      lmax=None, post_filt_rel_downgrade=1,
-                                     post_filt_downgrade_wcs=None, tweak=False,
+                                     post_filt_downgrade_wcs=None,
                                      lim=1e-6, lim0=None, **kwargs):
     """Filter a map by multiple maps in map space, each map for a different 
     range of ells in harmonic space. Then, filter that map by an ell-dependent
@@ -430,7 +413,7 @@ def iso_harmonic_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
         Dtype of the stitching profiles, by default np.float32.
     mask_est : (ny, nx) enmap.ndmap, optional
         Mask applied to imap to estimate pseudospectra, by default 1.
-    ainfo : sharp.alm_info, optional
+    ainfo : curvedsky.alm_info, optional
         ainfo used in the pseudospectrum measurement and subsequent filtering,
         by default None.
     lmax : int, optional
@@ -441,9 +424,6 @@ def iso_harmonic_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
         bandlimits the measured pseudospectra by the same factor.
     post_filt_downgrade_wcs : astropy.wcs.WCS, optional
         Assign this wcs to the filtered maps, by default None.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
     lim : float, optional
         Set eigenvalues smaller than lim * max(eigenvalues) to zero.
     lim0 : float, optional
@@ -469,13 +449,13 @@ def iso_harmonic_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
     # flatten imap
     imap = filter_imap_maps_scaledep(imap, sqrt_ivar, ell_lows=ell_lows,
                                      ell_highs=ell_highs, profile=profile,
-                                     dtype=dtype, tweak=tweak)
+                                     dtype=dtype)
     
     # measure ps and filter by it
     return iso_harmonic_ivar_none_model(
         imap, mask_est=mask_est, ainfo=ainfo, lmax=lmax,
         post_filt_rel_downgrade=post_filt_rel_downgrade, 
-        post_filt_downgrade_wcs=post_filt_downgrade_wcs, tweak=tweak, lim=lim,
+        post_filt_downgrade_wcs=post_filt_downgrade_wcs, lim=lim,
         lim0=lim0
         )
 
@@ -484,7 +464,7 @@ def iso_harmonic_raw_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
                                      ell_highs=None, profile='cosine',
                                      dtype=np.float32, mask_est=1, ainfo=None,
                                      lmax=None, post_filt_rel_downgrade=1,
-                                     post_filt_downgrade_wcs=None, tweak=False,
+                                     post_filt_downgrade_wcs=None,
                                      lim=1e-6, lim0=None, **kwargs):
     """Filter a map by multiple maps in map space, each map for a different 
     range of ells in harmonic space. Then, filter that map by an ell-dependent
@@ -510,7 +490,7 @@ def iso_harmonic_raw_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
         Dtype of the stitching profiles, by default np.float32.
     mask_est : (ny, nx) enmap.ndmap, optional
         Mask applied to imap to estimate pseudospectra, by default 1.
-    ainfo : sharp.alm_info, optional
+    ainfo : curvedsky.alm_info, optional
         ainfo used in the pseudospectrum measurement and subsequent filtering,
         by default None.
     lmax : int, optional
@@ -521,9 +501,6 @@ def iso_harmonic_raw_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
         bandlimits the measured pseudospectra by the same factor.
     post_filt_downgrade_wcs : astropy.wcs.WCS, optional
         Assign this wcs to the filtered maps, by default None.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
     lim : float, optional
         Set eigenvalues smaller than lim * max(eigenvalues) to zero.
     lim0 : float, optional
@@ -552,7 +529,7 @@ def iso_harmonic_raw_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
 
     sqrt_cov_ell, inv_sqrt_cov_ell = utils.measure_iso_harmonic(
         imap, 0.5, -0.5, mask_est=mask_est, mask_norm=sqrt_var, ainfo=ainfo,
-        lmax=lmax, tweak=tweak, lim=lim, lim0=lim0
+        lmax=lmax, lim=lim, lim0=lim0
         )
 
     # also need to downgrade the measured power spectra!
@@ -561,12 +538,11 @@ def iso_harmonic_raw_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
     # flatten imap
     imap = filter_imap_maps_scaledep(imap, sqrt_ivar, ell_lows=ell_lows,
                                      ell_highs=ell_highs, profile=profile,
-                                     dtype=dtype, tweak=tweak)
+                                     dtype=dtype)
 
     imap = filter_imap_ell(imap, inv_sqrt_cov_ell, ainfo=ainfo, lmax=lmax,
                            post_filt_rel_downgrade=post_filt_rel_downgrade,
-                           post_filt_downgrade_wcs=post_filt_downgrade_wcs,
-                           tweak=tweak)
+                           post_filt_downgrade_wcs=post_filt_downgrade_wcs)
 
     return imap, {'sqrt_cov_ell': sqrt_cov_ell}
 
@@ -576,7 +552,7 @@ def iso_harmonic_ivar_scaledep(alm, sqrt_cov_ell=None, sqrt_ivar=1,
                                ell_lows=None, ell_highs=None, profile='cosine',
                                dtype=np.float32, lmax=None, shape=None,
                                wcs=None, no_aliasing=True, adjoint=False,
-                               post_filt_rel_downgrade=1, tweak=False, **kwargs):
+                               post_filt_rel_downgrade=1, **kwargs):
     """Filter an alm by an ell-dependent matrix in harmonic space, and then by 
     multiple maps in map space, each map for a different range of ells in
     harmonic space.
@@ -616,9 +592,6 @@ def iso_harmonic_ivar_scaledep(alm, sqrt_cov_ell=None, sqrt_ivar=1,
         Whether the alm2map operation is adjoint, by default False.
     post_filt_rel_downgrade : int, optional
         Divide sqrt_ivar by this number, by default 1.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
 
     Returns
     -------
@@ -642,15 +615,15 @@ def iso_harmonic_ivar_scaledep(alm, sqrt_cov_ell=None, sqrt_ivar=1,
     # pass ainfo=None, inplace=False so that each filtered alm is bandlimited
     # only to the specified lmax
     filt_omap = 0
-    ainfo = sharp.alm_info(nalm=alm.shape[-1])
+    ainfo = curvedsky.alm_info(nalm=alm.shape[-1])
     for i, sq_iv in enumerate(sqrt_ivar):
         prof = trans_profs[i]
         lmaxi = prof.size - 1
 
         # transfer alm to lower lmax if necessary
         if lmaxi < lmax:
-            ainfoi = sharp.alm_info(lmax=lmaxi)
-            _alm = sharp.transfer_alm(ainfo, alm, ainfoi)
+            ainfoi = curvedsky.alm_info(lmax=lmaxi)
+            _alm = curvedsky.transfer_alm(ainfo, alm, ainfoi)
         else:
             _alm = alm
 
@@ -659,8 +632,7 @@ def iso_harmonic_ivar_scaledep(alm, sqrt_cov_ell=None, sqrt_ivar=1,
             sqrt_cov_ell=sqrt_cov_ell[..., :lmaxi + 1]*prof,
             ainfo=None, lmax=lmaxi, inplace=False, shape=shape, wcs=wcs,
             no_aliasing=no_aliasing, adjoint=adjoint,
-            post_filt_rel_downgrade=1, # one multiplication instead of many to speed up
-            tweak=tweak
+            post_filt_rel_downgrade=1 # one multiplication instead of many to speed up
         )
     
     # one multiplication instead of many to speed up
@@ -670,7 +642,7 @@ def iso_harmonic_ivar_scaledep(alm, sqrt_cov_ell=None, sqrt_ivar=1,
 
 def filter_imap_ell(imap, lfilter_mat, ainfo=None, lmax=None,
                     post_filt_rel_downgrade=1,
-                    post_filt_downgrade_wcs=None, tweak=False):
+                    post_filt_downgrade_wcs=None):
     """Filter a map by an ell-dependent matrix in harmonic space. This is 
     basically a thin wrapper around utils.ell_filter_correlated(inbasis='map'),
     and including post_filt_downgrading.
@@ -681,7 +653,7 @@ def filter_imap_ell(imap, lfilter_mat, ainfo=None, lmax=None,
         Input map to be filtered.
     lfilter_mat : (*preshape, *preshape, nell) array-like
         Matrix to apply to imap in harmonic space.
-    ainfo : sharp.alm_info, optional
+    ainfo : curvedsky.alm_info, optional
         ainfo used in the filtering, by default None.
     lmax : int, optional
         lmax used in the filtering, by default the Nyquist frequency of the
@@ -691,9 +663,6 @@ def filter_imap_ell(imap, lfilter_mat, ainfo=None, lmax=None,
         bandlimits the measured pseudospectra by the same factor.
     post_filt_downgrade_wcs : astropy.wcs.WCS, optional
         Assign this wcs to the filtered maps, by default None.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
 
     Returns
     -------
@@ -707,7 +676,7 @@ def filter_imap_ell(imap, lfilter_mat, ainfo=None, lmax=None,
     # inplace = True doesn't overwrite imap, rather internal optimization
     imap = utils.ell_filter_correlated(
         imap, 'map', lfilter_mat, map2basis='harmonic', ainfo=ainfo,
-        lmax=lmax, inplace=True, tweak=tweak
+        lmax=lmax, inplace=True
         ) 
 
     # possibly do rel downgrade
@@ -731,7 +700,7 @@ def filter_imap_ell(imap, lfilter_mat, ainfo=None, lmax=None,
     return imap
 
 def filter_imap_maps_scaledep(imap, mfilters, ell_lows=None, ell_highs=None,
-                              profile='cosine', dtype=np.float32, tweak=False):
+                              profile='cosine', dtype=np.float32):
     """Filter a map by other maps in an ell-dependent manner. That is, each
     filter map will be applied to the input over only a range of ells, with 
     some "stitching" profile that matches their boundaries.
@@ -752,9 +721,6 @@ def filter_imap_maps_scaledep(imap, mfilters, ell_lows=None, ell_highs=None,
         Stitching profile in harmonic space, by default 'cosine'.
     dtype : np.dtype, optional
         Dtype of the stitching profiles, by default np.float32.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
 
     Returns
     -------
@@ -783,17 +749,16 @@ def filter_imap_maps_scaledep(imap, mfilters, ell_lows=None, ell_highs=None,
         prof = trans_profs[i]
         lmaxi = prof.size - 1
         if i < len(mfilters) - 1:
-            filt_imap += utils.ell_filter(imap, prof, lmax=lmaxi, tweak=tweak) * mfilter
+            filt_imap += utils.ell_filter(imap, prof, lmax=lmaxi) * mfilter
         else:
-            filt_imap += (imap - utils.ell_filter(imap, 1 - prof, lmax=lmaxi, tweak=tweak)) * mfilter
+            filt_imap += (imap - utils.ell_filter(imap, 1 - prof, lmax=lmaxi)) * mfilter
     
     return filt_imap
 
 # TODO: this is highly not DRY code given above function, but they are tricky
 # to merge cleanly
 def filter_imaps_scaledep(imaps, ell_lows=None, ell_highs=None,
-                          profile='cosine', exp=0.5, dtype=np.float32,
-                          tweak=False):
+                          profile='cosine', exp=0.5, dtype=np.float32):
     """Filter maps in an ell-dependent manner. That is, each input map will be
     filtered by some "stitching" profile over a range of ells, and the sum of
     them is returned.
@@ -815,9 +780,6 @@ def filter_imaps_scaledep(imaps, ell_lows=None, ell_highs=None,
         admissibility criterion corresponds to e=0.5.
     dtype : np.dtype, optional
         Dtype of the stitching profiles, by default np.float32.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
 
     Returns
     -------
@@ -847,8 +809,8 @@ def filter_imaps_scaledep(imaps, ell_lows=None, ell_highs=None,
         lmaxi = prof.size - 1
         if i < len(imaps) - 1:
             omap = enmap.empty(imaps[-1].shape, imaps[-1].wcs, imaps[-1].dtype)
-            filt_imap += utils.ell_filter(imap, prof, omap=omap, lmax=lmaxi, tweak=tweak)
+            filt_imap += utils.ell_filter(imap, prof, omap=omap, lmax=lmaxi)
         else:
-            filt_imap += (imap - utils.ell_filter(imap, 1 - prof, lmax=lmaxi, tweak=tweak))
+            filt_imap += (imap - utils.ell_filter(imap, 1 - prof, lmax=lmaxi))
     
     return filt_imap

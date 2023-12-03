@@ -1,6 +1,6 @@
 from mnms import utils
 
-from pixell import enmap, sharp
+from pixell import enmap, curvedsky
 
 import h5py
 import numpy as np
@@ -88,7 +88,7 @@ def get_harmonic_noise_sim(sqrt_cov_mat, seed, filter_only=True, nthread=0,
     the sim may also not be good, because this class cannot model any
     such inhomogeneities.
     """
-    ainfo = sharp.alm_info(sqrt_cov_mat.shape[-1] - 1)
+    ainfo = curvedsky.alm_info(sqrt_cov_mat.shape[-1] - 1)
     nalm = ainfo.nelem
     len_pre = len(sqrt_cov_mat.shape[:-1])
     assert len_pre % 2 == 0, \

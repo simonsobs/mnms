@@ -1,5 +1,7 @@
 from mnms import utils
 
+from pixell import enmap, curvedsky
+
 
 # helpful for namespace management in client package development. 
 # NOTE: this design pattern inspired by the super-helpful
@@ -48,7 +50,7 @@ def identity(inp, *args, **kwargs):
 
 @register('map', 'harmonic')
 def map2alm(imap, ainfo=None, lmax=None, no_aliasing=True, adjoint=False,
-            tweak=False, **kwargs):
+            **kwargs):
     """From map to harmonic space.
 
     Parameters
@@ -64,9 +66,6 @@ def map2alm(imap, ainfo=None, lmax=None, no_aliasing=True, adjoint=False,
         lmax, by default True.
     adjoint : bool, optional
         Whether the map2alm operation is adjoint, by default False.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
 
     Returns
     -------
@@ -74,11 +73,11 @@ def map2alm(imap, ainfo=None, lmax=None, no_aliasing=True, adjoint=False,
         The transformed alm.
     """
     return utils.map2alm(imap, ainfo=ainfo, lmax=lmax, no_aliasing=no_aliasing,
-                         alm2map_adjoint=adjoint, tweak=tweak)
+                         adjoint=adjoint)
 
 @register('harmonic', 'map')
 def alm2map(alm, shape=None, wcs=None, dtype=None, ainfo=None, no_aliasing=True,
-            adjoint=False, tweak=False, **kwargs):
+            adjoint=False, **kwargs):
     """From harmonic to map space.
 
     Parameters
@@ -98,9 +97,6 @@ def alm2map(alm, shape=None, wcs=None, dtype=None, ainfo=None, no_aliasing=True,
         by default True.
     adjoint : bool, optional
         Whether the alm2map operation is adjoint, by default False.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
 
     Returns
     -------
@@ -108,7 +104,7 @@ def alm2map(alm, shape=None, wcs=None, dtype=None, ainfo=None, no_aliasing=True,
         The transformed map.
     """
     return utils.alm2map(alm, shape=shape, wcs=wcs, dtype=dtype, ainfo=ainfo,
-                         no_aliasing=no_aliasing, map2alm_adjoint=adjoint, tweak=tweak)
+                         no_aliasing=no_aliasing, adjoint=adjoint)
 
 @register('map', 'fourier')
 def map2fourier(imap, nthread=0, normalize='ortho', adjoint=False, **kwargs):
@@ -131,7 +127,7 @@ def map2fourier(imap, nthread=0, normalize='ortho', adjoint=False, **kwargs):
         The transformed map.
     """
     return utils.rfft(imap, nthread=nthread, normalize=normalize,
-                      adjoint_ifft=adjoint)
+                      adjoint=adjoint)
 
 @register('fourier', 'map')
 def fourier2map(kmap, n=None, nthread=0, normalize='ortho', adjoint=False,
@@ -158,12 +154,12 @@ def fourier2map(kmap, n=None, nthread=0, normalize='ortho', adjoint=False,
         The transformed map.
     """
     return utils.irfft(kmap, n=n, nthread=nthread, normalize=normalize,
-                      adjoint_fft=adjoint)
+                       adjoint=adjoint)
 
 @register('harmonic', 'fourier')
 def alm2fourier(alm, shape=None, wcs=None, dtype=None, ainfo=None,
                 no_aliasing=True, nthread=0, normalize='ortho', adjoint=False,
-                tweak=False, **kwargs):
+                **kwargs):
     """From harmonic to fourier space.
 
     Parameters
@@ -187,24 +183,20 @@ def alm2fourier(alm, shape=None, wcs=None, dtype=None, ainfo=None,
         Rfft normalization, by default 'ortho'. See utils.rfft.
     adjoint : bool, optional
         Whether the alm2map and rfft operation are adjoint, by default False.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
 
     Returns
     -------
     (*preshape, ny, nx//2+1) enmap.ndmap
         The transformed map.
     """
-    _map = alm2map(alm, shape=shape, wcs=wcs, ainfo=ainfo,
-                   no_aliasing=no_aliasing, adjoint=adjoint, tweak=tweak)
+    _map = alm2map(alm, shape=shape, wcs=wcs, dtype=dtype, ainfo=ainfo,
+                   no_aliasing=no_aliasing, adjoint=adjoint)
     return map2fourier(_map, nthread=nthread, normalize=normalize,
                        adjoint=adjoint) 
 
 @register('fourier', 'harmonic')
 def fourier2alm(kmap, n=None, nthread=0, normalize='ortho', ainfo=None,
-                lmax=None, no_aliasing=True, adjoint=False, tweak=False,
-                **kwargs):
+                lmax=None, no_aliasing=True, adjoint=False, **kwargs):
     """From fourier to harmonic space.
 
     Parameters
@@ -227,9 +219,6 @@ def fourier2alm(kmap, n=None, nthread=0, normalize='ortho', ainfo=None,
         lmax, by default True.
     adjoint : bool, optional
         Whether the irfft and map2alm operation are adjoint, by default False.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
 
     Returns
     -------
@@ -239,4 +228,4 @@ def fourier2alm(kmap, n=None, nthread=0, normalize='ortho', ainfo=None,
     _map = fourier2map(kmap, n=n, nthread=nthread, normalize=normalize,
                        adjoint=adjoint)
     return map2alm(_map, ainfo=ainfo, lmax=lmax, no_aliasing=no_aliasing,
-                   adjoint=adjoint, tweak=tweak)
+                   adjoint=adjoint)

@@ -13,8 +13,6 @@ from itertools import product
 from abc import ABC, abstractmethod
 import warnings
 
-TWEAK = True
-
 
 class DataManager(io.Params):
 
@@ -416,8 +414,8 @@ class DataManager(io.Params):
                     # if ivar_lmax is None, don't bandlimit it
                     if ivar_lmax:
                         _ivar = utils.alm2map(
-                            utils.map2alm(_ivar, lmax=ivar_lmax, tweak=TWEAK),
-                            shape=ivar.shape, wcs=ivar.wcs, tweak=TWEAK
+                            utils.map2alm(_ivar, lmax=ivar_lmax),
+                            shape=ivar.shape, wcs=ivar.wcs
                             )
 
                     # zero-out any numerical negative ivar
@@ -1486,7 +1484,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             lmax=lmax, no_aliasing=True, shape=shape, wcs=wcs,
             dtype=self._dtype, n=shape[-1], nthread=0, normalize='ortho',
             mask_obs=mask_obs, mask_est=mask_est, post_filt_downgrade_wcs=wcs,
-            sqrt_ivar=sqrt_ivar, tweak=TWEAK
+            sqrt_ivar=sqrt_ivar
             )
 
         assert len(filter_kwargs.keys() & _filter_kwargs.keys()) == 0, \
@@ -1749,7 +1747,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         filter_kwargs = dict(
             lmax=lmax, no_aliasing=True, shape=shape, wcs=wcs,
             dtype=self._dtype, n=shape[-1], nthread=0, normalize='ortho',
-            mask_obs=mask_obs, sqrt_ivar=sqrt_ivar, inplace=True, tweak=TWEAK
+            mask_obs=mask_obs, sqrt_ivar=sqrt_ivar, inplace=True
             )
 
         assert len(filter_kwargs.keys() & _filter_kwargs.keys()) == 0, \
@@ -1768,7 +1766,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                 )
             sim *= mask_obs
             if alm:
-                sim = utils.map2alm(sim, lmax=lmax, tweak=TWEAK)
+                sim = utils.map2alm(sim, lmax=lmax)
 
         # keep, write data if requested
         if keep_model and not model_from_cache:

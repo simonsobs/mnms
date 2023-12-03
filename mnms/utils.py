@@ -1,5 +1,5 @@
 from sofind import utils as s_utils
-from pixell import enmap, curvedsky, sharp, colorize, cgrid
+from pixell import enmap, curvedsky, colorize, cgrid
 import healpy as hp
 from enlib import array_ops
 from optweight import alm_c_utils
@@ -23,6 +23,10 @@ import os
 import hashlib
 import warnings
 import argparse
+
+
+CURVEDSKY_METHOD = 'cyl'
+
 
 # Utility functions to support tiling classes and functions. Just keeping code organized so I don't get whelmed.
 
@@ -627,7 +631,7 @@ def get_ps_mat(inp, outbasis, exp, lim=1e-6, lim0=None, inbasis='harmonic',
     if inbasis == 'harmonic':
         preshape = inp.shape[:-1]
         ncomp = np.prod(preshape, dtype=int)
-        lmax = sharp.nalm2lmax(inp.shape[-1])
+        lmax = curvedsky.nalm2lmax(inp.shape[-1])
         mat = np.empty((*preshape, *preshape, lmax+1), dtype=inp.real.dtype)
 
         seen_pairs = []
@@ -723,7 +727,7 @@ def get_ps_mat(inp, outbasis, exp, lim=1e-6, lim0=None, inbasis='harmonic',
     return out
 
 def measure_iso_harmonic(imap, *exp, mask_est=1, mask_norm=1, ainfo=None,
-                         lmax=None, tweak=False, lim=1e-6, lim0=None):
+                         lmax=None, lim=1e-6, lim0=None):
     """Measure all auto- and cross-spectra of imap, raised to various matrix
     exponents at each ell.
 
@@ -740,14 +744,11 @@ def measure_iso_harmonic(imap, *exp, mask_est=1, mask_norm=1, ainfo=None,
         a draw from the normalized spectra, multiplied by mask_norm and then
         measured in mask_est, has the same pseudospectrum (on average) as 
         imap measured in mask_est, by default 1.
-    ainfo : sharp.alm_info, optional
+    ainfo : curvedsky.alm_info, optional
         ainfo used in the pseudospectrum measurement, by default None.
     lmax : int, optional
         lmax used in the pseudospectrum measurement, by default the Nyquist
         frequency of the pixelization.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
     lim : float, optional
         Set eigenvalues smaller than lim * max(eigenvalues) to zero.
     lim0 : float, optional
@@ -783,7 +784,7 @@ def measure_iso_harmonic(imap, *exp, mask_est=1, mask_norm=1, ainfo=None,
     w2 /= 4*np.pi
     
     # measure correlated pseudo spectra for filtering
-    alm = map2alm(imap * mask_est, ainfo=ainfo, lmax=lmax, tweak=tweak)
+    alm = map2alm(imap * mask_est, ainfo=ainfo, lmax=lmax)
     out = []
     for e in exp:
         out.append(get_ps_mat(alm, 'harmonic', e, lim=lim, lim0=lim0) / w2**e)
@@ -792,7 +793,7 @@ def measure_iso_harmonic(imap, *exp, mask_est=1, mask_norm=1, ainfo=None,
     return out
 
 def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic', 
-                          ainfo=None, lmax=None, tweak=False, nthread=0,
+                          ainfo=None, lmax=None, nthread=0,
                           inplace=False):
     """Multiply map data by correlation matrix in frequency space.
 
@@ -809,15 +810,12 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
         'harmonic' or 'fourier', by default 'harmonic'. If inbasis is 'map',
         inp is transformed into map2basis before this function is recalled
         in that basis. Therefore, lfilter_mat must be provided in that basis.
-    ainfo : sharp.alm_info, optional
+    ainfo : curvedsky.alm_info, optional
         Info for inp if inbasis is 'harmonic', by default None. Also used in
         SHT if inbasis is 'map' and 'map2basis' is 'harmonic'.
     lmax : int, optional
         Bandlimit of alm's if inbasis is 'harmonic', by default None. Also used
         in SHT if inbasis is 'map' and 'map2basis' is 'harmonic'.
-    tweak : bool, optional
-        To pass to map2alm if inbasis is 'map' and map2basis is 'harmonic',
-        by default False.
     nthread : int, optional
         Number of threads to use in filtering if inbasis is 'fourier', by
         default 0. If 0, the number of available cores. Also used in rFFT
@@ -856,7 +854,7 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
         if ainfo is None:
             if lmax is None:
                 raise ValueError('If ainfo is None, must provide lmax')
-            ainfo = sharp.alm_info(lmax)
+            ainfo = curvedsky.alm_info(lmax)
         out = alm_c_utils.lmul(inp, lfilter_mat, ainfo, inplace=inplace)
 
         # reshape
@@ -889,14 +887,14 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
 
     elif inbasis == 'map':
         if map2basis == 'harmonic':
-            alm_inp = map2alm(inp, ainfo=ainfo, lmax=lmax, tweak=tweak)
+            alm_inp = map2alm(inp, ainfo=ainfo, lmax=lmax)
             filtered_alm = ell_filter_correlated(
                 alm_inp, 'harmonic', lfilter_mat, ainfo=ainfo, lmax=lmax,
                 inplace=inplace
                 )
             out = alm2map(
                 filtered_alm, shape=inshape, wcs=inp.wcs, dtype=inp.dtype,
-                ainfo=ainfo, tweak=tweak
+                ainfo=ainfo
                 )
         
         # lfilter_mat in fourier space assumes real fft
@@ -916,7 +914,8 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
     return out
 
 # further extended here for ffts
-def ell_filter(imap, lfilter, omap=None, mode='curvedsky', ainfo=None, lmax=None, nthread=0, tweak=False):
+def ell_filter(imap, lfilter, omap=None, mode='curvedsky', ainfo=None,
+               lmax=None, nthread=0):
     """Filter a map by an isotropic function of harmonic ell.
 
     Parameters
@@ -932,7 +931,7 @@ def ell_filter(imap, lfilter, omap=None, mode='curvedsky', ainfo=None, lmax=None
         wcs, and dtype as imap.
     mode : str, optional
         The convolution space: 'curvedsky' or 'fft', by default 'curvedsky'.
-    ainfo : sharp.alm_info, optional
+    ainfo : curvedsky.alm_info, optional
         Info for the alms, by default None.
     lmax : int, optional
         Bandlimit of transforms, by default None. If None, will 
@@ -940,9 +939,6 @@ def ell_filter(imap, lfilter, omap=None, mode='curvedsky', ainfo=None, lmax=None
     nthread : int, optional
         Threads to use in FFTs, by default 0. If 0, will be
         the result of get_cpu_count()
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
 
     Returns
     -------
@@ -968,10 +964,10 @@ def ell_filter(imap, lfilter, omap=None, mode='curvedsky', ainfo=None, lmax=None
         lfilter = np.broadcast_to(lfilter[..., :lmax+1], (*imap.shape[:-2], lmax+1))
 
         # perform the filter
-        alm = map2alm(imap, ainfo=ainfo, lmax=lmax, tweak=tweak)
+        alm = map2alm(imap, ainfo=ainfo, lmax=lmax)
 
         if ainfo is None:
-            ainfo = sharp.alm_info(lmax)
+            ainfo = curvedsky.alm_info(lmax)
         for preidx in np.ndindex(imap.shape[:-2]):
             assert alm[preidx].ndim == 1
             assert lfilter[preidx].ndim == 1
@@ -980,173 +976,12 @@ def ell_filter(imap, lfilter, omap=None, mode='curvedsky', ainfo=None, lmax=None
                 )
         if omap is None:
             omap = enmap.empty(imap.shape, imap.wcs, dtype=imap.dtype)
-        return alm2map(alm, omap, ainfo=ainfo, tweak=tweak)
-
-# forces shape to (num_arrays, num_splits, num_pol, ny, nx) and optionally averages over splits
-def ell_flatten(imap, mask_obs=1, mask_est=1, return_sqrt_cov=True, per_split=True, mode='curvedsky',
-                lmax=None, ainfo=None, ledges=None, weights=None, nthread=0, tweak=False):
-    """Flattens a map 'by its own power spectrum', i.e., such that the resulting map
-    has a power spectrum of unity.
-
-    Parameters
-    ----------
-    imap : enmap.ndmap
-        Input map to flatten.
-    mask_obs : enmap.ndmap, optional
-        A spatial window to apply to the map, by default 1. Note that, if applied,
-        the resulting 'flat' map will also masked.
-    mask_est : enmap.ndmap, optional
-        Mask used to estimate the filter which whitens the data.
-    return_sqrt_cov : bool, optional
-        If True, return the 'sqrt_covariance' which is the filter that flattens
-        the map, by default False.
-    per_split : bool, optional
-        If True, filter each split by its own power spectrum. If False, filter
-        each split by the average power spectrum (averaged over splits), by 
-        default False.
-    mode : str, optional
-        The transform used to perform the flattening, either 'fft' or 'curvedsky',
-        by default 'curvedsky'.
-    lmax : int, optional
-        If mode is 'curvedsky', the bandlimit of the transform, by default None.
-        If None, will be inferred from imap.wcs.
-    ainfo : sharp.alm_info, optional
-        If mode is 'curvedsky', the alm info of the transform, by default None.
-    ledges : array-like, optional
-        If mode is 'fft', the bin edges in ell-space to construct the radial
-        power spectrum, by default None (but must be supplied if mode is 'fft').
-    weights : array-like, optional
-        If mode is 'fft', apply weights to each mode in Fourier space before 
-        binning, by default None. Note if supplied, must broadcast with imap.
-    nthread : int, optional
-        If mode is 'fft', the number of threads to pass to enamp.fft, by default 0.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
-
-    Returns
-    -------
-    enmap.ndmap or (enmap.ndmap, np.ndarray)
-        The (num_arrays, num_splits, num_pol, ny, nx) flattened map, or if
-        return_cov_sqrt is True, the flattened map and the 
-        (num_arrays, num_splits, num_pol, nell) 'sqrt_covariance' used to
-        flatten the map.
-
-    Raises
-    ------
-    NotImplementedError
-        Raised if 'mode' is not 'fft' or 'curvedsky'.
-    
-    Notes
-    -----
-    If per_split is False, num_splits=1 for the 'sqrt_covariance' only.
-    """
-    assert imap.ndim in range(2, 6)
-    imap = atleast_nd(imap, 5)
-    num_arrays, num_splits, num_pol = imap.shape[:-2]
-    
-    if mode == 'fft':
-        # get the power -- since filtering maps by their own power, only need diagonal.
-        # also apply mask correction
-        kmap = enmap.fft(imap*mask_est, normalize='phys', nthread=nthread)
-        w2 = np.mean(mask_est**2)
-        smap = (kmap * np.conj(kmap)).real / w2
-        if not per_split:
-            smap = smap.mean(axis=-4, keepdims=True).real
-
-        # bin the 2D power into ledges and take the square-root
-        modlmap = smap.modlmap().astype(imap.dtype, copy=False) # modlmap is np.float64 always...
-        smap = radial_bin(smap, modlmap, ledges, weights=weights) ** 0.5
-        sqrt_cls = []
-        lfuncs = []
-        
-        for i in range(num_arrays):
-            for j in range(num_splits):
-
-                # there is only one "filter split" if not per_split
-                jfilt = j
-                if not per_split:
-                    jfilt = 0
-
-                for k in range(num_pol):
-                    # interpolate to the center of the bins.
-                    lfunc, y = interp1d_bins(ledges, smap[i, jfilt, k], return_vals=True, kind='cubic', bounds_error=False)
-                    sqrt_cls.append(y)
-                    lfuncs.append(lfunc)
-
-        # Re-do the FFT for the map masked with the bigger mask.
-        kmap[:] = enmap.fft(imap*mask_obs, normalize='phys', nthread=nthread)
-
-        # Apply the filter to the maps.
-        for i in range(num_arrays):
-            for j in range(num_splits):
-
-                jfilt = j if not per_split else 0
-
-                for k in range(num_pol):
-
-                    flat_idx = np.ravel_multi_index((i, j, k), (num_arrays, num_splits, num_pol))                
-                    lfilter = 1/lfuncs[flat_idx](modlmap)
-                    assert np.all(np.isfinite(lfilter)), f'{i,jfilt,k}'
-                    assert np.all(lfilter > 0)
-                    kmap[i,j,k] *= lfilter
-                
-        sqrt_cls = np.array(sqrt_cls).reshape(num_arrays, num_splits, num_pol, -1)
-
-        if return_sqrt_cov:
-            return enmap.ifft(kmap, normalize='phys', nthread=nthread).real, sqrt_cls
-        else:
-            return enmap.ifft(kmap, normalize='phys', nthread=nthread).real
-    
-    elif mode == 'curvedsky':
-        if lmax is None:
-            lmax = lmax_from_wcs(imap.wcs)
-        if ainfo is None:
-            ainfo = sharp.alm_info(lmax)
-
-        # since filtering maps by their own power only need diagonal
-        alm = map2alm(imap*mask_est, ainfo=ainfo, lmax=lmax, tweak=tweak)
-        cl = alm2cl(alm)
-        if not per_split:
-            cl = cl.mean(axis=-3, keepdims=True)
-
-        # apply correction and take sqrt.
-        # the filter is 1/sqrt
-        pmap = enmap.pixsizemap(mask_est.shape, mask_est.wcs)
-        w2 = np.sum((mask_est**2)*pmap) / np.pi / 4.
-        sqrt_cl = (cl / w2)**0.5
-        lfilter = np.zeros_like(sqrt_cl)
-        np.divide(1, sqrt_cl, where=sqrt_cl!=0, out=lfilter)
-
-        # alm_c_utils.lmul cannot blindly broadcast filters and alms
-        lfilter = np.broadcast_to(lfilter, (*imap.shape[:-2], lfilter.shape[-1]))
-
-        # Re-do the SHT for the map masked with the bigger mask.
-        alm = map2alm(imap*mask_obs, alm=alm, ainfo=ainfo, lmax=lmax, tweak=tweak)
-        for preidx in np.ndindex(imap.shape[:-2]):
-            assert alm[preidx].ndim == 1
-            assert lfilter[preidx].ndim == 1
-            alm[preidx] = alm_c_utils.lmul(
-                alm[preidx], lfilter[preidx], ainfo
-                )
-
-        # finally go back to map space
-        omap = alm2map(alm, shape=imap.shape, wcs=imap.wcs, dtype=imap.dtype, ainfo=ainfo, tweak=tweak)
-
-        if return_sqrt_cov:
-            return omap, sqrt_cl
-        else:
-            return omap
-
-    else:
-        raise NotImplementedError('Only implemented modes are fft and curvedsky')
+        return alm2map(alm, omap, ainfo=ainfo)
 
 def map2alm(imap, alm=None, ainfo=None, lmax=None, no_aliasing=True, 
-            alm2map_adjoint=False, tweak=False, **kwargs):
-    """A wrapper around pixell.curvedsky.map2alm that performs proper
-    looping over array 'pre-dimensions'. Always performs a spin[0,2]
-    transform if imap.ndim >= 3; therefore, 'pre-dimensions' are those
-    at axes <= -4. 
+            adjoint=False, **kwargs):
+    """A wrapper around pixell.curvedsky.map2alm that optionally checks for a
+    no aliasing case. 
 
     Parameters
     ----------
@@ -1155,18 +990,15 @@ def map2alm(imap, alm=None, ainfo=None, lmax=None, no_aliasing=True,
     alm : arr, optional
         Array to write result into, by default None. If None, will be
         built based off other kwargs.
-    ainfo : sharp.alm_info, optional
+    ainfo : curvedsky.alm_info, optional
         An alm_info object, by default None.
     lmax : int, optional
         Transform bandlimit, by default None.
     no_aliasing : bool, optional
         Enforce that the lmax of the transform is not higher than that
         permitted by the imap pixelization, by default True.
-    alm2map_adjoint : bool, optional
+    adjoint : bool, optional
         Perform adjoint transform, by default False.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
     kwargs : dict, optional
         Other kwargs to pass to curvedsky.map2alm.
 
@@ -1174,24 +1006,20 @@ def map2alm(imap, alm=None, ainfo=None, lmax=None, no_aliasing=True,
     -------
     ndarray
         The alms of the transformed map.
-    """
+    """ 
     if alm is None:
         alm, _ = curvedsky.prepare_alm(
             alm=alm, ainfo=ainfo, lmax=lmax, pre=imap.shape[:-2], dtype=imap.dtype
             )
+        
     if no_aliasing:
-        lmax = sharp.nalm2lmax(alm.shape[-1])
+        lmax = curvedsky.nalm2lmax(alm.shape[-1])
         if lmax_from_wcs(imap.wcs) < lmax:
             raise ValueError(f'Pixelization cdelt: {imap.wcs.wcs.cdelt} cannot'
                              f' support SH transforms of requested lmax: {lmax}')
-    for preidx in np.ndindex(imap.shape[:-3]):
-        # map2alm, alm2map doesn't work well for other dims beyond pol component
-        assert imap[preidx].ndim in [2, 3]
-        curvedsky.map2alm(
-            imap[preidx], alm=alm[preidx], ainfo=ainfo, lmax=lmax, 
-            alm2map_adjoint=alm2map_adjoint, tweak=tweak, **kwargs
-            )
-    return alm
+        
+    return curvedsky.map2alm(imap, alm=alm, ainfo=ainfo, lmax=lmax,
+                             adjoint=adjoint, method=CURVEDSKY_METHOD, **kwargs)
 
 def alm2cl(alm1, alm2=None, method='curvedsky'):
     """Wrapper around common alm2cl methods. Only takes auto-spectra of
@@ -1217,7 +1045,7 @@ def alm2cl(alm1, alm2=None, method='curvedsky'):
         assert alm1.shape == alm2.shape, \
             'Supplied alms must have same shapes'
     
-    lmax = sharp.nalm2lmax(alm1.shape[-1])
+    lmax = curvedsky.nalm2lmax(alm1.shape[-1])
     preshape = alm1.shape[:-1]
     out = np.empty((*preshape, lmax+1), dtype=alm1.real.dtype)
 
@@ -1239,11 +1067,9 @@ def alm2cl(alm1, alm2=None, method='curvedsky'):
     return out
 
 def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None, 
-            no_aliasing=True, map2alm_adjoint=False, tweak=False, **kwargs):
-    """A wrapper around pixell.curvedsky.alm2map that performs proper
-    looping over array 'pre-dimensions'. Always performs a spin[0,2]
-    transform if imap.ndim >= 3; therefore, 'pre-dimensions' are those
-    at axes <= -4. 
+            no_aliasing=True, adjoint=False, **kwargs):
+    """A wrapper around pixell.curvedsky.alm2map that optionally checks for a
+    no aliasing case. 
 
     Parameters
     ----------
@@ -1261,16 +1087,13 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None,
     dtype : np.dtype, optional
         The data type of the output map, by default None. Only used if omap
         is None. If omap is None and dtype is None, will be set to alm.real.dtype.
-    ainfo : sharp.alm_info, optional
+    ainfo : curvedsky.alm_info, optional
         An alm_info object, by default None.
     no_aliasing : bool, optional
         Enforce that the lmax of the transform is not higher than that
         permitted by the omap pixelization, by default True.
-    map2alm_adjoint : bool, optional
+    adjoint : bool, optional
         Perform adjoint transform, by default False.
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
     kwargs : dict, optional
         Other kwargs to pass to curvedsky.alm2map.
 
@@ -1283,19 +1106,15 @@ def alm2map(alm, omap=None, shape=None, wcs=None, dtype=None, ainfo=None,
         if dtype is None:
             dtype = alm.real.dtype
         omap = enmap.empty((*alm.shape[:-1], *shape[-2:]), wcs=wcs, dtype=dtype)
+
     if no_aliasing:
-        lmax = sharp.nalm2lmax(alm.shape[-1])
+        lmax = curvedsky.nalm2lmax(alm.shape[-1])
         if lmax_from_wcs(omap.wcs) < lmax:
             raise ValueError(f'Pixelization cdelt: {omap.wcs.wcs.cdelt} cannot'
                              f' support SH transforms of requested lmax: {lmax}')
-    for preidx in np.ndindex(alm.shape[:-2]):
-        # map2alm, alm2map doesn't work well for other dims beyond pol component
-        assert omap[preidx].ndim in [2, 3]
-        omap[preidx] = curvedsky.alm2map(
-            alm[preidx], omap[preidx], ainfo=ainfo, 
-            map2alm_adjoint=map2alm_adjoint, tweak=tweak, **kwargs
-            )
-    return omap
+
+    return curvedsky.alm2map(alm, omap, ainfo=ainfo, adjoint=adjoint,
+                             method=CURVEDSKY_METHOD, **kwargs)
 
 # this is twice the theoretical CAR bandlimit!
 def lmax_from_wcs(wcs, threshold=1e-6):
@@ -1492,8 +1311,7 @@ def fourier_downgrade(imap, dg, variant='cc', area_pow=0., dtype=None):
 
         return mult * irfft(okmap, omap=omap)
 
-def harmonic_downgrade(imap, dg, variant='cc', area_pow=0., dtype=None,
-                       tweak=False):
+def harmonic_downgrade(imap, dg, variant='cc', area_pow=0., dtype=None):
     """Downgrade a map by harmonic resampling into a geometry that adheres
     to Clenshaw-Curtis quadrature. This will bandlimit the input signal in 
     harmonic space which may introduce ringing around bright objects, but 
@@ -1514,9 +1332,6 @@ def harmonic_downgrade(imap, dg, variant='cc', area_pow=0., dtype=None,
     dtype : np.dtype, optional
         If not None, cast the input map to this data type, by default None.
         Useful for allowing boolean masks to be "interpolated."
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False.
 
     Returns
     -------
@@ -1533,13 +1348,13 @@ def harmonic_downgrade(imap, dg, variant='cc', area_pow=0., dtype=None,
         omap = empty_downgrade(imap, dg, variant=variant)
         
         lmax = lmax_from_wcs(imap.wcs) // dg # new bandlimit
-        ainfo = sharp.alm_info(lmax)
-        alm = map2alm(imap, ainfo=ainfo, lmax=lmax, tweak=tweak)
+        ainfo = curvedsky.alm_info(lmax)
+        alm = map2alm(imap, ainfo=ainfo, lmax=lmax)
 
         # scale values by area factor, e.g. dg^2 if ivar maps
         mult = dg ** (2*area_pow)
 
-        return mult * alm2map(alm, omap=omap, ainfo=ainfo, tweak=tweak)
+        return mult * alm2map(alm, omap=omap, ainfo=ainfo)
 
 # inspired by optweight.map_utils.gauss2guass
 def interpol_downgrade_cc_quad(imap, dg, area_pow=0., dtype=None,
@@ -1669,7 +1484,7 @@ def recenter_coords(theta, phi, return_as_rad=False):
     return theta, phi
 
 def smooth_gauss(imap, fwhm, mask=None, inplace=True, method='curvedsky',
-                 tweak=False, **method_kwargs):
+                 **method_kwargs):
     """Smooth a map with a Gaussian profile.
 
     Parameters
@@ -1687,9 +1502,6 @@ def smooth_gauss(imap, fwhm, mask=None, inplace=True, method='curvedsky',
         by default True.
     method : str, optional
         The method used to perform the smoothing, by default 'curvedsky.'
-    tweak : bool, optional
-        Allow inexact quadrature weights in spherical harmonic transforms, by
-        default False. Only applicable if method is 'curvedsky'.
     method_kwargs : dict, optional
         Any additional kwargs to pass to the function performing the
         smoothing, by default {}.
@@ -1723,14 +1535,14 @@ def smooth_gauss(imap, fwhm, mask=None, inplace=True, method='curvedsky',
 
     if method == 'curvedsky':
         lmax = lmax_from_wcs(imap.wcs)    
-        ainfo = sharp.alm_info(lmax)
+        ainfo = curvedsky.alm_info(lmax)
 
         b_ell = hp.gauss_beam(fwhm, lmax=lmax)
 
-        alm = map2alm(imap, ainfo=ainfo, tweak=tweak)
+        alm = map2alm(imap, ainfo=ainfo)
         for preidx in np.ndindex(imap.shape[:-2]):
             alm[preidx] = alm_c_utils.lmul(alm[preidx], b_ell, ainfo)
-        imap = alm2map(alm, omap=imap, ainfo=ainfo, tweak=tweak)
+        imap = alm2map(alm, omap=imap, ainfo=ainfo)
 
     if method == 'fft':
         raise NotImplementedError('FFT is not yet implemented')
@@ -2312,7 +2124,7 @@ def get_good_fft_bounds(target, primes):
     return out[out <= target]
 
 # normalizations adapted from pixell.enmap
-def rfft(emap, kmap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
+def rfft(emap, kmap=None, nthread=0, normalize='ortho', adjoint=False):
     """Perform a 'real'-FFT: an FFT over a real-valued function, such
     that only half the usual frequency modes are required to recover
     the full information.
@@ -2331,7 +2143,7 @@ def rfft(emap, kmap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
         normalization is applied. If 'ortho', 1/sqrt(npix) normalization
         is applied. If 'forward', 1/npix normalization is applied. If in
         ['phy', 'phys', 'physical'], normalize by both 'ortho' and sky area.
-    adjoint_ifft : bool, optional
+    adjoint : bool, optional
         Whether to perform the adjoint FFT, by default False.
 
     Returns
@@ -2340,7 +2152,7 @@ def rfft(emap, kmap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
         Half of the full FFT, sufficient to recover a real-valued
         function.
     """
-    if adjoint_ifft:
+    if adjoint:
         raise NotImplementedError()
 
     # store wcs if imap is ndmap
@@ -2369,7 +2181,7 @@ def rfft(emap, kmap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
         
     # phys norms
     if normalize in ['phy', 'phys', 'physical']:
-        if adjoint_ifft:
+        if adjoint:
             res /= res.pixsize()**0.5
         else:
             res *= res.pixsize()**0.5
@@ -2377,7 +2189,7 @@ def rfft(emap, kmap=None, nthread=0, normalize='ortho', adjoint_ifft=False):
     return res
 
 # normalizations adapted from pixell.enmap
-def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=False):
+def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint=False):
     """Perform a 'real'-iFFT: an iFFT to recover a real-valued function, 
     over only half the usual frequency modes.
 
@@ -2399,7 +2211,7 @@ def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=Fal
         normalization is applied. If 'ortho', 1/sqrt(npix) normalization
         is applied. If 'backward', 1/npix normalization is applied. If in
         ['phy', 'phys', 'physical'], normalize by both 'ortho' and sky area.
-    adjoint_fft : bool, optional
+    adjoint : bool, optional
         Whether to perform the adjoint iFFT, by default False.
 
     Returns
@@ -2407,7 +2219,7 @@ def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=Fal
     (..., ny, nx) ndmap
         A real-valued real-space map.
     """
-    if adjoint_fft:
+    if adjoint:
         raise NotImplementedError()
 
     # store wcs if imap is ndmap
@@ -2440,7 +2252,7 @@ def irfft(emap, omap=None, n=None, nthread=0, normalize='ortho', adjoint_fft=Fal
     
     # phys norms
     if normalize in ['phy', 'phys', 'physical']:
-        if adjoint_fft:
+        if adjoint:
             res *= res.pixsize()**0.5
         else:
             res /= res.pixsize()**0.5

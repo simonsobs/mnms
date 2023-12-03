@@ -1,6 +1,6 @@
 from mnms import utils
 
-from pixell import sharp
+from pixell import curvedsky
 from optweight import noise_utils, type_utils, operators, mat_utils, wavtrans, wlm_utils
 
 import numpy as np
@@ -56,7 +56,7 @@ def estimate_sqrt_cov_wav_from_enmap(alm, w_ell, shape, wcs, fwhm_fact=2,
             f'Smoothing factor: {fwhm_fact}'
             )
 
-    ainfo = sharp.alm_info(nalm=alm.shape[-1])
+    ainfo = curvedsky.alm_info(nalm=alm.shape[-1])
 
     # Get wavelet kernels and estimate wavelet covariance.
     wav_template = wavtrans.Wav.from_enmap(shape, wcs, w_ell, 1, preshape=alm.shape[:-1],
@@ -99,7 +99,7 @@ def rand_alm_from_sqrt_cov_wav(sqrt_cov_wavs, seed, w_ell, nthread=0,
             )
     
     lmax = w_ell.shape[-1] - 1
-    ainfo = sharp.alm_info(lmax)
+    ainfo = curvedsky.alm_info(lmax)
 
     preshape = sqrt_cov_wavs.preshape
     alm_draw = np.zeros(
@@ -127,7 +127,7 @@ def unit_var_wav(minfos, preshape, dtype, seed=None, nthread=0):
     
     Arguments
     ---------
-    minfos : (ndiag) array-like of sharp.map_info objects
+    minfos : (ndiag) array-like of optweight.map_utils.MapInfo objects
         Map info objects describing each wavelet map.
     preshape : tuple
         First dimensions of the maps, i.e. map.shape = preshape + (npix,).
