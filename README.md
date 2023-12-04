@@ -17,15 +17,15 @@ All other dependencies (e.g. `numpy` etc.) are required by packages listed here,
 A note on [`enlib`](https://github.com/amaurea/enlib): all users need access to the top-level python modules. This is achieved just by adding the repo to your `PYTHONPATH`. **If you are only drawing new simulations or loading existing products from disk, you do not need to do anything else.** Only if you are generating new noise models, you will also to compile the library `array_ops`.  This is done via `make array_ops` executed from within the top-level directory. Please see the enlib docs for more info on how to do this on your system. We have had success using an up-to-date intel `c` compiler with intel `mkl` loaded in your environment, if available. **Again, you do not need to compile `array_ops` if you are only drawing new simulations or loading existing products from disk.**
 
 ## Installation
-Clone this repo and `cd` to `/path/to/mnms/`:
-```
-$ pip install .
+Clone this repo and the `sofind` repo. `mnms` and `sofind` are install-time circular dependencies. Thus, they need to be installed in the same call to pip:
+```shell
+$ pip install path/to/mnms path/to/sofind
 ```
 or 
+```shell
+$ pip install -e path/to/mnms -e path/to/sofind
 ```
-$ pip install -e .
-```
-to see changes to source code automatically updated in your environment. To check the installation, run tests from within the same directory:
+to see changes to source code automatically updated in your environment. To check the installation, run tests from within `path/to/mnms`:
 
 ```
 $ pytest
