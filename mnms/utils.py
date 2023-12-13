@@ -1,7 +1,6 @@
 from sofind import utils as s_utils
 from pixell import enmap, curvedsky, colorize, cgrid
 import healpy as hp
-from enlib import array_ops
 from optweight import alm_c_utils
 
 import numpy as np
@@ -2031,6 +2030,8 @@ def eigpow(A, exp, axes=[-2, -1], lim=1e-6, lim0=None, copy=False):
     precision to at least double precision if necessary prior to
     operation.
     """
+    from enlib import array_ops
+
     # store wcs if imap is ndmap
     if hasattr(A, 'wcs'):
         is_enmap = True
