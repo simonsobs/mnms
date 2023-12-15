@@ -16,6 +16,7 @@ import healpy as hp
 from astropy.io import fits
 
 from itertools import product
+from importlib import import_module
 from concurrent import futures
 import multiprocessing
 import os
@@ -2025,12 +2026,77 @@ def concurrent_einsum(subscripts, a, b, *args, flatten_axes=[-2, -1],
     out = np.moveaxis(out, range(len(oshape_axes)), flatten_axes)
     return out
 
-def eigpow(A, exp, axes=[-2, -1], lim=1e-6, lim0=None, copy=False):
-    """A hack around enlib.array_ops.eigpow which upgrades the data
-    precision to at least double precision if necessary prior to
-    operation.
+def np_eigpow(arr, e, axes=[0, 1], lim=1e-6, lim0=None):
+    """Like enlib.array_ops.eigpow or optweight.mat_c_utils.eigpow, but not
+    parallelized. Raise matrix arr (assumed real symmetric over axes) to e,
+    but set all eigenvalues in a given matrix to 0 if maximum eigenvalue for
+    that given matrix is less than lim0. Set eigenvalues in a given matrix to
+    0 if less than lim * maximum eigenvalue in that matrix.
+
+    Parameters
+    ----------
+    arr : array-like
+        Array to eigpow.
+    e : scalar
+        Power to raise arr to.
+    axes : list, optional
+        Axes considered in matrix operation, by default [0, 1].
+    lim : scalar, optional
+        Relative eigenvalue cut, by default 1e-6.
+    lim0 : _type_, optional
+        Absolute eigenvalue cut, by default None
+
+    Returns
+    -------
+    array-like
+        Eigpow'd arr.
     """
-    from enlib import array_ops
+    assert lim >= 0, f'{lim=} must be >= 0'
+    if lim0 is None:
+        lim0 = np.finfo(arr.dtype).tiny ** 0.5
+    assert lim0 >= 0, f'{lim0=} must be >= 0'
+
+    arr = np.moveaxis(arr, axes, (-2, -1))
+    E, V = np.linalg.eigh(arr)
+
+    maxE = np.max(E, axis=-1, keepdims=True)
+    E *= (maxE >= lim0)
+    E *= (E >= lim * maxE)
+    np.power(E, e, out=E, where=E!=0)
+
+    arr = np.einsum('...ij, ...kj -> ...ik', E[..., None, :] * V, V)
+    return np.moveaxis(arr, (-2, -1), axes)
+
+def eigpow(A, exp, axes=[-2, -1], lim=1e-6, lim0=None, copy=False,
+           fallbacks=None):
+    """A hack around [enlib.array_ops.eigpow, optweight.mat_c_utils.eigpow,
+    mnms.utils.eigpow] which upgrades the data precision to at least double
+    precision if necessary prior to operation. The eigpow operation is selected
+    in that order by trying import statements.
+    """
+    if fallbacks is None:
+        fallbacks = ['enlib', 'optweight', 'numpy']
+    fallbacks.append('break')
+
+    fallback2mod_func = {
+        'enlib': ('enlib.array_ops', 'eigpow'),
+        'optweight': ('optweight.mat_c_utils', 'eigpow'),
+        'numpy': ('mnms.utils', 'np_eigpow')
+    }
+
+    i = 0
+    fallback = fallbacks[i]
+    while fallback != 'break':
+        try:
+            mod, func = fallback2mod_func[fallback]
+            mod = import_module(mod)
+            func = getattr(mod, func)
+            break
+        except (ModuleNotFoundError, ImportError):
+            i += 1 
+            fallback = fallbacks[i]
+    if fallback == 'break':
+        raise ImportError('Cannot import any fallbacks') 
 
     # store wcs if imap is ndmap
     if hasattr(A, 'wcs'):
@@ -2057,8 +2123,24 @@ def eigpow(A, exp, axes=[-2, -1], lim=1e-6, lim0=None, copy=False):
         else:
             recast = False
 
+    # put in standard shape (necessary for optweight, harmless for others)
+    A = np.moveaxis(A, axes, (0, 1))
+    moveshape = A.shape
+    A = A.reshape(*A.shape[:2], -1)
+    
     # reassign to A in case copy
-    A = array_ops.eigpow(A, exp, axes=axes, lim=lim, lim0=lim0, copy=copy) 
+    if fallback == 'enlib':
+        A = func(A, exp, axes=[0, 1], lim=lim, lim0=lim0, copy=copy) 
+    elif fallback == 'optweight':
+        A = func(A, exp, lim=lim, lim0=lim0)
+    elif fallback == 'numpy':
+        A = func(A, exp, axes=[0, 1], lim=lim, lim0=lim0)
+    else:
+        raise ValueError('How did we wind up here')
+
+    # reshape
+    A = A.reshape(*A.shape[:2], *moveshape[2:])
+    A = np.moveaxis(A, (0, 1), axes)
     
     # cast back to input precision if necessary
     if recast:
@@ -2070,7 +2152,7 @@ def eigpow(A, exp, axes=[-2, -1], lim=1e-6, lim0=None, copy=False):
     return A
 
 def chunked_eigpow(A, exp, axes=[-2, -1], lim=1e-6, lim0=None, copy=False,
-                   chunk_axis=0, target_gb=5):
+                   fallbacks=None, chunk_axis=0, target_gb=5):
     """A hack around utils.eigpow which performs the operation
     one chunk at a time to reduce memory usage."""
     # store wcs if imap is ndmap
@@ -2101,7 +2183,7 @@ def chunked_eigpow(A, exp, axes=[-2, -1], lim=1e-6, lim0=None, copy=False,
     for i in range(nchunks):
         A[i*chunksize:(i+1)*chunksize] = eigpow(
             A[i*chunksize:(i+1)*chunksize], exp, axes=eaxes, lim=lim, lim0=lim0,
-            copy=copy
+            copy=copy, fallbacks=fallbacks
             )
 
     # reshape
