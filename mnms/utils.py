@@ -576,8 +576,7 @@ def interp1d_bins(bins, y, return_vals=False, **interp1d_kwargs):
         return interp1d(x, y, fill_value=fill_value, **interp1d_kwargs)
 
 def eigpow_flat(mat, exp, preshape, **kwargs):
-    '''
-    Reshape input (*preshape, *preshape, *postshape)-shaped matrix to an
+    """Reshape input (*preshape, *preshape, *postshape)-shaped matrix to an
     (ncomp, ncomp, *postshape)-shaped matrix and raise to provided power.
 
     Parameters
@@ -589,13 +588,13 @@ def eigpow_flat(mat, exp, preshape, **kwargs):
     preshape : tuple
         tuple denoting the specified preshape.
     kwargs : dict
-        Kewword arguments to eigpow. Cannot provide "axes" keyword argument.
+        Keyword arguments to eigpow. Cannot provide "axes" keyword argument.
 
     Returns
     -------
     out : (preshape) + (preshape) + (postshape) ndarray
         Input matrix raised to specified power.
-    '''
+    """
 
     if 'axes' in kwargs:
         raise ValueError('"axes" keyword argument is not supported.')

@@ -97,7 +97,7 @@ def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
     post_filt_downgrade_wcs : astropy.wcs.WCS, optional
         Assign this wcs to the filtered maps, by default None.
     cov_ell : (*preshape, *preshape, nell) np.ndarray, optional
-        If provided, skip the esimation of the ell-dependent matrix and
+        If provided, skip the estimation of the ell-dependent matrix and
         instead use this matrix for the harmonic filter, by default None.
     lim : float, optional
         Set eigenvalues smaller than lim * max(eigenvalues) to zero.
