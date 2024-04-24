@@ -10,6 +10,12 @@ def test_concurrent_add():
     conc = utils.concurrent_op(op, a, b, flatten_axes=(-4, -2))
     assert np.all(true == conc)
 
+    # try with sel
+    sel = np.s_[..., 123:456, :, 12:34, :]
+    true = op(a[sel], b[sel])
+    conc = utils.concurrent_op(op, a[sel], b[sel], flatten_axes=(-4, -2))
+    assert np.all(true == conc)
+
 def test_concurrent_multiply():
     op = np.multiply
     a = np.random.randn(500,1,500,2)
@@ -18,6 +24,12 @@ def test_concurrent_multiply():
     conc = utils.concurrent_op(op, a, b, flatten_axes=(-4, -2))
     assert np.all(true == conc)
 
+    # try with sel
+    sel = np.s_[..., 123:456, :, 12:34, :]
+    true = op(a[sel], b[sel])
+    conc = utils.concurrent_op(op, a[sel], b[sel], flatten_axes=(-4, -2))
+    assert np.all(true == conc)
+    
 def test_concurrent_normal():
     nchunks = 100
     seed = 103_094

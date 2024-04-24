@@ -1206,7 +1206,7 @@ def downgrade_geometry_cc_quad(shape, wcs, dg):
         # get the shape, wcs corresponding to the sliced fullsky geometry, with resolution
         # downgraded vs. imap resolution by factor dg, containg sky footprint of imap
         full_dshape, full_dwcs = enmap.fullsky_geometry(
-            res=np.deg2rad(np.abs(wcs.wcs.cdelt))*dg, variant='CC'
+            res=np.deg2rad(np.abs(wcs.wcs.cdelt[::-1]))*dg, variant='CC'
             )
 
         # need to add 1 pixel to the shape for corner=False as of pixell>=0.17.3
@@ -1228,7 +1228,10 @@ def downgrade_geometry_cc_quad(shape, wcs, dg):
         return slice_geometry_by_pixbox(full_dshape, full_dwcs, full_dpixbox)
 
 def empty_downgrade(imap, dg, variant='cc'):
-    """Get an empty enmap to hold the downgraded map."""
+    """Get an empty enmap to hold the downgraded map. If variant is 'cc', the 
+    output pixel centers will align with the input pixel centers. If variant is
+    'fejer1', the output pixels come from calling enmap.downgrade_geometry
+    on the input geometry."""
     if variant == 'cc':
         oshape, owcs = downgrade_geometry_cc_quad(imap.shape, imap.wcs, dg)
     elif variant == 'fejer1':
@@ -1241,9 +1244,9 @@ def empty_downgrade(imap, dg, variant='cc'):
 
 def fourier_downgrade(imap, dg, variant='cc', area_pow=0., dtype=None):
     """Downgrade a map by Fourier resampling into a geometry that adheres
-    to Clenshaw-Curtis quadrature. This will bandlimit the input signal in 
-    Fourier space which may introduce ringing around bright objects, but 
-    will not introduce a pixel-window nor aliasing.
+    to either Clenshaw-Curtis or Fejer1 quadratures. This will bandlimit
+    the input signal in Fourier space which may introduce ringing around
+    bright objects, but will not introduce a pixel-window nor aliasing.
 
     Parameters
     ----------
@@ -1252,64 +1255,139 @@ def fourier_downgrade(imap, dg, variant='cc', area_pow=0., dtype=None):
     dg : int or float
         Downgrade factor.
     variant : str, optional
-        Quadtrature of output map, either Clenshaw-Curtis ('cc') or Fejer1
+        Quadrature of output map, either Clenshaw-Curtis ('cc') or Fejer1
         ('fejer1').
     area_pow : int or float, optional
         The area scaling of the downgraded signal, by default 0. Output map
         is multiplied by dg^(2*area_pow).
     dtype : np.dtype, optional
-        If not None, cast the input map to this data type, by default None.
-        Useful for allowing boolean masks to be "interpolated."
+        If not None, cast the input map to this data type prior to downgrading,
+        by default None. Useful for allowing boolean masks to be "interpolated."
 
     Returns
     -------
     ndmap
         The downgraded map. The unchanged input if dg <= 1.
+
+    Notes
+    -----
+    The output geometry is set by calling empty_downgrade(imap, dg, variant);
+    see that function for details.
     """
     if np.all(dg <= 1):
         return imap
     else:
-        # cast imap to dtype so now omap has omap dtype
-        if dtype is not None:
-            imap = imap.astype(dtype, copy=False)
-        ikmap = rfft(imap)
-
-        # create empty buffers for map and downgraded fourier space
-        omap = empty_downgrade(imap, dg, variant=variant)
-        okshape = (*omap.shape[:-2], omap.shape[-2], omap.shape[-1]//2 + 1)
-        okmap = enmap.empty(okshape, omap.wcs, dtype=ikmap.dtype)
-
-        # get fourier space selection tuples. if the output map is
-        # even in y, then we select :ny//2 and -ny//2:. if odd, then
-        # select :ny//2+1 and -ny//2:. in x we always select :nx
-        ny, nx = okshape[-2:]
-        if ny%2 == 0:
-            y_pos_sel = ny//2
-        else:
-            y_pos_sel = ny//2+1
-        y_neg_sel = ny//2
-        sels = [np.s_[..., :y_pos_sel, :nx], np.s_[..., -y_neg_sel:, :nx]]
-
-        # perform downgrade in fourier space
-        for sel in sels:
-            okmap[sel] = ikmap[sel]
-
-        # multiply by phases for any shifts of pixelization
-        if variant == 'cc':
-            pass # pixel centers align
-        elif variant == 'fejer1':
-            shift = np.zeros(2, dtype=dtype) - (dg - 1)/(2*dg) # passive shift so minus sign
-            kx = np.fft.rfftfreq(omap.shape[-1]).astype(dtype, copy=False)
-            ky = np.fft.fftfreq(omap.shape[-2]).astype(dtype, copy=False)[..., None]
-            okmap *= np.exp(-2j*np.pi*(ky*shift[0] + kx*shift[1]))
-        else: 
-            raise ValueError(f"variant must be 'cc' or 'fejer1', got {variant}")
+        if dtype is None:
+            dtype = imap.dtype
+            
+        omap = empty_downgrade(imap, dg, variant=variant).astype(dtype, copy=False)
+        out = fourier_resample(imap, omap=omap)
 
         # scale values by area factor, e.g. dg^2 if ivar maps.
-        # the -0.5 is because of conventional fft normalization
-        mult = dg ** (2*(area_pow-0.5))
+        mult = dg ** (2*area_pow)
+        if mult != 1:
+            out *= mult
+        
+        return out
 
-        return mult * irfft(okmap, omap=omap)
+def fourier_resample(imap, omap=None, shape=None, wcs=None, dtype=None):
+    """Fourier resample a map into an arbitrary pixelization. The pixelization
+    may downgrade, upgrade, and/or shift the input independently on each axis.
+    Upgrading occurs by zero-padding in Fourier space.
+
+    Parameters
+    ----------
+    imap : ndmap
+        Input map to be resampled.
+    omap : ndmap, optional
+        Output buffer, by default None.
+    shape : tuple of ints, optional
+        Shape of output buffer to be allocated if omap is None, by default
+        None.
+    wcs : astropy.wcs.WCS, optional
+        WCS of output buffer to be allocated if omap is None, by default None.
+    dtype : np.dtype, optional
+        Dtype of output buffer to be allocated if omap is None, by default
+        None. Overridden by the dtype of omap, if omap is provided.
+
+    Returns
+    -------
+    ndmap
+        The resampled input, with the output dtype.
+    """
+    if omap is None:
+        if dtype is None:
+            dtype = imap.dtype
+        omap = enmap.empty((*imap.shape[:-2], *shape[-2:]), wcs=wcs, dtype=dtype)
+    else:
+        dtype = omap.dtype
+
+    # cast imap to dtype so now imap has omap dtype
+    imap = imap.astype(dtype, copy=False)
+
+    ikmap = rfft(imap, normalize='forward')
+
+    # create empty buffers for resampled fourier space. zero-padded
+    # for upgrades
+    okmap = np.zeros((*omap.shape[:-2], omap.shape[-2], omap.shape[-1]//2 + 1), dtype=ikmap.dtype)
+
+    # get fourier space selection tuples.
+    # NOTE: if ny bounded by ikmap, we are upgrading (zero-padding) in y,
+    # else if ny bounded by okmap, we are downgrading. Likewise for nx, x
+    # NOTE: if the output map is even in y, then we select :ny//2 and -ny//2:.
+    # if odd, then select :ny//2+1 and -ny//2:. in x we always select :nx
+    ny = min(ikmap.shape[-2], okmap.shape[-2])
+    nx = min(ikmap.shape[-1], okmap.shape[-1])
+    if ny%2 == 0:
+        y_pos_sel = ny//2
+    else:
+        y_pos_sel = ny//2+1
+    y_neg_sel = ny//2
+    sels = [np.s_[..., :y_pos_sel, :nx], np.s_[..., -y_neg_sel:, :nx]]
+
+    # perform resampling in fourier space.
+    for sel in sels:
+        okmap[sel] = ikmap[sel]
+
+    # multiply by phases for any shifts of pixelization
+    shapei, wcsi = imap.geometry
+    shapeo, wcso = omap.geometry
+
+    # use pixels in bottom-left of map as reference pixel to measure shift.
+    # use multiple pixels so that we can recenter coordinates, avoiding
+    # this bug https://github.com/simonsobs/pixell/issues/202
+    refi = enmap.pix2sky(shapei, wcsi, [[0, 1], [0, 1]], safe=True, corner=False)
+    refo = enmap.pix2sky(shapeo, wcso, [[0, 1], [0, 1]], safe=True, corner=False)
+
+    signi = np.sign(wcsi.wcs.cdelt[0]) # measure x sign so can do strictly increasing
+    signo = np.sign(wcso.wcs.cdelt[0]) # measure x sign so can do strictly increasing
+
+    refi = np.array(recenter_coords(refi[0], signi*refi[1])) # strictly increasing, degrees
+    refo = np.array(recenter_coords(refo[0], signo*refo[1])) # strictly increasing, degrees
+
+    refi[1] *= signi # revert sign to get back to actual coordinates
+    refo[1] *= signo # revert sign to get back to actual coordinates
+
+    refi = refi[:, 0] # 0, 0 point
+    refo = refo[:, 0] # 0, 0 point
+
+    # passive shift so minus sign, cdelt is in x, y ordering and degrees.
+    # this is done in units of pixels in the output geometry.
+    # 
+    # IMPORTANT: 
+    # by recentering coords, also not relying on floating point precision as much,
+    # e.g. if shift is 21600 and kx is 0.5, don't want to rely on 2*np.pi*kx*shift
+    # being exact multiple of 2pi
+    shift = - (refo - refi) / wcso.wcs.cdelt[::-1]
+
+    kx = np.fft.rfftfreq(omap.shape[-1]).astype(dtype, copy=False)
+    ky = np.fft.fftfreq(omap.shape[-2])[..., None].astype(dtype, copy=False)
+    phase = np.exp(-2j*np.pi*(ky*shift[0] + kx*shift[1]))
+
+    okmap = concurrent_op(np.multiply, okmap, phase)
+    okmap = enmap.ndmap(okmap, omap.wcs)
+
+    return irfft(okmap, omap=omap, n=omap.shape[-1], normalize='forward')
 
 def harmonic_downgrade(imap, dg, variant='cc', area_pow=0., dtype=None):
     """Downgrade a map by harmonic resampling into a geometry that adheres
@@ -1875,6 +1953,108 @@ def concurrent_normal(size=1, loc=0., scale=1., nchunks=100, nthread=0,
     out = out.reshape(-1)[:totalsize]
     return out.reshape(size)
 
+def rand_alm_white(ainfo, pre=None, alm=None, seed=None, dtype=np.float32,
+                   m_major=True, nthread=0):
+    """Generate white noise in harmonic space assuming a triangular alm_info.
+    Like pixell.curvedsky.rand_alm, except before the application of the power
+    spectrum matrix. Thus, this differs from pixell.curvedsky.rand_alm_white in
+    that it applies sqrt(2) correction factors out-of-the-box.
+
+    Parameters
+    ----------
+    ainfo : pixell.curvedsky.alm_info
+        The alm_info object, assumed to have a triangular layout.
+    pre : tuple of int, optional
+        The preshape of the output (i.e., excluding harmonic axis), by default
+        None. Only used to construct empty output array.
+    alm : array-like, optional
+        Output array, by default None. Overrides pre and dtype.
+    seed : int or iterable-of-ints, optional
+        Random seed to pass to np.random.SeedSequence, by default None.
+    dtype : np.dtype, optional
+        Data type of each real and complex component, by default np.float32.
+        Must be a 4- or 8-byte type.
+    m_major : bool, optional
+        Draws with the same seed but different lmax will be the same for their
+        shared modes, by default True. Faster if False.
+    nthread : int, optional
+        Number of concurrent threads, by default 0. If 0, the result
+        of get_cpu_count().
+
+    Returns
+    -------
+    array-like
+        The random harmonics.
+    """
+    if alm is None:
+        ctype = np.result_type(dtype, 1j)
+        if pre is None:
+            alm = np.empty(ainfo.nelem, ctype)
+        else:
+            alm = np.empty((*pre, ainfo.nelem), ctype)
+
+    # scale is because both the real and imaginary parts are unit standard normal
+    alm[...] = concurrent_normal(
+        size=alm.shape, scale=1/np.sqrt(2),
+        nthread=nthread, seed=seed, dtype=dtype, complex=True
+        )
+
+    if m_major:
+        ainfo.transpose_alm(alm, alm)
+    
+    # respect reality condition of m=0 (see pixell.curvedsky.rand_alm)
+    alm[..., :ainfo.lmax + 1].imag = 0
+    alm[..., :ainfo.lmax + 1].real *= np.sqrt(2)
+
+    return alm
+
+def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128,
+             m_major=True, return_ainfo=False, nthread=0):
+    """A rewrite of pixell.curvedsky.rand_alm, but using mnms' parallelized
+    rand_alm_white. Note that all sqrt(2) correction factors are in 
+    rand_alm_white, not this function.
+    
+    Parameters
+    ----------
+    ps : array-like
+        A 1d, 2d, or 3d array. If 3d, first two axes must have the
+        same size. If 2d, assumed to be "diagonal" of a 3d array.
+    ainfo : pixell.curvedsky.alm_info
+        The alm_info object, assumed to have a triangular layout.
+    lmax : int, optional
+        Bandlimit of transforms, by default None.
+    seed : int or iterable-of-ints, optional
+        Random seed to pass to np.random.SeedSequence, by default None.
+    dtype : np.dtype, optional
+        Data type of the returned alm.
+    m_major : bool, optional
+        Draws with the same seed but different lmax will be the same for their
+        shared modes, by default True. Faster if False.
+    return_ainfo : bool, optional
+        Return the constructed ainfo, by default False.
+    nthread : int, optional
+        Number of concurrent threads, by default 0. If 0, the result
+        of get_cpu_count().
+
+    Returns
+    -------
+    array-like
+        The sampled alm.
+    """
+    rtype = np.zeros([0], dtype=dtype).real.dtype
+    wps, ainfo = curvedsky.prepare_ps(ps, ainfo=ainfo, lmax=lmax)
+    alm = rand_alm_white(ainfo, pre=[wps.shape[0]], seed=seed, dtype=rtype,
+                         m_major=m_major, nthread=nthread)
+
+    ps12 = np_eigpow(wps, 0.5, axes=[0, 1]) # overhead from multithreading too high
+    ainfo.lmul(alm, ps12.astype(rtype, copy=False), alm)
+
+    if ps.ndim == 1:
+        alm = alm[0] 
+    if return_ainfo:
+        return alm, ainfo
+    else: return alm
+
 def concurrent_op(op, a, b, *args, flatten_axes=[-2,-1], 
                   nchunks=100, nthread=0, **kwargs):
     """Perform a numpy operation on two arrays concurrently.
@@ -2043,7 +2223,7 @@ def np_eigpow(arr, e, axes=[0, 1], lim=1e-6, lim0=None):
         Axes considered in matrix operation, by default [0, 1].
     lim : scalar, optional
         Relative eigenvalue cut, by default 1e-6.
-    lim0 : _type_, optional
+    lim0 : scalar, optional
         Absolute eigenvalue cut, by default None
 
     Returns
