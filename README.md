@@ -116,4 +116,4 @@ Take care with filenames:
 
 * All noise models are multithreaded. Please ensure to set the environment variable `OMP_NUM_THREADS` appropriately in your slurm scripts. The bottleneck tends to be either spherical-harmonic transforms or fourier transforms. We've had success on 10-20 threads; more than that tends to incur too much overhead. The number of threads also plays a role in random number generation, so sims with identical parameters but run with a different number of threads will be different.
 
-* All map products assume the following axis assignment convention: (qid, split, polarization, y, x). Because simulations are per-split, the second axis always has dimension 1!
+* All map products assume the following axis assignment convention: (qid, split, polarization, y, x). If the map is loaded as an alm, the last two axes will only be one axis: the lm index. Because simulations are per-split, the second axis always has dimension 1!
