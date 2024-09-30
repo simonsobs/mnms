@@ -58,7 +58,7 @@ def get_harmonic_noise_sim(sqrt_cov_mat, seed, filter_only=True, nthread=0,
 
     Parameters
     ----------
-    sqrt_cov_mat : (*prehsape, *preshape, nell) np.ndarray
+    sqrt_cov_mat : (*preshape, *preshape, nell) np.ndarray
         The harmonic square-root covariance.
     seed : iterable of ints
         Seed for random draw.
@@ -89,19 +89,12 @@ def get_harmonic_noise_sim(sqrt_cov_mat, seed, filter_only=True, nthread=0,
     such inhomogeneities.
     """
     ainfo = curvedsky.alm_info(sqrt_cov_mat.shape[-1] - 1)
-    nalm = ainfo.nelem
     len_pre = len(sqrt_cov_mat.shape[:-1])
     assert len_pre % 2 == 0, \
         f'Expected even number of preshape dims, got odd'
     
-    # scale is because both the real and imaginary parts are unit standard normal
-    sim = utils.concurrent_normal(
-        size=(*sqrt_cov_mat.shape[:len_pre//2], nalm), scale=1/np.sqrt(2),
-        nthread=nthread, seed=seed, dtype=sqrt_cov_mat.dtype, complex=True
-        )
-    
-    # respect reality condition of m=0 (see pixell.curvedsky.rand_alm)
-    sim[..., :ainfo.lmax + 1] *= np.sqrt(2)
+    sim = utils.rand_alm_white(ainfo, pre=sqrt_cov_mat.shape[:len_pre//2], seed=seed,
+                               dtype=sqrt_cov_mat.dtype, nthread=nthread)
     
     if not filter_only: 
         sim = utils.ell_filter_correlated(sim, 'harmonic', sqrt_cov_mat,

@@ -5,7 +5,9 @@ Serving up sugar-coated map-based models of SO/ACT data. Each model supports dra
 For any questions please reach out to Zach Atkins (email: [zatkins@princeton.edu](mailto:zatkins@princeton.edu), github: [@zatkins2](https://github.com/zatkins2)). If you use any released `mnms` products or this code in your own work, please cite [Atkins et. al. 2023](https://arxiv.org/abs/2303.04180).
 
 ## Products
-Products for the ACT DR6.01 release are available at `NERSC` and at Princeton (`della`). You can create a public account on `NERSC` following [these instructions](https://crd.lbl.gov/divisions/scidata/c3/c3-research/cosmic-microwave-background/cmb-data-at-nersc/).
+Products for the ACT DR6.01 release are available at `NERSC` and at Princeton (`della`). You can create a public account on `NERSC` following [these instructions](https://crd.lbl.gov/divisions/scidata/c3/c3-research/cosmic-microwave-background/cmb-data-at-nersc/). Follow the setup instructions for `mnms` and `sofind`, and utilize the appropriate `sofind` data model. 
+
+As an aid in forecasting studies, the noise curve products for figure 3 of [Atkins et. al. 2023](https://arxiv.org/abs/2303.04180) are available at https://phy-act1.princeton.edu/public/data/dr6_noise_v1, with an accompanying notebook.
 
 ## Dependencies
 Users wishing to filter data or generate noise simulations should have the following dependencies in their environment:
@@ -116,4 +118,4 @@ Take care with filenames:
 
 * All noise models are multithreaded. Please ensure to set the environment variable `OMP_NUM_THREADS` appropriately in your slurm scripts. The bottleneck tends to be either spherical-harmonic transforms or fourier transforms. We've had success on 10-20 threads; more than that tends to incur too much overhead. The number of threads also plays a role in random number generation, so sims with identical parameters but run with a different number of threads will be different.
 
-* All map products assume the following axis assignment convention: (qid, split, polarization, y, x). Because simulations are per-split, the second axis always has dimension 1!
+* All map products assume the following axis assignment convention: (qid, split, polarization, y, x). If the map is loaded as an alm, the last two axes will only be one axis: the lm index. Because simulations are per-split, the second axis always has dimension 1!

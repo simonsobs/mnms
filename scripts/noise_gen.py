@@ -55,5 +55,6 @@ else:
     splits = np.atleast_1d(args.split)
 assert np.all(splits >= 0)
 
-for s in splits:
+# Iterate over models
+for s in splits[comm.rank::comm.size]:
     model.get_model(s, args.lmax, keep_mask_est=True, keep_mask_obs=True, verbose=True)

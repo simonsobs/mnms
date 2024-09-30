@@ -702,7 +702,7 @@ class DataManager(io.Params):
 
         if qid:
             split_idx = 0 if split_num is None else split_num
-            # OLD: seed = utils.get_seed(split_idx, 999_999_999, self._data_model_name, qid)
+            # seed = utils.get_seed(split_idx, 999_999_999, self._data_model_name, qid, n_max_strs=5) OLD
             seed = utils.get_seed(split_idx, 999_999_999, self._data_model_name, 
                                   self._maps_product, self._maps_subproduct, qid)
         else:
@@ -1731,7 +1731,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             sqrt_ivar_from_cache = False
         sqrt_ivar *= mask_obs
         
-        # OLD: seed = utils.get_seed(split_num, sim_num, self.noise_model_name, *self._qids)
+        # seed = utils.get_seed(split_num, sim_num, self.noise_model_name, *self._qids, n_max_strs=5) OLD
         if seed == -1:
             seed = utils.get_seed(split_num, sim_num, self._data_model_name,
                                   self._maps_product, self._maps_subproduct,
