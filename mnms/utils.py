@@ -1,7 +1,6 @@
 from sofind import utils as s_utils
 from pixell import enmap, curvedsky, colorize, cgrid
 import healpy as hp
-from optweight import alm_c_utils
 
 import numpy as np
 import ducc0
@@ -841,6 +840,7 @@ def ell_filter_correlated(inp, inbasis, lfilter_mat, map2basis='harmonic',
     inshape = inp.shape
 
     if inbasis == 'harmonic':
+        from optweight import alm_c_utils
         inp = atleast_nd(inp, 2)
         preshape = inp.shape[:-1]
         ncomp = np.prod(preshape, dtype=int)
@@ -954,6 +954,7 @@ def ell_filter(imap, lfilter, omap=None, mode='curvedsky', ainfo=None,
         return irfft(kmap * lfilter, n=imap.shape[-1], nthread=nthread)
 
     elif mode == 'curvedsky':
+        from optweight import alm_c_utils
         # get the lfilter, which might be different per pol component
         if lmax is None:
             lmax = lmax_from_wcs(imap.wcs)
@@ -1612,6 +1613,7 @@ def smooth_gauss(imap, fwhm, mask=None, inplace=True, method='curvedsky',
         imap *= mask
 
     if method == 'curvedsky':
+        from optweight import alm_c_utils
         lmax = lmax_from_wcs(imap.wcs)    
         ainfo = curvedsky.alm_info(lmax)
 
