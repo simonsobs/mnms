@@ -3,6 +3,9 @@ import argparse
 import numpy as np
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
+parser.add_argument("--output-dir", dest="output_dir", type=str, default=None)
+
 parser.add_argument('--config-name', dest='config_name', type=str, required=True,
                     help='Name of model config file from which to load parameters')
 
