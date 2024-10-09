@@ -12,7 +12,8 @@ As an aid in forecasting studies, the noise curve products for figure 3 of [Atki
 ## Dependencies
 Users wishing to filter data or generate noise simulations should have the following dependencies in their environment:
 * from `simonsobs`: [`pixell`](https://github.com/simonsobs/pixell), [`sofind`](https://github.com/simonsobs/sofind)
-* from the community: [`numba`](https://numba.pydata.org/), [`optweight`](https://github.com/AdriJD/optweight), [`enlib`](https://github.com/amaurea/enlib),
+* from the community: [`numba`](https://numba.pydata.org/), [`enlib`](https://github.com/amaurea/enlib)
+    * [`optweight`](https://github.com/AdriJD/optweight) is required if you are using `mnms` for any functionality beyond loading existing products to disk with `sofind`.
 
 All other dependencies (e.g. `numpy` etc.) are required by packages listed here, especially by `pixell`.
 
