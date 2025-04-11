@@ -742,7 +742,7 @@ class DataManager(io.Params):
         shape = (num_arrays, num_splits, *shape)
         return enmap.empty(shape, wcs=footprint_wcs, dtype=self._dtype)
 
-    def get_cal(self, calibrations_subproduct):
+    def get_cal(self, calibrations_subproduct, alm=False):
         """Get calibration and polarization factors from this noise model's
         data model's calibration product under 'calibration_subproduct'. 
         The factors will broadcast against a simulation of any shape, i.e.,
@@ -760,6 +760,9 @@ class DataManager(io.Params):
         calibrations_subproduct : str
             Name of the calibrations_subproduct entry in this noise model's data
             model.
+        alm : bool, optional
+            Whether the cals need to broadcast against an alm instead, in which
+            case the last singleton axis is removed, by default False.
 
         Returns
         -------
@@ -779,6 +782,9 @@ class DataManager(io.Params):
                 cals[i, 0, 1:] = cals[i, 0, 0] / self._data_model.read_calibration(
                 qid, which='poleffs', subproduct=calibrations_subproduct,
                 **subproduct_kwargs)
+
+        if alm:
+            cals = cals[..., 0]
 
         return cals
 
@@ -1762,10 +1768,10 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         if _calibrate:
             try:
-                cal = self.get_from_cache('cal', _calibrations_subproduct) # NOTE: assumes cal indep. of split
+                cal = self.get_from_cache('cal', _calibrations_subproduct, alm=alm) # NOTE: assumes cal indep. of split
                 cal_from_cache = True
             except KeyError:
-                cal = self.get_cal(_calibrations_subproduct)
+                cal = self.get_cal(_calibrations_subproduct, alm=alm)
                 cal_from_cache = False
 
         if check_on_disk:
@@ -1849,7 +1855,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         if _calibrate:
             if keep_cal and not cal_from_cache:
-                self.cache_data('cal', cal, _calibrations_subproduct)
+                self.cache_data('cal', cal, _calibrations_subproduct, alm=alm)
         
         if write:
             fn = self.get_sim_fn(split_num, sim_num, lmax, alm=alm, to_write=True)
