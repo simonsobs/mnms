@@ -224,6 +224,7 @@ class Params(ABC):
             maps_product=self._maps_product,
             maps_subproduct=self._maps_subproduct,
             calibrated=self._calibrated,
+            calibrations_subproduct=self._calibrations_subproduct,
             catalogs_subproduct=self._catalogs_subproduct,
             catalog_name=self._catalog_name,
             differenced=self._differenced,

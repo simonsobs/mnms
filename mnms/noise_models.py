@@ -743,6 +743,29 @@ class DataManager(io.Params):
         return enmap.empty(shape, wcs=footprint_wcs, dtype=self._dtype)
 
     def get_cal(self, calibrations_subproduct):
+        """Get calibration and polarization factors from this noise model's
+        data model's calibration product under 'calibration_subproduct'. 
+        The factors will broadcast against a simulation of any shape, i.e.,
+        they have shape:
+
+        (nmaps, 1, npol, 1, 1)
+
+        where nmaps is the number of super qids, and npol is 1 or 3, depending 
+        on the data shape. For each map, if npol is 1, the factor is given by 
+        c where c is a calibration. If npol is 3, the factors are (c, c/p, c/p)
+        where p is the polarization efficiency.
+
+        Parameters
+        ----------
+        calibrations_subproduct : str
+            Name of the calibrations_subproduct entry in this noise model's data
+            model.
+
+        Returns
+        -------
+        (nmaps, 1, npol, 1, 1) np.ndarray
+            Calibration (and possibly polarization efficiency) factors.
+        """
         # get an array that will broadcast against dmaps
         shape = self._empty((1, 1), self._full_wcs, ivar=False, num_splits=1).shape
         cals = np.zeros(shape, dtype=self._dtype)
@@ -1661,7 +1684,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             setting in the configuration file for this noise model will be used,
             (along with the calibrations_subproduct if the setting is 'true').
             If True, see calibrations_subproduct. If False, do not apply any
-            calibration factor. 
+            calibration factor. See notes about writing simulations to disk.
         calibrations_subproduct : str, optional
             If calibrate is True, this will be used to override the calibration
             subproduct versus what is indicated in the configuration file. This
@@ -1702,6 +1725,16 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             A sim of this noise model with the specified sim num, with shape
             (num_arrays, num_splits=1, num_pol, ny, nx), even if some of these
             axes have size 1. As implemented, num_splits is always 1. 
+
+        Notes
+        -----
+        If a simulation is requested to be calibrated and written to disk, only
+        the uncalibrated version is written to disk, while the calibrated version
+        is returned. This is so metadata about the calibration does not have to
+        be tracked along with the file on-disk -- it is always uncalibrated. If 
+        a simulation is requested to be calibrated and it already exists on-disk
+        and therefore is loaded from disk, the calibration factors will be 
+        applied at runtime.
         """
         _filter_kwargs = {} if self._filter_kwargs is None else self._filter_kwargs
 
@@ -1744,7 +1777,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             else: # generate == True
                 pass
 
-        # get the model, mask, sqrt_ivar, cal
+        # get the model, mask, sqrt_ivar
         try:
             model_dict = self.get_from_cache('model', split_num=split_num, lmax=lmax)
             model_from_cache = True
@@ -1766,7 +1799,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             sqrt_ivar = self.get_sqrt_ivar(split_num=split_num, downgrade=downgrade)
             sqrt_ivar_from_cache = False
         sqrt_ivar *= mask_obs
-
+        
         # seed = utils.get_seed(split_num, sim_num, self.noise_model_name, *self._qids, n_max_strs=5) OLD
         if seed == 'auto':
             seed = utils.get_seed(split_num, sim_num, self._data_model_name,
