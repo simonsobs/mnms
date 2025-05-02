@@ -19,11 +19,11 @@ class Params(ABC):
     def __init__(self, *args, data_model_name=None, subproduct=None,
                  maps_product=None, maps_subproduct='default',
                  enforce_equal_qid_kwargs=None, calibrated=False,
-                 differenced=True, srcfree=True, iso_filt_method=None,
-                 ivar_filt_method=None, filter_kwargs=None, ivar_fwhms=None,
-                 ivar_lmaxs=None, masks_subproduct=None, mask_est_name=None,
-                 mask_est_edgecut=0, mask_est_apodization=0,
-                 mask_obs_name=None, mask_obs_edgecut=0,
+                 calibrations_subproduct=None, differenced=True, srcfree=True,
+                 iso_filt_method=None, ivar_filt_method=None,
+                 filter_kwargs=None, ivar_fwhms=None, ivar_lmaxs=None,
+                 masks_subproduct=None, mask_est_name=None, mask_est_edgecut=0,
+                 mask_est_apodization=0, mask_obs_name=None, mask_obs_edgecut=0,
                  model_lim=None, model_lim0=None,
                  catalogs_subproduct=None, catalog_name=None,
                  kfilt_lbounds=None, dtype=np.float32, model_file_template=None,
@@ -49,7 +49,14 @@ class Params(ABC):
             what is supplied here, 'num_splits' is always enforced. All enforced kwargs
             are available to be passed to model or sim filename templates.
         calibrated : bool, optional
-            Whether to load calibrated raw data, by default False.
+            Whether to apply calibration factors to simulations after they are
+            drawn by default, by default False. If True, calibration factors
+            will be applied by default but this can be negated at runtime. If 
+            False, calibration factors will not be applied by default but can
+            be supplied at runtime.
+        calibrations_subproduct : str, optional
+            The calibrations subproduct within the supplied data model to use
+            if calibrated is True. Disregarded if calibrated is False.
         differenced : bool, optional
             Whether to take differences between splits or treat loaded maps as raw noise 
             (e.g., a time-domain sim) that will not be differenced, by default True.
@@ -144,6 +151,7 @@ class Params(ABC):
 
         # other instance properties
         self._calibrated = calibrated
+        self._calibrations_subproduct = calibrations_subproduct
         self._differenced = differenced
         self._dtype = np.dtype(dtype) # better str(...) appearance
         self._srcfree = srcfree
@@ -216,6 +224,7 @@ class Params(ABC):
             maps_product=self._maps_product,
             maps_subproduct=self._maps_subproduct,
             calibrated=self._calibrated,
+            calibrations_subproduct=self._calibrations_subproduct,
             catalogs_subproduct=self._catalogs_subproduct,
             catalog_name=self._catalog_name,
             differenced=self._differenced,
