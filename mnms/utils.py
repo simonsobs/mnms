@@ -1383,7 +1383,7 @@ def fourier_resample(imap, omap=None, shape=None, wcs=None, dtype=None):
 
     kx = np.fft.rfftfreq(omap.shape[-1]).astype(dtype, copy=False)
     ky = np.fft.fftfreq(omap.shape[-2])[..., None].astype(dtype, copy=False)
-    phase = np.exp(-2j*np.pi*(ky*shift[0] + kx*shift[1]))
+    phase = np.exp(-2j*np.pi*(ky*shift[0] + kx*shift[1])).astype(okmap.dtype, copy=False)
 
     okmap = concurrent_op(np.multiply, okmap, phase)
     okmap = enmap.ndmap(okmap, omap.wcs)
