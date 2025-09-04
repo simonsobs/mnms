@@ -1383,7 +1383,7 @@ def fourier_resample(imap, omap=None, shape=None, wcs=None, dtype=None):
 
     kx = np.fft.rfftfreq(omap.shape[-1]).astype(dtype, copy=False)
     ky = np.fft.fftfreq(omap.shape[-2])[..., None].astype(dtype, copy=False)
-    phase = np.exp(-2j*np.pi*(ky*shift[0] + kx*shift[1]))
+    phase = np.exp(-2j*np.pi*(ky*shift[0] + kx*shift[1])).astype(okmap.dtype, copy=False)
 
     okmap = concurrent_op(np.multiply, okmap, phase)
     okmap = enmap.ndmap(okmap, omap.wcs)
@@ -2644,32 +2644,6 @@ def read_map_geometry(data_model, qid, split_num=0, coadd=False, ivar=False,
     if len(shape) == 2:
         shape = (1, *shape)
     return shape, wcs
-
-def get_mult_fact(data_model, qid, ivar=False):
-    raise NotImplementedError('Currently do not support loading calibration factors in mnms')
-#     """Get a map calibration factor depending on the array and 
-#     map type.
-
-#     Parameters
-#     ----------
-#     data_model : sofind.DataModel
-#          DataModel instance to help load raw products
-#     qid : str
-#         Map identification string.
-#     ivar : bool, optional
-#         If True, load the factor for the inverse-variance map for the
-#         qid and split. If False, load the factor for the source-free map
-#         for the same, by default False.
-
-#     Returns
-#     -------
-#     float
-#         Calibration factor.
-#     """
-#     if ivar:
-#         return 1/data_model.get_gain(qid)**2
-#     else:
-#         return data_model.get_gain(qid)
 
 def write_alm(fn, alm):
     """Write alms to disk.
