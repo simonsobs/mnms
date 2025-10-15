@@ -70,19 +70,13 @@ class DataManager(io.Params):
 
         # get "super qids": marriage of a subproduct_kwarg combo and qid (for
         # all possible marriages)
-        super_qids = []
+        super_qids = s_utils.get_super_qids_from_qids_and_subproduct_kwargs(*qids, **subproduct_kwargs)
+        self._super_qids = super_qids
+
         super_qid_strs = []
-        for vals in product(*subproduct_kwargs.values(), qids):
-            _subproduct_kwargs = dict(zip(subproduct_kwargs.keys(), vals[:-1]))
-            qid = vals[-1]
-
-            # e.g. ({'inout_split': 'inout1', 'el_split': 1}, 'pa5a')
-            super_qid = (_subproduct_kwargs, qid)
-            super_qids.append(super_qid)
-
+        for (_subproduct_kwargs, qid) in super_qids:
             super_qid_str = '_'.join([qid] + [f'{k}_{v}' for k, v in _subproduct_kwargs.items()])
             super_qid_strs.append(super_qid_str)
-        self._super_qids = super_qids
         self._super_qid_strs = super_qid_strs
 
         # don't pass qids up MRO, we eat them up here
