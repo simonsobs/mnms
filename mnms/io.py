@@ -26,6 +26,7 @@ class Params(ABC):
                  mask_est_apodization=0, mask_obs_name=None, mask_obs_edgecut=0,
                  model_lim=None, model_lim0=None,
                  catalogs_subproduct=None, catalog_name=None,
+                 inpaint_radius=6, inpaint_thumb_width=120,
                  kfilt_lbounds=None, dtype=np.float32, model_file_template=None,
                  sim_file_template=None, qid_names_template=None,
                  **kwargs):
@@ -114,6 +115,11 @@ class Params(ABC):
         catalog_name : str, optional
             A source catalog, by default None. If given, inpaint data and ivar maps.
             Only allows csv or txt files. If neither extension detected, assumed to be csv.
+        inpaint_radius : scalar, optional
+            Radius in arcmin for inpainting around a source catalog, by default 6.
+        inpaint_thumb_width : scalar, optional
+            Thumbnail-side width in arcmin for grabbing large-scale noise for 
+            inpainting around source catalog, by default 120.
         kfilt_lbounds : size-2 iterable, optional
             The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
             If given, filter data before (possibly) downgrading it. 
@@ -198,6 +204,8 @@ class Params(ABC):
             if not catalog_name.endswith(('.csv', '.txt')):
                 catalog_name += '.csv'
         self._catalog_name = catalog_name
+        self._inpaint_radius = inpaint_radius
+        self._inpaint_thumb_width = inpaint_thumb_width
         
         self._kfilt_lbounds = kfilt_lbounds
 
@@ -235,6 +243,8 @@ class Params(ABC):
             ivar_filt_method=self._ivar_filt_method,
             ivar_fwhms=self._ivar_fwhms,
             ivar_lmaxs=self._ivar_lmaxs,
+            inpaint_radius=self._inpaint_radius,
+            inpaint_thumb_width=self._inpaint_thumb_width,
             kfilt_lbounds=self._kfilt_lbounds,
             masks_subproduct=self._masks_subproduct,
             mask_est_name=self._mask_est_name,

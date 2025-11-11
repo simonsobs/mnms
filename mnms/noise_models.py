@@ -682,7 +682,8 @@ class DataManager(io.Params):
             seed = None
 
         return inpaint.inpaint_noise_catalog(imap, ivar, mask_bool, catalog, inplace=inplace, 
-                                             seed=seed)
+                                             seed=seed, radius=self._inpaint_radius, 
+                                             thumb_width=self._inpaint_thumb_width)
 
     def _empty(self, shape, wcs, ivar=False, num_arrays=None, num_splits=None):
         """Allocate an empty buffer that will broadcast against the Noise Model 
