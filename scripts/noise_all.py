@@ -3,6 +3,9 @@ import argparse
 import numpy as np
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
+parser.add_argument("--output-dir", dest="output_dir", type=str, default=None)
+
 parser.add_argument('--config-name', dest='config_name', type=str, required=True,
                     help='Name of model config file from which to load parameters')
 
@@ -45,7 +48,7 @@ parser.add_argument('--maps-step', dest='maps_step', type=int, default=1,
 parser.add_argument('--alm', dest='alm', default=False, 
                     action='store_true', help='Generate simulated alms instead of maps.')
 args = parser.parse_args()
-
+args.qid = [item for sublist in args.qid for item in sublist.split()]
 model = nm.BaseNoiseModel.from_config(args.config_name, args.noise_model_name,
                                       *args.qid, **args.subproduct_kwargs)
 

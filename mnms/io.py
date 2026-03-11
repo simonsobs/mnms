@@ -19,13 +19,14 @@ class Params(ABC):
     def __init__(self, *args, data_model_name=None, subproduct=None,
                  maps_product=None, maps_subproduct='default',
                  enforce_equal_qid_kwargs=None, calibrated=False,
-                 differenced=True, srcfree=True, iso_filt_method=None,
-                 ivar_filt_method=None, filter_kwargs=None, ivar_fwhms=None,
-                 ivar_lmaxs=None, masks_subproduct=None, mask_est_name=None,
-                 mask_est_edgecut=0, mask_est_apodization=0,
-                 mask_obs_name=None, mask_obs_edgecut=0,
+                 calibrations_subproduct=None, differenced=True, srcfree=True,
+                 iso_filt_method=None, ivar_filt_method=None,
+                 filter_kwargs=None, ivar_fwhms=None, ivar_lmaxs=None,
+                 masks_subproduct=None, mask_est_name=None, mask_est_edgecut=0,
+                 mask_est_apodization=0, mask_obs_name=None, mask_obs_edgecut=0,
                  model_lim=None, model_lim0=None,
                  catalogs_subproduct=None, catalog_name=None,
+                 inpaint_radius=6, inpaint_thumb_width=120,
                  kfilt_lbounds=None, dtype=np.float32, model_file_template=None,
                  sim_file_template=None, qid_names_template=None,
                  **kwargs):
@@ -49,7 +50,14 @@ class Params(ABC):
             what is supplied here, 'num_splits' is always enforced. All enforced kwargs
             are available to be passed to model or sim filename templates.
         calibrated : bool, optional
-            Whether to load calibrated raw data, by default False.
+            Whether to apply calibration factors to simulations after they are
+            drawn by default, by default False. If True, calibration factors
+            will be applied by default but this can be negated at runtime. If 
+            False, calibration factors will not be applied by default but can
+            be supplied at runtime.
+        calibrations_subproduct : str, optional
+            The calibrations subproduct within the supplied data model to use
+            if calibrated is True. Disregarded if calibrated is False.
         differenced : bool, optional
             Whether to take differences between splits or treat loaded maps as raw noise 
             (e.g., a time-domain sim) that will not be differenced, by default True.
@@ -107,6 +115,11 @@ class Params(ABC):
         catalog_name : str, optional
             A source catalog, by default None. If given, inpaint data and ivar maps.
             Only allows csv or txt files. If neither extension detected, assumed to be csv.
+        inpaint_radius : scalar, optional
+            Radius in arcmin for inpainting around a source catalog, by default 6.
+        inpaint_thumb_width : scalar, optional
+            Thumbnail-side width in arcmin for grabbing large-scale noise for 
+            inpainting around source catalog, by default 120.
         kfilt_lbounds : size-2 iterable, optional
             The ly, lx scale for an ivar-weighted Gaussian kspace filter, by default None.
             If given, filter data before (possibly) downgrading it. 
@@ -144,6 +157,7 @@ class Params(ABC):
 
         # other instance properties
         self._calibrated = calibrated
+        self._calibrations_subproduct = calibrations_subproduct
         self._differenced = differenced
         self._dtype = np.dtype(dtype) # better str(...) appearance
         self._srcfree = srcfree
@@ -190,6 +204,8 @@ class Params(ABC):
             if not catalog_name.endswith(('.csv', '.txt')):
                 catalog_name += '.csv'
         self._catalog_name = catalog_name
+        self._inpaint_radius = inpaint_radius
+        self._inpaint_thumb_width = inpaint_thumb_width
         
         self._kfilt_lbounds = kfilt_lbounds
 
@@ -216,6 +232,7 @@ class Params(ABC):
             maps_product=self._maps_product,
             maps_subproduct=self._maps_subproduct,
             calibrated=self._calibrated,
+            calibrations_subproduct=self._calibrations_subproduct,
             catalogs_subproduct=self._catalogs_subproduct,
             catalog_name=self._catalog_name,
             differenced=self._differenced,
@@ -226,6 +243,8 @@ class Params(ABC):
             ivar_filt_method=self._ivar_filt_method,
             ivar_fwhms=self._ivar_fwhms,
             ivar_lmaxs=self._ivar_lmaxs,
+            inpaint_radius=self._inpaint_radius,
+            inpaint_thumb_width=self._inpaint_thumb_width,
             kfilt_lbounds=self._kfilt_lbounds,
             masks_subproduct=self._masks_subproduct,
             mask_est_name=self._mask_est_name,

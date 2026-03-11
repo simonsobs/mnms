@@ -4,6 +4,9 @@ import argparse
 import numpy as np
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
+parser.add_argument("--output-dir", dest="output_dir", type=str, default=None)
+
 parser.add_argument('--config-name', dest='config_name', type=str, required=True,
                     help='Name of model config file from which to load parameters')
 
@@ -33,6 +36,8 @@ parser.add_argument('--use-mpi', action='store_true',
                     help='Use MPI to compute models in parallel')
 
 args = parser.parse_args()
+
+args.qid = [item for sublist in args.qid for item in sublist.split()]
 
 if args.use_mpi:
     # Could add try statement, but better to crash if MPI cannot be imported.
