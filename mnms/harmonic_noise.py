@@ -94,7 +94,7 @@ def get_harmonic_noise_sim(sqrt_cov_mat, seed, filter_only=True, nthread=0,
         f'Expected even number of preshape dims, got odd'
     
     sim = utils.rand_alm_white(ainfo, pre=sqrt_cov_mat.shape[:len_pre//2], seed=seed,
-                               dtype=sqrt_cov_mat.dtype, nthread=nthread)
+                               dtype=sqrt_cov_mat.dtype, nchunks=100, nthread=nthread)
     
     if not filter_only: 
         sim = utils.ell_filter_correlated(sim, 'harmonic', sqrt_cov_mat,

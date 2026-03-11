@@ -1956,7 +1956,7 @@ def concurrent_normal(size=1, loc=0., scale=1., nchunks=100, nthread=0,
     return out.reshape(size)
 
 def rand_alm_white(ainfo, pre=None, alm=None, seed=None, dtype=np.float32,
-                   m_major=True, nthread=0):
+                   m_major=True, nchunks=None, nthread=0):
     """Generate white noise in harmonic space assuming a triangular alm_info.
     Like pixell.curvedsky.rand_alm, except before the application of the power
     spectrum matrix. Thus, this differs from pixell.curvedsky.rand_alm_white in
@@ -1979,6 +1979,11 @@ def rand_alm_white(ainfo, pre=None, alm=None, seed=None, dtype=np.float32,
     m_major : bool, optional
         Draws with the same seed but different lmax will be the same for their
         shared modes, by default True. Faster if False.
+    nchunks : int, optional
+        The number of concurrent subdraws to make, by default the product of the
+        alm preshape (see concurrent_normal for general details). The default 
+        behavior causes the same draw along the same pre-elements, even if a 
+        subsequent draw adds new elements to the preshape.
     nthread : int, optional
         Number of concurrent threads, by default 0. If 0, the result
         of get_cpu_count().
@@ -1996,8 +2001,10 @@ def rand_alm_white(ainfo, pre=None, alm=None, seed=None, dtype=np.float32,
             alm = np.empty((*pre, ainfo.nelem), ctype)
 
     # scale is because both the real and imaginary parts are unit standard normal
+    if nchunks is None:
+        nchunks = np.prod(pre) # if pre changes, the draw is the same for first elements
     alm[...] = concurrent_normal(
-        size=alm.shape, scale=1/np.sqrt(2),
+        size=alm.shape, scale=1/np.sqrt(2), nchunks=nchunks,
         nthread=nthread, seed=seed, dtype=dtype, complex=True
         )
 
@@ -2011,7 +2018,8 @@ def rand_alm_white(ainfo, pre=None, alm=None, seed=None, dtype=np.float32,
     return alm
 
 def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128,
-             m_major=True, return_ainfo=False, nthread=0):
+             m_major=True, return_ainfo=False, nchunks=None, nthread=0, lim=0,
+             lim0=0):
     """A rewrite of pixell.curvedsky.rand_alm, but using mnms' parallelized
     rand_alm_white. Note that all sqrt(2) correction factors are in 
     rand_alm_white, not this function.
@@ -2034,9 +2042,20 @@ def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128,
         shared modes, by default True. Faster if False.
     return_ainfo : bool, optional
         Return the constructed ainfo, by default False.
+    nchunks : int, optional
+        The number of concurrent subdraws to make, by default the product of the
+        alm preshape (see concurrent_normal for general details). The default 
+        behavior causes the same draw along the same pre-elements, even if a 
+        subsequent draw adds new elements to the preshape.
     nthread : int, optional
         Number of concurrent threads, by default 0. If 0, the result
         of get_cpu_count().
+    lim : scalar, optional
+        Relative eigenvalue cut for np_eigpow, by default 0. Note, this differs
+        from the np_eigpow default of 1e-6.
+    lim0 : scalar, optional
+        Absolute eigenvalue cut for np_eigpow, by default 0. Note, this differs
+        from the np_eigpow default of square-root tiny.
 
     Returns
     -------
@@ -2046,9 +2065,12 @@ def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128,
     rtype = np.zeros([0], dtype=dtype).real.dtype
     wps, ainfo = curvedsky.prepare_ps(ps, ainfo=ainfo, lmax=lmax)
     alm = rand_alm_white(ainfo, pre=[wps.shape[0]], seed=seed, dtype=rtype,
-                         m_major=m_major, nthread=nthread)
+                         m_major=m_major, nchunks=nchunks, nthread=nthread)
 
-    ps12 = np_eigpow(wps, 0.5, axes=[0, 1]) # overhead from multithreading too high
+    # overhead from multithreading too high, so use np_eigpow.
+    # pass lim, lim0 because eg lensing PS is super small compared to normal ps
+    # just due to units, and nonzero lim can inadvertently mess it up 
+    ps12 = np_eigpow(wps, 0.5, axes=[0, 1], lim=lim, lim0=lim0) 
     ainfo.lmul(alm, ps12.astype(rtype, copy=False), alm)
 
     if ps.ndim == 1:
