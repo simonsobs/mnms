@@ -7,7 +7,7 @@ For any questions please reach out to Zach Atkins (email: [zatkins@princeton.edu
 ## Products
 Products for the ACT DR6.01 release are available at `NERSC` and at Princeton (`della`). You can create a public account on `NERSC` following [these instructions](https://crd.lbl.gov/divisions/scidata/c3/c3-research/cosmic-microwave-background/cmb-data-at-nersc/). Follow the setup instructions for `mnms` and `sofind`, and utilize the appropriate `sofind` data model. 
 
-As an aid in forecasting studies, the noise curve products for figure 3 of [Atkins et. al. 2023](https://arxiv.org/abs/2303.04180) are available at https://phy-act1.princeton.edu/public/data/dr6_noise_v1, with an accompanying notebook.
+As an aid in forecasting studies, the noise curve products for figure 3 of [Atkins et. al. 2023](https://arxiv.org/abs/2303.04180) are available at https://phy-act1.princeton.edu/public/data/dr6_noise_v2, with an accompanying notebook. This has been updated to also include the analogous plots for the dr6.02 maps used in the ACT DR6 power spectrum results of [Louis et. al. 2025](https://arxiv.org/abs/2503.14452). Users must take careful note of the `readme.txt` file in that directory and not use the curves in any cosmological analysis.
 
 ## Dependencies
 Users wishing to filter data or generate noise simulations should have the following dependencies in their environment:
