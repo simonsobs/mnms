@@ -574,6 +574,38 @@ def interp1d_bins(bins, y, return_vals=False, **interp1d_kwargs):
     else:
         return interp1d(x, y, fill_value=fill_value, **interp1d_kwargs)
 
+def eigpow_flat(mat, exp, preshape, **kwargs):
+    """Reshape input (*preshape, *preshape, *postshape)-shaped matrix to an
+    (ncomp, ncomp, *postshape)-shaped matrix and raise to provided power.
+
+    Parameters
+    ----------
+    mat : (preshape) + (preshape) + (postshape) ndarray
+        Input array
+    exp : float
+        Matrix power.
+    preshape : tuple
+        tuple denoting the specified preshape.
+    kwargs : dict
+        Keyword arguments to eigpow. Cannot provide "axes" keyword argument.
+
+    Returns
+    -------
+    out : (preshape) + (preshape) + (postshape) ndarray
+        Input matrix raised to specified power.
+    """
+
+    if 'axes' in kwargs:
+        raise ValueError('"axes" keyword argument is not supported.')
+
+    ncomp = np.prod(preshape, dtype=int)
+
+    mat = mat.reshape(ncomp, ncomp, -1)
+    mat = eigpow(mat, exp, axes=[0, 1], **kwargs)
+    mat = mat.reshape(*preshape, *preshape, -1)
+
+    return mat
+
 def get_ps_mat(inp, outbasis, exp, lim=1e-6, lim0=None, inbasis='harmonic',
                shape=None, wcs=None):
     """Get a power spectrum matrix from input alm's or fft's, raised to a given
@@ -644,9 +676,7 @@ def get_ps_mat(inp, outbasis, exp, lim=1e-6, lim0=None, inbasis='harmonic',
                 if preidx1 != preidx2:
                     mat[(*preidx2, *preidx1)] = mat[(*preidx1, *preidx2)]
 
-        mat = mat.reshape(ncomp, ncomp, -1)
-        mat = eigpow(mat, exp, axes=[0, 1], lim=lim, lim0=lim0)
-        mat = mat.reshape(*preshape, *preshape, -1)
+        mat = eigpow_flat(mat, exp, preshape, lim=lim, lim0=lim0)
         
         if outbasis == 'harmonic':
             out = mat
@@ -698,10 +728,8 @@ def get_ps_mat(inp, outbasis, exp, lim=1e-6, lim0=None, inbasis='harmonic',
                     )
                 if preidx1 != preidx2:
                     mat[(*preidx2, *preidx1)] = mat[(*preidx1, *preidx2)]
-        
-        mat = mat.reshape(ncomp, ncomp, -1)
-        mat = eigpow(mat, exp, axes=[0, 1], lim=lim, lim0=lim0)
-        mat = mat.reshape(*preshape, *preshape, -1)
+
+        mat = eigpow_flat(mat, exp, preshape, lim=lim, lim0=lim0)
 
         if outbasis == 'fourier':
             out = enmap.empty((*preshape, *preshape, shape[-2], shape[-1]//2+1), wcs, inp.real.dtype) # need "real" matrix

@@ -74,7 +74,7 @@ def identity(inp, *args, **kwargs):
 @register('map', 'map', iso_filt_method='harmonic', model=True)
 def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
                                  post_filt_rel_downgrade=1,
-                                 post_filt_downgrade_wcs=None,
+                                 post_filt_downgrade_wcs=None, cov_ell=None,
                                  lim=1e-6, lim0=None, **kwargs):
     """Filter a map by an ell-dependent matrix in harmonic space. The
     filter is measured as the pseudospectra of the input and returned.
@@ -96,6 +96,9 @@ def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
         bandlimits the measured pseudospectra by the same factor.
     post_filt_downgrade_wcs : astropy.wcs.WCS, optional
         Assign this wcs to the filtered maps, by default None.
+    cov_ell : (*preshape, *preshape, nell) np.ndarray, optional
+        If provided, skip the estimation of the ell-dependent matrix and
+        instead use this matrix for the harmonic filter, by default None.
     lim : float, optional
         Set eigenvalues smaller than lim * max(eigenvalues) to zero.
     lim0 : float, optional
@@ -118,12 +121,19 @@ def iso_harmonic_ivar_none_model(imap, mask_est=1, ainfo=None, lmax=None,
     The matrix square-root is taken over the matrix axes before filtering, as
     appropriate for a map.
     """
-    # measure sqrt_cov_ell and inv_sqrt_cov_ell
-    sqrt_cov_ell, inv_sqrt_cov_ell = utils.measure_iso_harmonic(
-        imap, 0.5, -0.5, mask_est=mask_est, ainfo=ainfo, lmax=lmax,
-        lim=lim, lim0=lim0
+    if cov_ell is None:
+        sqrt_cov_ell, inv_sqrt_cov_ell = utils.measure_iso_harmonic(
+            imap, 0.5, -0.5, mask_est=mask_est, ainfo=ainfo, lmax=lmax,
+            lim=lim, lim0=lim0
         )
-    
+    else:
+        preshape = cov_ell.shape[:len(cov_ell.shape[:-1]) // 2]
+        sqrt_cov_ell, inv_sqrt_cov_ell = [
+            utils.eigpow_flat(
+            cov_ell, e, preshape, lim=lim, lim0=lim0, copy=True)
+            for e in (0.5, -0.5)
+        ]
+
     # also need to downgrade the measured power spectra!
     sqrt_cov_ell = sqrt_cov_ell[..., :lmax//post_filt_rel_downgrade+1]
     
@@ -166,7 +176,7 @@ def iso_harmonic_ivar_none(alm, sqrt_cov_ell=None, ainfo=None, lmax=None,
 @register('map', 'map', iso_filt_method='harmonic', ivar_filt_method='basic', model=True)
 def iso_harmonic_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
                                   lmax=None, post_filt_rel_downgrade=1,
-                                  post_filt_downgrade_wcs=None,
+                                  post_filt_downgrade_wcs=None, cov_ell=None,
                                   lim=1e-6, lim0=None, **kwargs):
     """Filter a map by another map in map space, and then an ell-dependent
     matrix in harmonic space. The harmonic filter is measured as the
@@ -191,6 +201,9 @@ def iso_harmonic_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
         bandlimits the measured pseudospectra by the same factor.
     post_filt_downgrade_wcs : astropy.wcs.WCS, optional
         Assign this wcs to the filtered maps, by default None.
+    cov_ell : (*preshape, *preshape, nell) np.ndarray, optional
+        If provided, skip the esimation of the ell-dependent matrix and
+        instead use this matrix for the harmonic filter, by default None.    
     lim : float, optional
         Set eigenvalues smaller than lim * max(eigenvalues) to zero.
     lim0 : float, optional
@@ -220,14 +233,14 @@ def iso_harmonic_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
     return iso_harmonic_ivar_none_model(
         imap, mask_est=mask_est, ainfo=ainfo, lmax=lmax,
         post_filt_rel_downgrade=post_filt_rel_downgrade, 
-        post_filt_downgrade_wcs=post_filt_downgrade_wcs, lim=lim,
-        lim0=lim0
+        post_filt_downgrade_wcs=post_filt_downgrade_wcs,
+        cov_ell=cov_ell, lim=lim, lim0=lim0
         )
 
 @register('map', 'map', iso_filt_method='harmonic_raw', ivar_filt_method='basic', model=True)
 def iso_harmonic_raw_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
                                       lmax=None, post_filt_rel_downgrade=1,
-                                      post_filt_downgrade_wcs=None,
+                                      post_filt_downgrade_wcs=None, cov_ell=None,
                                       lim=1e-6, lim0=None, **kwargs):
     """Filter a map by another map in map space, and then an ell-dependent
     matrix in harmonic space. The harmonic filter is measured as the
@@ -253,6 +266,9 @@ def iso_harmonic_raw_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
         bandlimits the measured pseudospectra by the same factor.
     post_filt_downgrade_wcs : astropy.wcs.WCS, optional
         Assign this wcs to the filtered maps, by default None.
+    cov_ell : (*preshape, *preshape, nell) np.ndarray, optional
+        If provided, skip the esimation of the ell-dependent matrix and
+        instead use this matrix for the harmonic filter, by default None.
     lim : float, optional
         Set eigenvalues smaller than lim * max(eigenvalues) to zero.
     lim0 : float, optional
@@ -279,11 +295,19 @@ def iso_harmonic_raw_ivar_basic_model(imap, sqrt_ivar=1, mask_est=1, ainfo=None,
     # net power effect of var map
     sqrt_var = np.reciprocal(sqrt_ivar, where=sqrt_ivar!=0) * (sqrt_ivar!=0)
 
-    sqrt_cov_ell, inv_sqrt_cov_ell = utils.measure_iso_harmonic(
-        imap, 0.5, -0.5, mask_est=mask_est, mask_norm=sqrt_var, ainfo=ainfo, #TODO: is this right in general?
-        lmax=lmax, lim=lim, lim0=lim0
+    if cov_ell is None:
+        sqrt_cov_ell, inv_sqrt_cov_ell = utils.measure_iso_harmonic(
+            imap, 0.5, -0.5, mask_est=mask_est, mask_norm=sqrt_var, ainfo=ainfo, #TODO: is this right in general?
+            lmax=lmax, lim=lim, lim0=lim0
         )
-    
+    else:
+        preshape = cov_ell.shape[:len(cov_ell.shape[:-1]) // 2]
+        sqrt_cov_ell, inv_sqrt_cov_ell = [
+            utils.eigpow_flat(
+            cov_ell, e, preshape, lim=lim, lim0=lim0, copy=True)
+            for e in (0.5, -0.5)
+        ]
+        
     # also need to downgrade the measured power spectra!
     sqrt_cov_ell = sqrt_cov_ell[..., :lmax//post_filt_rel_downgrade+1]
 
@@ -464,7 +488,7 @@ def iso_harmonic_raw_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
                                      ell_highs=None, profile='cosine',
                                      dtype=np.float32, mask_est=1, ainfo=None,
                                      lmax=None, post_filt_rel_downgrade=1,
-                                     post_filt_downgrade_wcs=None,
+                                     post_filt_downgrade_wcs=None, cov_ell=None,
                                      lim=1e-6, lim0=None, **kwargs):
     """Filter a map by multiple maps in map space, each map for a different 
     range of ells in harmonic space. Then, filter that map by an ell-dependent
@@ -501,6 +525,9 @@ def iso_harmonic_raw_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
         bandlimits the measured pseudospectra by the same factor.
     post_filt_downgrade_wcs : astropy.wcs.WCS, optional
         Assign this wcs to the filtered maps, by default None.
+    cov_ell : (*preshape, *preshape, nell) np.ndarray, optional
+        If provided, skip the esimation of the ell-dependent matrix and
+        instead use this matrix for the harmonic filter, by default None.
     lim : float, optional
         Set eigenvalues smaller than lim * max(eigenvalues) to zero.
     lim0 : float, optional
@@ -527,10 +554,18 @@ def iso_harmonic_raw_ivar_scaledep_model(imap, sqrt_ivar=None, ell_lows=None,
     # net power effect of var map
     sqrt_var = np.reciprocal(sqrt_ivar[-1], where=sqrt_ivar[-1]!=0) * (sqrt_ivar[-1]!=0)
 
-    sqrt_cov_ell, inv_sqrt_cov_ell = utils.measure_iso_harmonic(
-        imap, 0.5, -0.5, mask_est=mask_est, mask_norm=sqrt_var, ainfo=ainfo,
-        lmax=lmax, lim=lim, lim0=lim0
+    if cov_ell is None:
+        sqrt_cov_ell, inv_sqrt_cov_ell = utils.measure_iso_harmonic(
+            imap, 0.5, -0.5, mask_est=mask_est, mask_norm=sqrt_var, ainfo=ainfo,
+            lmax=lmax, lim=lim, lim0=lim0
         )
+    else:
+        preshape = cov_ell.shape[:len(cov_ell.shape[:-1]) // 2]
+        sqrt_cov_ell, inv_sqrt_cov_ell = [
+            utils.eigpow_flat(
+            cov_ell, e, preshape, lim=lim, lim0=lim0, copy=True)
+            for e in (0.5, -0.5)
+        ]
 
     # also need to downgrade the measured power spectra!
     sqrt_cov_ell = sqrt_cov_ell[..., :lmax//post_filt_rel_downgrade+1]

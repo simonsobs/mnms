@@ -5,10 +5,8 @@ from optweight import noise_utils, type_utils, operators, mat_utils, wavtrans, w
 
 import numpy as np
 
-
-# TODO: add lim, lim0 args
 def estimate_sqrt_cov_wav_from_enmap(alm, w_ell, shape, wcs, fwhm_fact=2,
-                                     verbose=True):
+                                     lim=1e-6, lim0=None, verbose=True):
     """Estimate wavelet-based covariance matrix given noise enmap.
 
     Parameters
@@ -29,6 +27,10 @@ def estimate_sqrt_cov_wav_from_enmap(alm, w_ell, shape, wcs, fwhm_fact=2,
         Can also be a function specifying this factor for a given
         ell. Function must accept a single scalar ell value and 
         return one.
+    lim : float, optional
+        Set eigenvalues smaller than lim * max(eigenvalues) to zero.
+    lim0 : float, optional
+        If max(eigenvalues) < lim0, set whole matrix to zero.    
     verbose : bool, optional
         Print possibly helpful messages, by default True.
 
@@ -64,7 +66,7 @@ def estimate_sqrt_cov_wav_from_enmap(alm, w_ell, shape, wcs, fwhm_fact=2,
     cov_wav = noise_utils.estimate_cov_wav(alm, ainfo, w_ell, [0, 2], diag=False,
                                            wav_template=wav_template, fwhm_fact=fwhm_fact)
     sqrt_cov_wavs = mat_utils.wavmatpow(cov_wav, 0.5, return_diag=True, axes=[[0,1], [2,3]],
-                                       inplace=True)
+                                        inplace=True, lim=lim, lim0=lim0)
 
     return {'sqrt_cov_mat': sqrt_cov_wavs}
 
