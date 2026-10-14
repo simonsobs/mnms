@@ -765,7 +765,7 @@ class DataManager(io.Params):
             Calibration (and possibly polarization efficiency) factors.
         """
         # get an array that will broadcast against dmaps
-        shape = self._empty((1, 1), self._full_wcs, ivar=False, num_splits=1).shape
+        shape = self._empty((1, 1), self._full_wcs, ivar=False, num_splits=1).shape # (nar, 1, npol, 1, 1)
         cals = np.zeros(shape, dtype=self._dtype)
         npol = shape[-3]
         
@@ -779,7 +779,7 @@ class DataManager(io.Params):
                 **subproduct_kwargs)
 
         if alm:
-            cals = cals[..., 0]
+            cals = cals[..., 0] # (nar, 1, npol, 1)
 
         return cals
 
@@ -1451,7 +1451,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                     self.cache_data('model', res, split_num=split_num, lmax=lmax_model)
                 return res
             else: # generate == True
-                pass
+                assert generate, 'This should not be possible'
         
         # get the masks, sqrt_ivar, cfact, dmap
         try:
@@ -1654,9 +1654,9 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
     def get_sim(self, split_num, sim_num, lmax, seed='auto', alm=False,
                 calibrate='auto', calibrations_subproduct=None, 
-                check_on_disk=True, generate=True, keep_model=True,
-                keep_mask_obs=True, keep_sqrt_ivar=True, keep_cal=True,
-                write=False, verbose=False):
+                check_on_disk=True, check_disk_for_map_and_alm=False,
+                generate=True, keep_model=True, keep_mask_obs=True,
+                keep_sqrt_ivar=True, keep_cal=True, write=False, verbose=False):
         """Load or generate a sim from this NoiseModel. Will load necessary
         products to disk if not yet stored in instance attributes.
 
@@ -1695,6 +1695,13 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             exists on-disk. If it does not, generate the sim if 'generate' is True, and
             raise a FileNotFoundError if it is False. If it does, load and return it.
             By default True.
+        check_disk_for_map_and_alm : bool, optional
+            If True, check for both a 'map' and 'alm' sim file on disk, and return in
+            the basis requested by the alm argument, by default False (for 
+            backwards compatibility). Only one of the two possible files can be
+            present or else an exception is raised. Note that if alm is loaded and
+            a map is returned, it will *not* be masked by mask_obs. If False, only
+            look for a sim file exactly matching the requested map or alm basis.
         generate: bool, optional
             If 'check_on_disk' is True but the sim is not found, generate the
             sim. If False and the same occurs, raise a FileNotFoundError. By
@@ -1770,13 +1777,30 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
                 cal_from_cache = False
 
         if check_on_disk:
-            res = self._check_sim_on_disk(split_num, sim_num, lmax, alm=alm, generate=generate)
+            res, alm_from_disk = self._check_sim_on_disk(
+                split_num, sim_num, lmax, alm=alm,
+                check_disk_for_map_and_alm=check_disk_for_map_and_alm,
+                generate=generate
+                )
+            
             if res is not False:
+                # if alm_from_disk != alm, we need to transform. NOTE: to be
+                # backwards-compatible, the dtype follows whatever is on-disk,
+                # not self._dtype.
+                if not alm_from_disk and alm:
+                    res = utils.map2alm(res, lmax=lmax)
+                elif alm_from_disk and not alm:
+                    res = utils.alm2map(res, shape=shape, wcs=wcs)
+                else:
+                    pass # identity
+
+                # cal shape is matched to requested alm, so this must happen 
+                # after the transform
                 if _calibrate:
                     res *= cal
                 return res
             else: # generate == True
-                pass
+                assert generate, 'This should not be possible'
 
         # get the model, mask, sqrt_ivar
         try:
@@ -1864,7 +1888,8 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         return sim
 
-    def _check_sim_on_disk(self, split_num, sim_num, lmax, alm=False, generate=True):
+    def _check_sim_on_disk(self, split_num, sim_num, lmax, alm=False, 
+                           check_disk_for_map_and_alm=False, generate=True):
         """Check if this NoiseModel's sim for a given split, sim exists on-disk. 
         If it does, return it. Depending on the 'generate' kwarg, return either 
         False or raise a FileNotFoundError if it does not exist on-disk.
@@ -1879,6 +1904,12 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             Bandlimit for output noise covariance.
         alm : bool, optional
             Whether the sim is stored as an alm or map, by default False.
+        check_disk_for_map_and_alm : bool, optional
+            If True, check for both a 'map' and 'alm' sim file on disk, and return
+            whichever exists, by default False (for  backwards compatibility).
+            Only one of the two possible files can be present or else an exception
+            is raised. If False, only look for a sim file exactly matching the
+            requested map or alm basis.
         generate : bool, optional
             If the sim does not exist on-disk and 'generate' is True, then return
             False. If the sim does not exist on-disk and 'generate' is False, then
@@ -1886,25 +1917,52 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
 
         Returns
         -------
-        enmap.ndmap or bool
+        enmap.ndmap or bool, bool
             If the sim exists on-disk, return it. If 'generate' is True and the 
-            sim does not exist on-disk, return False.
+            sim does not exist on-disk, return False. The second return value is
+            the alm bool corresponding to what (if anything) was actually loaded
+            from disk.
 
         Raises
         ------
         FileNotFoundError
             If 'generate' is False and the sim does not exist on-disk.
         """
-        try:        
-            fn = self.get_sim_fn(split_num, sim_num, lmax, alm=alm, to_write=False)
-            read_sim_kwargs = dict(preshape=(self._num_arrays, 1)) if alm else {}
-            return self.read_sim(fn, alm=alm, **read_sim_kwargs)
+        try:
+            fn_map = self.get_sim_fn(split_num, sim_num, lmax, alm=False, to_write=False)
+        except FileNotFoundError:
+            fn_map = ''
+
+        try:
+            fn_alm = self.get_sim_fn(split_num, sim_num, lmax, alm=True, to_write=False)
+        except FileNotFoundError:
+            fn_alm = ''
+        
+        if check_disk_for_map_and_alm:
+            generate_str = f'Sim {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax)} not found on-disk (neither alm nor map), generating instead'
+            nofile_str = f'Sim {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax)} not found on-disk (neither alm nor map), please generate it first'
+        else:
+            if alm:
+                fn_alm = fn_alm # might be ''
+                fn_map = ''
+            else:
+                fn_alm = ''
+                fn_map = fn_map # might be ''
+
+            generate_str = f'Sim {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm)} not found on-disk, generating instead'
+            nofile_str = f'Sim {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm)} not found on-disk, please generate it first'
+        
+        try:
+            fn = s_utils.get_protected_fn(fn_map, fn_alm)
+            alm_from_disk = fn == fn_alm
+            read_sim_kwargs = dict(preshape=(self._num_arrays, 1)) if alm_from_disk else {}
+            return self.read_sim(fn, alm=alm_from_disk, **read_sim_kwargs), alm_from_disk
         except FileNotFoundError as e:
             if generate:
-                print(f'Sim {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm)} not found on-disk, generating instead')
-                return False
+                print(generate_str)
+                return False, None # nothing used if generate
             else:
-                raise FileNotFoundError(f'Sim {utils.kwargs_str(split_num=split_num, sim_num=sim_num, lmax=lmax, alm=alm)} not found on-disk, please generate it first') from e
+                raise FileNotFoundError(nofile_str) from e
 
     @classmethod
     def filter(cls, inp, iso_filt_method=None, ivar_filt_method=None,
