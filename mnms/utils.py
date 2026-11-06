@@ -2135,6 +2135,8 @@ def parallel_inplace_op(op, a, b):
     Broadcasting happens without copying b. The operation loops over all but
     the last two axes of a, and is parallelized over the second-to-last axis.
     """
+    assert isinstance(a, np.ndarray), 'input a must be ndarray subclass'
+
     try:
         kernel = _PARALLEL_INPLACE_OPS[op]
     except KeyError as e:
