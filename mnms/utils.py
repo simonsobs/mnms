@@ -2074,12 +2074,80 @@ def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128,
     ainfo.lmul(alm, ps12.astype(rtype, copy=False), alm)
 
     if ps.ndim == 1:
-        alm = alm[0] 
+        alm = alm[0]
     if return_ainfo:
         return alm, ainfo
     else: return alm
 
-def concurrent_op(op, a, b, *args, flatten_axes=[-2,-1], 
+# 2d kernels for parallel_inplace_op, parallelized over the first axis
+@numba.njit(parallel=True)
+def _parallel_iadd(a, b):
+    for i in numba.prange(a.shape[0]):
+        for j in range(a.shape[1]):
+            a[i, j] += b[i, j]
+
+@numba.njit(parallel=True)
+def _parallel_isubtract(a, b):
+    for i in numba.prange(a.shape[0]):
+        for j in range(a.shape[1]):
+            a[i, j] -= b[i, j]
+
+@numba.njit(parallel=True)
+def _parallel_imultiply(a, b):
+    for i in numba.prange(a.shape[0]):
+        for j in range(a.shape[1]):
+            a[i, j] *= b[i, j]
+
+@numba.njit(parallel=True)
+def _parallel_idivide(a, b):
+    for i in numba.prange(a.shape[0]):
+        for j in range(a.shape[1]):
+            a[i, j] /= b[i, j]
+
+_PARALLEL_INPLACE_OPS = {
+    np.add: _parallel_iadd,
+    np.subtract: _parallel_isubtract,
+    np.multiply: _parallel_imultiply,
+    np.divide: _parallel_idivide,
+}
+
+def parallel_inplace_op(op, a, b):
+    """Perform a simple element-wise numpy operation inplace on a, i.e.
+    a = op(a, b), in parallel with numba.
+
+    Parameters
+    ----------
+    op : numpy function
+        One of np.add, np.subtract, np.multiply, or np.divide.
+    a : ndarray
+        The array to be modified inplace. Its shape and dtype are unchanged.
+    b : ndarray or scalar
+        The modifier array. Must broadcast against a without changing a's
+        shape.
+
+    Returns
+    -------
+    ndarray
+        The modified a.
+
+    Notes
+    -----
+    Broadcasting happens without copying b. The operation loops over all but
+    the last two axes of a, and is parallelized over the second-to-last axis.
+    """
+    try:
+        kernel = _PARALLEL_INPLACE_OPS[op]
+    except KeyError as e:
+        raise ValueError(f'Unsupported op {op}, must be one of '
+                         f'{list(_PARALLEL_INPLACE_OPS)}') from e
+
+    _a = np.atleast_2d(np.asarray(a))
+    _b = np.broadcast_to(np.asarray(b), _a.shape)
+    for preidx in np.ndindex(_a.shape[:-2]):
+        kernel(_a[preidx], _b[preidx])
+    return a
+
+def concurrent_op(op, a, b, *args, flatten_axes=[-2,-1],
                   nchunks=100, nthread=0, **kwargs):
     """Perform a numpy operation on two arrays concurrently.
 
