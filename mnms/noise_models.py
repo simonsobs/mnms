@@ -1,7 +1,7 @@
 from mnms import inpaint, utils, tiled_noise, wav_noise, fdw_noise, harmonic_noise, filters, transforms, io, classes
 
 from sofind import DataModel, utils as s_utils
-from pixell import enmap, wcsutils
+from pixell import enmap, wcsutils, curvedsky
 from enlib import bench
 
 import numpy as np
@@ -12,6 +12,9 @@ import os
 from itertools import product
 from abc import ABC, abstractmethod
 import warnings
+
+
+WHITE_NOISE_BASE_SEED = 4
 
 
 class DataManager(io.Params):
@@ -100,7 +103,8 @@ class DataManager(io.Params):
         # prepare cache
         cache = {}
         self._permissible_cache_keys = [
-            'mask_est', 'mask_obs', 'sqrt_ivar', 'cfact', 'dmap', 'model', 'cal'
+            'mask_est', 'mask_obs', 'sqrt_ivar', 'cfact', 'dmap', 'model', 'cal',
+            'white_noise'
             ]
         for k in self._permissible_cache_keys:
             if k not in cache:
@@ -790,7 +794,7 @@ class DataManager(io.Params):
         ----------
         cacheprod : str
             The "cache product", must be one of 'mask_est', 'mask_obs',
-            'sqrt_ivar', 'cfact', 'dmap', 'model', or 'cal'.
+            'sqrt_ivar', 'cfact', 'dmap', 'model', 'cal', or 'white_noise'.
         data : any
             Item to be stored.
         args : tuple, optional
@@ -815,7 +819,7 @@ class DataManager(io.Params):
         ----------
         cacheprod : str
             The "cache product", must be one of 'mask_est', 'mask_obs',
-            'sqrt_ivar', 'cfact', 'dmap', 'model', or 'cal'.
+            'sqrt_ivar', 'cfact', 'dmap', 'model', 'cal', or 'white_noise'.
         args : tuple, optional
             data will be stored under a key formed by (*args, **kwargs),
             where the args are order-sensitive and the kwargs are
@@ -842,10 +846,10 @@ class DataManager(io.Params):
         ----------
         args : tuple, optional
             If provided, the first arg must be the "cacheprod", i.e., one of
-            'mask_est', 'mask_obs', 'sqrt_ivar', 'cfact', 'dmap', 'model', or
-            'cal'. If no subsequent args are provided (and no kwargs are
-            provided), all data under that "cacheprod" is deleted. If provided,
-            subsequent args are used with kwargs to form a key (*args,
+            'mask_est', 'mask_obs', 'sqrt_ivar', 'cfact', 'dmap', 'model',
+            'cal', or 'white_noise'. If no subsequent args are provided (and no
+            kwargs are provided), all data under that "cacheprod" is deleted. If
+            provided, subsequent args are used with kwargs to form a key (*args,
             **kwargs), where the args are order-sensitive and the kwargs are
             order-insensitive. Then, the data under that key only is deleted. 
         kwargs : dict, optional
@@ -1655,8 +1659,10 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
     def get_sim(self, split_num, sim_num, lmax, seed='auto', alm=False,
                 calibrate='auto', calibrations_subproduct=None, 
                 check_on_disk=True, check_disk_for_map_and_alm=False,
-                generate=True, keep_model=True, keep_mask_obs=True,
-                keep_sqrt_ivar=True, keep_cal=True, write=False, verbose=False):
+                generate=True, add_white_noise_above_lmax=False,
+                white_noise_ell_taper_width=500, keep_model=True,
+                keep_mask_obs=True, keep_sqrt_ivar=True, keep_white_noise=True,
+                keep_cal=True, write=False, verbose=False):
         """Load or generate a sim from this NoiseModel. Will load necessary
         products to disk if not yet stored in instance attributes.
 
@@ -1666,9 +1672,7 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             The 0-based index of the split to simulate.
         sim_num : int
             The map index, used in setting the random seed. Must be non-negative. If the sim
-            is written to disk, this will be recorded in the filename. There is a maximum of
-            9999, ie, one cannot have more than 10_000 of the same sim, of the same split, 
-            from the same noise model (including the 'notes').
+            is written to disk, this will be recorded in the filename.
         seed : int or iterable of ints
             Seed for random draw. If 'auto' (the default), a seed unique to the split_num,
             sim_num, data_model_name, maps_product, maps_subproduct, noise_model_name,
@@ -1706,16 +1710,32 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             If 'check_on_disk' is True but the sim is not found, generate the
             sim. If False and the same occurs, raise a FileNotFoundError. By
             default True.
+        add_white_noise_above_lmax : bool, optional
+            Add a white noise realization from the raw ivar maps above lmax, by
+            default False. The white noise is rescaled to match the level of
+            the noise model sqrt_cov_ell at high ell (so the noise model must
+            exist on disk or in memory), and the sim is smoothly blended into it
+            below lmax. The output is then full resolution: a map in the full
+            geometry of this noise model, or alms with the lmax of that
+            geometry. White noise is never written to disk, and is added before
+            any calibration is applied.
+        white_noise_ell_taper_width : int, optional
+            Width in ell below lmax used to smoothly blend the sim into the
+            white noise realization (using a cosine profile), by default 500.
         keep_model : bool, optional
             Store the loaded model for this split in instance attributes, by default True.
             This spends memory to avoid spending time loading the model from disk
             for each call to this method.
         keep_mask_obs : bool, optional
-            Store the loaded or generated mask_obs in the instance attributes, by 
+            Store the loaded or generated mask_obs in the instance attributes, by
             default True.
         keep_sqrt_ivar : bool, optional
             Store the loaded, possibly downgraded, sqrt_ivar in the instance
             attributes, by default True.
+        keep_white_noise : bool, optional
+            Store the full-resolution sqrt raw ivar and the T, P white noise
+            rescaling factors in the instance attributes, by default True. Only
+            used if add_white_noise_above_lmax.
         keep_cal : bool, optional
             Store the loaded calibration and polarization efficiency factors, by 
             default True. Will be stored according to the specific calibrations
@@ -1731,8 +1751,10 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         -------
         enmap.ndmap
             A sim of this noise model with the specified sim num, with shape
-            (num_arrays, num_splits=1, num_pol, ny, nx), even if some of these
-            axes have size 1. As implemented, num_splits is always 1. 
+            (num_arrays, num_splits=1, num_pol, {ny, nx} or {nalm}), even if some of these
+            axes have size 1. As implemented, num_splits is always 1. If
+            add_white_noise_above_lmax, the sim is in the full-resolution
+            geometry (or has the full-resolution lmax, if alm).
 
         Notes
         -----
@@ -1743,6 +1765,10 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
         a simulation is requested to be calibrated and it already exists on-disk
         and therefore is loaded from disk, the calibration factors will be 
         applied at runtime.
+
+        The same logic applies to adding white noise above lmax: sims on disk 
+        never have this; if a sim is loaded and this is requested it is performed
+        on the fly.
         """
         _filter_kwargs = {} if self._filter_kwargs is None else self._filter_kwargs
 
@@ -1786,8 +1812,16 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             if res is not False:
                 # if alm_from_disk != alm, we need to transform. NOTE: to be
                 # backwards-compatible, the dtype follows whatever is on-disk,
-                # not self._dtype.
-                if not alm_from_disk and alm:
+                # not self._dtype. if adding white noise, that handles the
+                # transform
+                if add_white_noise_above_lmax:
+                    res = self._add_white_noise_above_lmax(
+                        res, split_num, sim_num, lmax, white_noise_ell_taper_width,
+                        shape, wcs, alm_in=alm_from_disk, alm_out=alm,
+                        keep_model=keep_model, keep_mask_obs=keep_mask_obs,
+                        keep_white_noise=keep_white_noise
+                        )
+                elif not alm_from_disk and alm:
                     res = utils.map2alm(res, lmax=lmax)
                 elif alm_from_disk and not alm:
                     res = utils.alm2map(res, shape=shape, wcs=wcs)
@@ -1880,11 +1914,238 @@ class BaseNoiseModel(DataManager, ConfigManager, ABC):
             fn = self.get_sim_fn(split_num, sim_num, lmax, alm=alm, to_write=True)
             self.write_sim(fn, sim, alm=alm)
 
-        # only calibrate after writing. see note above: we adopt 
+        # only add white noise after writing, so that sims drawn on the fly
+        # and sims on disk are treated equivalently (as for calibration),
+        # and to save disk space
+        if add_white_noise_above_lmax:
+            sim = self._add_white_noise_above_lmax(
+                sim, split_num, sim_num, lmax, white_noise_ell_taper_width,
+                shape, wcs, alm_in=alm, alm_out=alm, keep_model=keep_model,
+                keep_mask_obs=keep_mask_obs, keep_white_noise=keep_white_noise
+                )
+
+        # only calibrate after writing. see note above: we adopt
         # convention that sims on disk are never calibrated, so that sims drawn
         # on the fly and sims on disk are treated equivalently
         if _calibrate:
             sim *= cal
+
+        return sim
+
+    def _get_white_noise_products(self, split_num, lmax, keep_model=True,
+                                  keep_mask_obs=True, keep_white_noise=True):
+        """Get the products needed to add white noise above lmax to a sim of
+        this split: the full-resolution mask_obs, the full-resolution inverse
+        sqrt of the raw ivars, and the factors for T and P that match a white
+        noise realization onto the high-ell level of the noise model.
+
+        Parameters
+        ----------
+        split_num : int
+            The 0-based index of the split.
+        lmax : int
+            Bandlimit of the noise model.
+        keep_model : bool, optional
+            Store the loaded model in the instance attributes, by default True.
+        keep_mask_obs : bool, optional
+            Store the loaded or generated full-resolution mask_obs in the
+            instance attributes, by default True.
+        keep_white_noise : bool, optional
+            Store the inv_sqrt_ivar and sigma_facs in the instance attributes,
+            by default True.
+
+        Returns
+        -------
+        mask_obs : (ny, nx) enmap.ndmap
+            The full-resolution mask_obs.
+        inv_sqrt_ivar : (nmaps, nsplits=1, npol=1, ny, nx) enmap.ndmap
+            The full-resolution inverse sqrt of the raw ivars, masked by
+            mask_obs, and 0 where the ivars are 0.
+        sigma_facs : (nmaps, 3) np.ndarray
+            What to multiply a standard normal realization by, for each map in
+            T, Q, and U, to match onto the high-ell noise model power spectrum.
+            Technically measures the high-ell noise model power spectrum over
+            its last 100 ells (ie, rather than just its last ell or something).
+        """
+        try:
+            mask_obs = self.get_from_cache('mask_obs', downgrade=1)
+            mask_obs_from_cache = True
+        except KeyError:
+            mask_obs = self.get_mask_obs(downgrade=1)
+            mask_obs_from_cache = False
+        if keep_mask_obs and not mask_obs_from_cache:
+            self.cache_data('mask_obs', mask_obs, downgrade=1)
+
+        try:
+            inv_sqrt_ivar, sigma_facs = self.get_from_cache(
+                'white_noise', split_num=split_num, lmax=lmax
+                )
+            return mask_obs, inv_sqrt_ivar, sigma_facs
+        except KeyError:
+            pass
+
+        # the raw ivars, not get_sqrt_ivar, which may smooth or bandlimit them
+        sqrt_ivar = self._empty(self._full_shape, self._full_wcs, ivar=True, num_splits=1)
+        for i, (subproduct_kwargs, qid) in enumerate(self._super_qids):
+            ivar = utils.read_map(
+                self._data_model, qid, split_num=split_num, ivar=True,
+                maps_subproduct=self._maps_subproduct, srcfree=self._srcfree,
+                **subproduct_kwargs
+                )
+            ivar = enmap.extract(ivar, self._full_shape, self._full_wcs)
+            sqrt_ivar[i, 0] = np.sqrt(ivar).astype(self._dtype, copy=False)
+
+        # NOTE: super important to mask sqrt_ivar by mask_obs, since
+        # we are high pass filtering it later, any crazy pixels at
+        # the edge will ring like crazy. if mask_obs isn't good
+        # enough, this will still happen, so it's always important
+        # to look at the sims
+        utils.parallel_inplace_op(np.multiply, sqrt_ivar, mask_obs)
+
+        # invert once here, so each sim only needs a multiplication. 0 where
+        # sqrt_ivar is 0
+        inv_sqrt_ivar = enmap.zeros(sqrt_ivar.shape, sqrt_ivar.wcs, dtype=sqrt_ivar.dtype)
+        np.divide(1, sqrt_ivar, where=sqrt_ivar!=0, out=inv_sqrt_ivar)
+        sqrt_ivar = None # save space
+
+        # get cov_ell for model facs
+        model_dict = self.get_model(split_num, lmax, generate=False,
+                                    keep_model=keep_model)
+        assert 'sqrt_cov_ell' in model_dict, \
+            'Adding white noise above lmax requires a noise model with a ' + \
+            "measured 'sqrt_cov_ell' (i.e., with an iso_filt_method)"
+        sqrt_cov_ell = model_dict['sqrt_cov_ell']
+        model_dict = None # save space
+
+        nmap = self._num_arrays
+        sqrt_cov_ell = sqrt_cov_ell.reshape(nmap*3, nmap*3, -1)
+
+        # NOTE: must copy. the reshaped sqrt_cov_ell is a view of the
+        # model_dict array, which is the same object cached by get_model if
+        # keep_model. so without copying it would be squared inplace. any sim
+        # later generated from the cached model would then be filtered by
+        # cov_ell instead of sqrt_cov_ell
+        cov_ell = utils.eigpow(sqrt_cov_ell, 2, axes=[0, 1], copy=True)
+        sqrt_cov_ell = None # save space
+        cov_ell = cov_ell.reshape(nmap, 3, nmap, 3, -1)
+
+        # also need postfiltreldg to adjust sqrt_cov_ell back to
+        # dg1, with lmax. for postfiltreldg, the cov_ell will be
+        # (dg/postfiltreldg)**2 bigger than the dg1 ivars
+        dg = utils.downgrade_from_lmaxs(self._full_lmax, lmax)
+        pfrd = self._filter_kwargs['post_filt_rel_downgrade']
+        cov_ell /= (dg/pfrd)**2
+
+        # finally, compare to expected std normal white noise in the
+        # mask_obs patch for T and pol
+        nlw = np.sum(mask_obs**2 * mask_obs.pixsizemap()**2)/(4*np.pi) # std normal white noise pseudospectrum in patch
+        nlw /= np.sum(mask_obs**2 * mask_obs.pixsizemap())/(4*np.pi) # w2 of patch
+
+        sigma_facs = np.zeros((nmap, 3), dtype=self._dtype)
+        for i in range(nmap):
+            sigma_fac_T = (cov_ell[i, 0, i, 0, -100:].mean() / nlw)**0.5 # TT
+            sigma_fac_pol = ((cov_ell[i, 1, i, 1, -100:].mean() + cov_ell[i, 2, i, 2, -100:].mean())/2 / nlw)**0.5 ## (EE + BB)/2
+            sigma_facs[i] = [sigma_fac_T, sigma_fac_pol, sigma_fac_pol]
+
+        if keep_white_noise:
+            self.cache_data(
+                'white_noise', (inv_sqrt_ivar, sigma_facs), split_num=split_num,
+                lmax=lmax
+                )
+
+        return mask_obs, inv_sqrt_ivar, sigma_facs
+
+    def _add_white_noise_above_lmax(self, sim, split_num, sim_num, lmax,
+                                    white_noise_ell_taper_width, shape, wcs,
+                                    alm_in=False, alm_out=False, keep_model=True,
+                                    keep_mask_obs=True, keep_white_noise=True):
+        """Add a white noise realization above lmax to a sim of this split,
+        drawn from the raw ivar maps and matched onto the high-ell level of the
+        noise model. The sim is smoothly blended into the white noise over
+        white_noise_ell_taper_width below lmax.
+
+        Parameters
+        ----------
+        sim : (nmaps, nsplits=1, npol, ...) enmap.ndmap or np.ndarray
+            The sim map (in the shape, wcs geometry) or alm (with lmax).
+        split_num : int
+            The 0-based index of the split.
+        sim_num : int
+            The sim index, used in setting the white noise seed.
+        lmax : int
+            Bandlimit of the sim.
+        white_noise_ell_taper_width : int
+            Width in ell below lmax used to blend the sim into the white noise.
+        shape : tuple
+            The shape of the sim geometry (i.e., downgraded for lmax).
+        wcs : astropy.wcs.WCS
+            The wcs of the sim geometry (i.e., downgraded for lmax).
+        alm_in : bool, optional
+            Whether the input sim is alm, by default False.
+        alm_out : bool, optional
+            Whether to return alm (with the full-resolution lmax), by default
+            False.
+        keep_model, keep_mask_obs, keep_white_noise : bool, optional
+            See _get_white_noise_products.
+
+        Returns
+        -------
+        (nmaps, nsplits=1, npol, ...) enmap.ndmap or np.ndarray
+            The sim plus white noise, as a map in the full-resolution geometry
+            or alm with the full-resolution lmax, masked by the full-resolution
+            mask_obs.
+
+        Notes
+        -----
+        Matching assumes the noise model returns noise with a power spectrum of
+        about 1 after filtering (ie, sqrt_ps close to sqrt_cov_ell), which may not
+        be true but should be close at high ell.
+        """
+        from optweight import alm_c_utils
+
+        mask_obs, inv_sqrt_ivar, sigma_facs = self._get_white_noise_products(
+            split_num, lmax, keep_model=keep_model, keep_mask_obs=keep_mask_obs,
+            keep_white_noise=keep_white_noise
+            )
+
+        filt_low, filt_high = utils.get_ell_trans_profiles(
+            [lmax - white_noise_ell_taper_width], [lmax], lmax=lmax, exp=0.5
+            )
+
+        # low-pass the sim at its own resolution, then upgrade to full
+        # resolution with fft
+        if alm_in:
+            ainfo = curvedsky.alm_info(lmax)
+            _filt_low = filt_low.astype(sim.real.dtype, copy=False)
+            for preidx in np.ndindex(sim.shape[:-1]):
+                sim[preidx] = alm_c_utils.lmul(sim[preidx], _filt_low, ainfo)
+            sim = utils.alm2map(sim, shape=shape, wcs=wcs, ainfo=ainfo)
+        else:
+            sim = utils.ell_filter(sim, filt_low, omap=sim, lmax=lmax)
+        sim = utils.fourier_resample(sim, shape=self._full_shape, wcs=self._full_wcs)
+
+        # get the white noise realization for each map (indep in pol)
+        for i, super_qid_str in enumerate(self._super_qid_strs):
+            seed = utils.get_seed(split_num, sim_num, self._data_model_name,
+                                  self._maps_product, self._maps_subproduct,
+                                  self.noise_model_name, *self._super_qid_strs,
+                                  super_qid_str, str(WHITE_NOISE_BASE_SEED))
+            eta = utils.concurrent_normal(size=(3, *self._full_shape),
+                                          dtype=self._dtype, seed=seed)
+            eta = enmap.ndmap(eta, self._full_wcs)
+            utils.parallel_inplace_op(np.multiply, eta, sigma_facs[i][:, None, None]) # sigma_facs shape is (nmap,)
+            utils.parallel_inplace_op(np.multiply, eta, inv_sqrt_ivar[i, 0, 0]) # inv_sqrt_ivar shape is (nmap, nsplit=1, npol=1, ny, nx)
+
+            # blend the realizations
+            utils.parallel_inplace_op(
+                np.subtract, eta, utils.ell_filter(eta, 1 - filt_high, lmax=lmax)
+                )
+            utils.parallel_inplace_op(np.add, sim[i, 0], eta)
+
+        utils.parallel_inplace_op(np.multiply, sim, mask_obs)
+
+        if alm_out:
+            sim = utils.map2alm(sim, lmax=self._full_lmax)
 
         return sim
 
